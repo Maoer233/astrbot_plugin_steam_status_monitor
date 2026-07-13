@@ -80,7 +80,7 @@
 - `/steam on` 启动本群Steam状态监控
 - `/steam off` 停止本群Steam状态监控
 - `/steam list` 列出本群所有玩家当前状态
-- `/steam alllist` 列出所有群聊分组及玩家状态
+- `/steam alllist [img|text]` 列出所有群聊玩家状态（默认图片，`text` 纯文本输出）
 - `/steam config` 查看当前插件配置
 - `/steam set [参数] [值]` 设置配置参数（如 `/steam set poll_interval_sec 30`）
 - `/steam addid [SteamID/链接/好友码] [@用户] [备注名]` 添加玩家并可选绑定QQ（支持多种格式）
@@ -117,6 +117,12 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.1.15（2026/07/13）
+  - **功能改进**：alllist 支持 img/text 双模式输出，卡片叠加状态色渐变，修复 personastate 状态识别（区分在线/忙碌/离开/打盹），头像框默认缓存 30 天
+
+- V3.1.14（2026/07/13）
+  - **功能改进**：统一权限系统，移除 AstrBot 框架层 ADMIN 权限装饰器，所有指令改用插件内部 permission_level 控制
+
 - V3.1.13（2026/07/09）
   - **Bug 修复**：定时排行榜推送在主轮询无玩家到点时被跳过，导致推送失效
 

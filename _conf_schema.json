@@ -54,7 +54,7 @@
   "permission_level": {
     "description": "指令权限等级 -修改后重启AstrBot生效",
     "type": "int",
-    "hint": "1=管理员限定(默认) 2=纯查询指令放开 3=开关+添加ID也放开",
+    "hint": "1=管理员限定(默认) 2=查询类指令全员放开 3=全部指令全员放开",
     "default": 1
   },
   "notify_send_image": {
@@ -90,8 +90,8 @@
   "cache_avatar_frame_hours": {
     "description": "头像框图片缓存时间（小时）-修改后重启AstrBot生效",
     "type": "int",
-    "hint": "优先用本地缓存，过期才去社区抓取（支持代理），0=永不过期，默认168小时（7天）",
-    "default": 168
+    "hint": "优先用本地缓存，过期才去社区抓取（支持代理），0=永不过期，默认720小时（30天）",
+    "default": 720
   },
   "cache_cover_vertical_hours": {
     "description": "SGDB竖版封面缓存时间（小时）-修改后重启AstrBot生效",

@@ -50,9 +50,9 @@ def get_status_color(status):
     elif status == 'online':
         return (80, 180, 255)  # 蓝色
     elif status == 'away':
-        return (255, 200, 80)  # 橙色
+        return (178, 138, 255)  # 紫色（离开，与打盹统一）
     elif status == 'snooze':
-        return (180, 180, 180)  # 灰色
+        return (178, 138, 255)  # 紫色（打盹）
     elif status == 'busy':
         return (255, 100, 100)  # 红色
     elif status == 'offline':
@@ -66,9 +66,9 @@ def get_name_color(status):
     elif status == 'online':
         return (80, 180, 255)
     elif status == 'away':
-        return (255, 200, 80)
+        return (178, 138, 255)
     elif status == 'snooze':
-        return (180, 180, 180)
+        return (178, 138, 255)
     elif status == 'busy':
         return (255, 100, 100)
     elif status == 'offline':
@@ -91,6 +91,33 @@ def get_status_text(status):
         return "离线"
     else:
         return "异常"
+
+# 状态色渐变参数
+GRADIENT_ALPHA_START = 77  # 30% of 255
+GRADIENT_STOP_FRAC = 0.70  # 70% 处完全透明
+
+def make_status_gradient(card_w, card_h, status_color, status):
+    """生成卡片状态色左到右渐变 α 叠加层；离线不叠加；圆角裁剪匹配 CARD_RADIUS"""
+    if status == 'offline':
+        return None
+    overlay = Image.new('RGBA', (card_w, card_h), (0, 0, 0, 0))
+    r, g, b = status_color
+    stop_x = int(card_w * GRADIENT_STOP_FRAC)
+    for x in range(stop_x):
+        ratio = 1.0 - (x / stop_x)
+        alpha = int(GRADIENT_ALPHA_START * ratio)
+        if alpha <= 0:
+            continue
+        for y in range(card_h):
+            overlay.putpixel((x, y), (r, g, b, alpha))
+    # 圆角裁剪：mask 与渐变原有 alpha 合并，保留渐变值且裁剪为圆角
+    alpha = overlay.getchannel('A')
+    mask = Image.new("L", (card_w, card_h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, card_w-1, card_h-1), radius=CARD_RADIUS, fill=255)
+    masked_alpha = Image.composite(alpha, Image.new('L', (card_w, card_h), 0), mask)
+    overlay.putalpha(masked_alpha)
+    return overlay
+
 
 def get_font_path(font_name):
     fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
@@ -148,6 +175,11 @@ async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=Non
         card = Image.new('RGBA', (width-2*CARD_MARGIN, CARD_HEIGHT), (0,0,0,0))
         card_draw = ImageDraw.Draw(card)
         card_draw.rounded_rectangle((0,0,width-2*CARD_MARGIN,CARD_HEIGHT), radius=CARD_RADIUS, fill=CARD_BG)
+        # 叠加状态色渐变
+        gradient = make_status_gradient(width-2*CARD_MARGIN, CARD_HEIGHT, get_status_color(user['status']), user['status'])
+        if gradient is not None:
+            card = Image.alpha_composite(card, gradient)
+            card_draw = ImageDraw.Draw(card)
         # 头像（正方形+小圆角）
         avatar = avatars[idx]
         if avatar:
@@ -221,7 +253,7 @@ async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=Non
                 print(f"[steam_list_render] 封面渲染失败: {e}")
         img.alpha_composite(card, (left, top))
     # 统计
-    stat_str = f"在线: {sum(1 for u in user_list if u['status']=='online' or u['status']=='playing')} / 总数: {len(user_list)}"
+    stat_str = f"在线: {sum(1 for u in user_list if u['status'] in ('playing','online','away','snooze','busy'))} / 总数: {len(user_list)}"
     draw.text((width-220, height-36), stat_str, font=font_small, fill=(180,220,255))
     # 输出
     img = img.convert("RGB")

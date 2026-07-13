@@ -29,7 +29,7 @@ from .superpower_util import load_abilities, get_daily_superpower  # 新增导�
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.1.13",
+    "3.1.15",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -1082,9 +1082,12 @@ class SteamStatusMonitorV3(Star):
             except Exception as e:
                 logger.error(f"发送成就通知失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam on")
     async def steam_on(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''手动启动Steam状态监控轮询（分群）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_monitor_enabled[group_id] = True
@@ -1199,9 +1202,12 @@ class SteamStatusMonitorV3(Star):
             msg += f"本群监控组人数已达上限（{limit}人），部分ID未添加。\n"
         yield event.plain_result(msg.strip() if msg else "未添加任何SteamID。")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam delid")
     async def steam_delid(self, event: AstrMessageEvent, steamid: str, group_id_param: str = ""):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''从监控组删除SteamID；支持好友码/链接；可选传群号跨群删除：/steam delid [SteamID/好友码/链接] [群号]'''
         group_id = group_id_param.strip() if group_id_param.strip() else (str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default')
         # 支持好友码/链接解析为64位ID
@@ -1254,9 +1260,12 @@ class SteamStatusMonitorV3(Star):
         async for result in handle_steam_list(self, event, group_id=group_id, font_path=font_path, proxy=self.proxy):
             yield result
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam config")
     async def steam_config(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 2):
+            async for r in self._deny(event):
+                yield r
+            return
         '''显示当前插件配置（敏感信息已隐藏）'''
         lines = []
         hidden_keys = {"steam_api_key", "sgdb_api_key"}
@@ -1271,9 +1280,12 @@ class SteamStatusMonitorV3(Star):
             lines.append(f"智能轮询间隔（分钟）: {intervals}（依次为[游戏中, 12分钟内, 12分钟~3小时, 3小时~24小时, 24~48小时, 超过48小时]）")
         yield event.plain_result("当前配置：\n" + "\n".join(lines))
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam set")
     async def steam_set(self, event: AstrMessageEvent, key: str, value: str):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''设置配置参数，立即生效（如 steam set fixed_poll_interval 600）'''
         if key not in self.config:
             yield event.plain_result(f"无效参数: {key}")
@@ -1316,9 +1328,12 @@ class SteamStatusMonitorV3(Star):
             self.config.save_config()
         yield event.plain_result(f"已设置 {key} = {value}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam rs")
     async def steam_rs(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''清除所有状态并初始化（重启插件用）'''
         self.group_last_states.clear()
         self.group_start_play_times.clear()
@@ -1602,6 +1617,7 @@ class SteamStatusMonitorV3(Star):
             "/steam rank 天数 - 查看本群指定天数排行榜（如 7, 30）\n"
             "/steam allrank - 查看所有群今日排行榜\n"
             "/steam allrank 天数 - 查看所有群指定天数排行榜\n"
+            "/steam alllist [img|text] - 查看所有群聊玩家状态（默认图片，text 纯文本）\n"
             "/steam rank_on [all|list|test|del] - 管理每日排行榜推送（可配置时间）\n"
             "/steam rank_on list - 查看推送状态\n"
             "/steam rank_on del [群号] - 删除指定群推送（默认本群）\n"
@@ -1666,7 +1682,9 @@ class SteamStatusMonitorV3(Star):
             play_str = f"{play_minutes/60:.1f}小时" if play_minutes >= 60 else f"{play_minutes:.1f}分钟"
             user_list = [{'sid': sid, 'name': name, 'status': 'playing', 'avatar_url': avatar_url, 'game': zh_game_name, 'gameid': gameid, 'play_str': play_str, 'lastlogoff': lastlogoff}]
         elif personastate and int(personastate) > 0:
-            user_list = [{'sid': sid, 'name': name, 'status': 'online', 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': '', 'lastlogoff': lastlogoff}]
+            _persona_status = {0: 'offline', 1: 'online', 2: 'busy', 3: 'away', 4: 'snooze'}
+            p_status = _persona_status.get(int(personastate), 'online')
+            user_list = [{'sid': sid, 'name': name, 'status': p_status, 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': '', 'lastlogoff': lastlogoff}]
         else:
             hours_ago = (now - int(lastlogoff)) / 3600 if lastlogoff else 0
             play_str = f"上次在线 {hours_ago:.1f}小时前" if lastlogoff else ''
@@ -1704,9 +1722,12 @@ class SteamStatusMonitorV3(Star):
         async for r in self.steam_who(event, qq):
             yield r
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam off")
     async def steam_off(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''彻底停止本群Steam状态监控轮询，释放轮询资源'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_monitor_enabled[group_id] = False
@@ -1736,13 +1757,20 @@ class SteamStatusMonitorV3(Star):
 
     @filter.command("steam achievement_off")
     async def steam_achievement_off(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_achievement_enabled[group_id] = False
         yield event.plain_result(f"已为本群关闭Steam成就推送。")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam test_achievement_render")
     async def steam_test_achievement_render(self, event: AstrMessageEvent, steamid: str, gameid: int, count: int = 3):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''测试成就消息渲染效果（steam test_achievement_render [steamid] [gameid] [数量]）'''
         player_name = steamid
         game_name = await self.get_chinese_game_name(gameid)
@@ -1770,9 +1798,12 @@ class SteamStatusMonitorV3(Star):
             msg = self.achievement_monitor.render_achievement_message(details, unlocked, player_name=player_name)
             yield event.plain_result(msg)
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam test_game_start_render")
     async def test_game_start_render(self, event: AstrMessageEvent, steamid: str, gameid: int):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''测试开始游戏图片渲染效果（steam test_game_start_render [steamid] [gameid]）'''
         try:
             status = await self.fetch_player_status(steamid)
@@ -1806,9 +1837,12 @@ class SteamStatusMonitorV3(Star):
             logger.error(f"测试开始游戏图片渲染失败: {e}\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染异常: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam test_game_end_render")
     async def steam_test_game_end_render(self, event: AstrMessageEvent, steamid: str, gameid: int, duration_min: float = 120, end_time: str = None, tip_text: str = None):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''测试游戏结束图片渲染（steam test_game_end_render [steamid] [gameid] [时长分钟] [结束时间 可选] [提示 可选]）'''
         try:
             status = await self.fetch_player_status(steamid)
@@ -1862,9 +1896,12 @@ class SteamStatusMonitorV3(Star):
             logger.error(f"测试游戏结束图片渲染失败: {e}\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染异常: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam清除缓存")
     async def steam_clear_cache(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''清除所有头像、封面图等图片缓存（慎用）'''
         try:
             cache_dirs = [
@@ -1882,9 +1919,12 @@ class SteamStatusMonitorV3(Star):
         except Exception as e:
             yield event.plain_result(f"清除缓存失败: {e}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam clear_allids")
     async def steam_clear_allids(self, event: AstrMessageEvent):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''删除所有群聊的所有已监控SteamID，并清空相关状态数据'''
         self.group_steam_ids.clear()
         self._save_group_steam_ids()  # 新增：保存到 steam_groups.json
@@ -1900,9 +1940,12 @@ class SteamStatusMonitorV3(Star):
             self.config.save_config()
         yield event.plain_result("已删除所有群聊的所有SteamID，相关状态数据已清空。")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam clear_groupids")
     async def steam_clear_groupids(self, event: AstrMessageEvent, group_id: str):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''删除指定群聊的所有已监控SteamID，并清空相关状态数据'''
         if group_id not in self.group_steam_ids:
             yield event.plain_result(f"群聊 {group_id} 未绑定任何SteamID，无需清理。")
@@ -2377,7 +2420,10 @@ class SteamStatusMonitorV3(Star):
             if gameid:
                 msg_lines.append(f"🟢【{name}】正在玩 {zh_game_name}（{poll_level_str}）")
             elif personastate and int(personastate) > 0:
-                msg_lines.append(f"🟡【{name}】在线（{poll_level_str}）")
+                _persona_text = {1: '在线', 2: '忙碌', 3: '离开', 4: '打盹'}
+                ptext = _persona_text.get(int(personastate), '在线')
+                picon = {1: '🟡', 2: '🔴', 3: '🟣', 4: '🟣'}.get(int(personastate), '🟡')
+                msg_lines.append(f"{picon}【{name}】{ptext}（{poll_level_str}）")
             elif lastlogoff:
                 hours_ago = (now - int(lastlogoff)) / 3600
                 msg_lines.append(f"⚪️【{name}】离线 上次在线 {hours_ago:.1f} 小时前（{poll_level_str}）")
@@ -2504,12 +2550,13 @@ class SteamStatusMonitorV3(Star):
         return None
 
     @filter.command("steam alllist")
-    async def steam_alllist(self, event: AstrMessageEvent):
+    async def steam_alllist(self, event: AstrMessageEvent, mode: str = "img"):
         if not self._check_perm(event, 2):
             async for r in self._deny(event):
                 yield r
             return
-        '''所有群聊玩家状态（图片版，含群号+SteamID+下次轮询）'''
+        '''所有群聊玩家状态（默认图片，steam alllist text 输出文本）'''
+        _persona_status = {0: 'offline', 1: 'online', 2: 'busy', 3: 'away', 4: 'snooze'}
         from .steam_list_render import render_steam_list_image
         from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
         user_list = []
@@ -2542,13 +2589,43 @@ class SteamStatusMonitorV3(Star):
                     ps_str = f"{pm:.1f}分钟" if pm < 60 else f"{pm/60:.1f}小时"
                     user_list.append({'sid': sid, 'name': name, 'status': 'playing', 'avatar_url': avatar_url, 'game': zh_game_name, 'gameid': gameid, 'play_str': ps_str, 'group_id': group_id, 'poll_str': p_str})
                 elif status.get('personastate', 0) > 0:
-                    user_list.append({'sid': sid, 'name': name, 'status': 'online', 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': '', 'group_id': group_id, 'poll_str': p_str})
+                    p_status = _persona_status.get(status.get('personastate', 0), 'online')
+                    user_list.append({'sid': sid, 'name': name, 'status': p_status, 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': '', 'group_id': group_id, 'poll_str': p_str})
                 elif status.get('lastlogoff'):
                     ha = (now - int(status['lastlogoff'])) / 3600
                     user_list.append({'sid': sid, 'name': name, 'status': 'offline', 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': f"上次在线 {ha:.1f} 小时前", 'group_id': group_id, 'poll_str': p_str})
                 else:
                     user_list.append({'sid': sid, 'name': name, 'status': 'offline', 'avatar_url': avatar_url, 'game': '', 'gameid': '', 'play_str': '', 'group_id': group_id, 'poll_str': p_str})
-        # 获取头像框
+        # 纯文本输出模式
+        if mode.lower() == 'text':
+            from .steam_list_render import get_status_text
+            lines = ["=== Steam 全群玩家状态 ===\n"]
+            by_group = {}
+            for u in user_list:
+                by_group.setdefault(u.get('group_id', '?'), []).append(u)
+            for gid, members in by_group.items():
+                lines.append(f"📋 群: {gid}")
+                for u in members:
+                    sid_shown = u['sid']
+                    sicon = {'playing': '🎮', 'online': '🔵', 'offline': '💤',
+                             'busy': '🔴', 'away': '🟣', 'snooze': '🟣', 'error': '⚠️'}.get(u['status'], '❓')
+                    name = u['name']
+                    stext = get_status_text(u['status'])
+                    detail = f" 正在玩：{u['game']}" if u['status'] == 'playing' and u.get('game') else ""
+                    play = f" | 时长：{u['play_str']}" if u.get('play_str') else ""
+                    offline_info = f" | {u['play_str']}" if u['status'] == 'offline' and u.get('play_str') else ""
+                    poll = f" | {u.get('poll_str','')}" if u.get('poll_str') else ""
+                    lines.append(f"  {sicon} {name} {stext}{detail}{play}{offline_info}")
+                    lines.append(f"     ID: {sid_shown}{poll}")
+                lines.append("")
+            online_count = sum(1 for u in user_list if u['status'] in ('playing','online','away','snooze','busy'))
+            lines.append(f"📊 在线: {online_count} / 总数: {len(user_list)}")
+            yield event.plain_result("\n".join(lines))
+            return
+        # 图片输出模式（默认）
+        # 按状态排序：游戏中 > 在线 > 忙碌 > 离开/打盹 > 离线 > 异常
+        _status_rank = {'playing': 0, 'online': 1, 'busy': 2, 'away': 3, 'snooze': 4, 'offline': 5, 'error': 6}
+        user_list.sort(key=lambda u: _status_rank.get(u['status'], 9))
         avatar_frame_paths = {}
         for u in user_list:
             sid = u.get('sid', '')
@@ -2605,9 +2682,12 @@ class SteamStatusMonitorV3(Star):
         self._superpower_cache[cache_key] = superpower
         return superpower
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam push_group")
     async def steam_push_group(self, event: AstrMessageEvent, steamid: str):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''将本群加入指定SteamID的联动推送组（不重复轮询，仅同步推送）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         if not steamid.isdigit() or len(steamid) != 17:
@@ -2631,9 +2711,12 @@ class SteamStatusMonitorV3(Star):
         else:
             yield event.plain_result("本群已在该SteamID的推送组中。")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam delpush_group")
     async def steam_delpush_group(self, event: AstrMessageEvent, steamid: str, target_group: str = ''):
+        if not self._check_perm(event, 3):
+            async for r in self._deny(event):
+                yield r
+            return
         '''将当前群/指定群从SteamID的联动推送组移除；可传 target_group 指定群号'''
         if target_group:
             group_id = target_group.strip()
