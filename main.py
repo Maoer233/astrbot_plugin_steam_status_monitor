@@ -29,7 +29,7 @@ from .superpower_util import load_abilities, get_daily_superpower  # 新增导�
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.1.15",
+    "3.1.16",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -52,6 +52,14 @@ class SteamStatusMonitorV3(Star):
                 if os.path.exists(path):
                     with open(path, "r", encoding="utf-8") as f:
                         self.group_start_play_times[group_id] = json.load(f)
+                        # 数据迁移：旧格式 int → 新格式 {gameid: timestamp}
+                        migrated = 0
+                        for _sid, _val in list(self.group_start_play_times[group_id].items()):
+                            if not isinstance(_val, dict):
+                                self.group_start_play_times[group_id][_sid] = {}
+                                migrated += 1
+                        if migrated:
+                            logger.info(f"[数据迁移] group_id={group_id}: {migrated} 个玩家 start_play_times 从 int 迁移为 dict")
             except Exception as e:
                 logger.warning(f"加载 group_start_play_times 失败: {e} (group_id={group_id})")
             try:
@@ -358,7 +366,7 @@ class SteamStatusMonitorV3(Star):
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
         self.group_last_states = {}       # {group_id: {steamid: status}}
-        self.group_start_play_times = {}  # {group_id: {steamid: start_time}}
+        self.group_start_play_times = {}  # {group_id: {steamid: {gameid: start_time}}}
         self.group_last_quit_times = {}   # {group_id: {steamid: {gameid: quit_time}}}
         self.group_pending_logs = {}      # {group_id: {steamid: {gameid: log_dict}}}
         self.group_recent_games = {}      # {group_id: [gameid, ...]}
@@ -1127,7 +1135,9 @@ class SteamStatusMonitorV3(Star):
                     if prev_gameid and prev_gameid == status.get('gameid') and sid in self.group_start_play_times[group_id]:
                         pass
                     else:
-                        self.group_start_play_times[group_id][sid] = int(time.time())
+                        gid = status.get('gameid')
+                        if gid:
+                            self.group_start_play_times[group_id].setdefault(sid, {})[gid] = int(time.time())
         yield event.plain_result("本群Steam状态监控启动完成喔！ヾ(≧ω≦)ゞ")
 
     @filter.command("steam addid")
@@ -2221,12 +2231,17 @@ class SteamStatusMonitorV3(Star):
                 logger.info(f"[退出逻辑] {name} prev_gameid={prev_gameid} current_gameid={current_gameid}")
                 zh_prev_game_name = await self.get_chinese_game_name(prev_gameid, prev.get('gameextrainfo') if prev else None) if prev_gameid else (prev.get('gameextrainfo') if prev else "未知游戏")
                 duration_min = 0
-                start_time = start_play_times.setdefault(sid, {}).get(prev_gameid, now)
-                if prev_gameid in start_play_times.get(sid, {}):
-                    duration_min = (now - start_play_times[sid][prev_gameid]) / 60
+                # 安全获取 sid_data，兼容旧格式 int → dict
+                sid_data = start_play_times.get(sid)
+                if not isinstance(sid_data, dict):
+                    sid_data = {}
+                    start_play_times[sid] = sid_data
+                start_time = sid_data.get(prev_gameid, now)
+                if prev_gameid in sid_data:
+                    duration_min = (now - sid_data[prev_gameid]) / 60
                     if duration_min == 0:
                         for _ in range(2):
-                            start_time = start_play_times[sid].get(prev_gameid, now)
+                            start_time = sid_data.get(prev_gameid, now)
                             duration_min = (now - start_time) / 60
                             if duration_min > 0:
                                 break
