@@ -73,7 +73,8 @@
 ![开始游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/str.png)
 ![结束游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/stop.png)
 ![成就推送示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/achievement.png)
-![排行榜示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/allrank.png)
+![WebUI 管理后台](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/webui.png)
+![List 玩家列表](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/list.png)
 
 
 ## 指令列表
@@ -117,6 +118,16 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.2.1（2026/07/16）
+  - **WebUI 管理后台（Beta）**：基于 aiohttp 的嵌入式管理页面，支持仪表盘、甘特图、热力图、群聊管理、绑定管理、每日推送设置
+  - **仪表盘**：展示监控统计、玩家排行榜、热门游戏饼图、在线玩家卡片（状态色标识、封面提色）
+  - **甘特图**：展示游戏时间窗口，支持今天/昨天/7天/30天切换
+  - **热力图**：团队贡献日历（GitHub 风格）和个人详情页，含游戏占比分析
+  - **群聊管理**：增删群聊、增删 SteamID、状态展示
+  - **连接测试**：一键测试 Steam API / Steam Store / SGDB 连通性
+  - **Gantt 数据源优化**：优先使用 session_records 真实时间戳，回退按 1:1 分钟映射
+  - **新增依赖**：`aiohttp>=3.9.0`（Web 服务器）
+
 - V3.1.16（2026/07/15）
   - **Bug 修复**：修复旧版 start_play_times 数据格式不兼容导致轮询崩溃（int → dict 自动迁移）
 

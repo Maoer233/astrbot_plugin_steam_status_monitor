@@ -24,12 +24,13 @@ import tempfile
 import traceback
 import shutil
 from .superpower_util import load_abilities, get_daily_superpower  # 新增导入
+from .web import WebAdminServer  # Web 管理后台
 
 @register(
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.1.16",
+    "3.2.1",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -144,6 +145,11 @@ class SteamStatusMonitorV3(Star):
             self._save_play_records()
         except Exception as e:
             logger.warning(f"保存 play_records 失败: {e}")
+        # 保存 session 记录（甘特图/热力图数据源）
+        try:
+            self._save_session_records()
+        except Exception as e:
+            logger.warning(f"保存 session_records 失败: {e}")
 
     def _load_notify_session(self):
         path = os.path.join(self.data_dir, "notify_sessions.json")
@@ -285,6 +291,55 @@ class SteamStatusMonitorV3(Star):
                 json.dump(self.play_records, f, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"保存 play_records.json 失败: {e}")
+
+    # ========== Session 游玩记录（甘特图/热力图数据源）==========
+
+    def _load_session_records(self):
+        """加载 session 级别的游玩记录"""
+        path = os.path.join(self.data_dir, "session_records.json")
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    self.session_records = json.load(f)
+            except Exception as e:
+                logger.warning(f"加载 session_records.json 失败: {e}")
+                self.session_records = {}
+        else:
+            self.session_records = {}
+
+    def _save_session_records(self):
+        """保存 session 记录，自动清理超过90天的旧数据"""
+        if not hasattr(self, "session_records"):
+            return
+        cutoff_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        cleaned = {}
+        for sid, sessions in self.session_records.items():
+            cleaned[sid] = [s for s in sessions if s.get("date", "") >= cutoff_date]
+        self.session_records = cleaned
+        path = os.path.join(self.data_dir, "session_records.json")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.session_records, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"保存 session_records.json 失败: {e}")
+
+    def _record_session(self, sid, gameid, game_name, start_time, end_time, duration_min, group_id):
+        """记录单次游玩 session（在游戏退出确认后调用）"""
+        if duration_min <= 0 or not gameid:
+            return
+        date_str = self._get_day_key(0)
+        session = {
+            "session_id": f"{date_str}_{start_time}_{gameid}",
+            "gameid": str(gameid),
+            "game_name": str(game_name),
+            "start_time": int(start_time) if start_time else 0,
+            "end_time": int(end_time) if end_time else 0,
+            "duration_min": int(duration_min),
+            "date": date_str,
+            "group_id": str(group_id),
+        }
+        self.session_records.setdefault(str(sid), []).append(session)
+        self._session_dirty = True
 
     # ========== QQ-SteamID 绑定系统 ==========
 
@@ -478,6 +533,8 @@ class SteamStatusMonitorV3(Star):
         self._load_push_groups()  # <--- 修复：确保push_groups属性初始化
         # --- 排行榜功能：游玩时长记录 + 去重缓存 + 每日推送开关 ---
         self.play_records = {}              # {date_str: {steamid: {gameid: {name, minutes}}}}
+        self.session_records = {}           # {steamid: [session_dict]} 甘特图/热力图数据
+        self._session_dirty = False         # session 数据脏标志
         self._recorded_quit_cache = {}      # {(steamid, gameid): timestamp} 去重用
         self.rank_push_groups = []          # 开启了每日排行榜推送的群列表
         self.rank_push_all = False           # True=全群统一推送全局排行（只渲染一次）
@@ -485,10 +542,17 @@ class SteamStatusMonitorV3(Star):
         self.rank_push_minute = self.config.get('rank_push_minute', 30)
         self._last_rank_push_date = None    # 记录上次推送日期，防止同一天重复推送
         self._load_play_records()
+        self._load_session_records()
         self._load_rank_push_groups()
         # QQ-SteamID 绑定数据
         self._bind_data = {}  # {qq: {sid, nickname}}
         self._load_bind_data()
+        # --- 通知合并缓冲区：_delayed_quit_check 到期后将通知写入此队列，由主轮询统一 flush ---
+        self._pending_end_notifications = {}  # {group_id: [notification_dict, ...]}
+        # --- Web 管理后台 ---
+        self._web_port = self.config.get('web_port', 6195)
+        self._web_server = WebAdminServer(self, self._web_port)
+        self._web_task = asyncio.create_task(self._web_server.start())
 
     async def init_poll_time_once(self):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
@@ -574,6 +638,8 @@ class SteamStatusMonitorV3(Star):
                         self._last_round_logs.append((gid, "\n".join(round_msg_lines)))
                 poll_tasks = [query_one_group(gid, sids) for gid, sids in group_sids.items()]
                 await asyncio.gather(*poll_tasks, return_exceptions=True)
+                # 统一 flush 本轮收集的所有通知（开始游戏 + 延迟退出的结束游戏），合并发送
+                await self._flush_pending_end_notifications()
                 # 40秒统一输出日志
                 await asyncio.sleep(40)
                 if self._last_round_logs:
@@ -596,6 +662,11 @@ class SteamStatusMonitorV3(Star):
 
     async def terminate(self):
         '''插件被卸载/停用时取消所有后台任务并保存持久化数据'''
+        # 停止 Web 管理后台
+        if hasattr(self, '_web_server'):
+            await self._web_server.stop()
+        if hasattr(self, '_web_task') and not self._web_task.done():
+            self._web_task.cancel()
         # 取消主轮询循环和初始化任务，防止重载/禁用后残留多实例并发
         for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None)):
             if t and not t.done():
@@ -2106,6 +2177,105 @@ class SteamStatusMonitorV3(Star):
         except Exception as e:
             logger.error(f"[排行榜] 记录游玩时长异常: {e}")
 
+    def _get_notify_sessions(self, group_id, sid):
+        """获取需要通知的所有 session（主群 + 联动群），去重返回"""
+        sessions = []
+        ns = getattr(self, 'notify_sessions', {}).get(group_id, None)
+        if ns and ns not in sessions:
+            sessions.append(ns)
+        for push_gid in self.push_groups.get(sid, []):
+            push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
+            if push_session and push_session not in sessions:
+                sessions.append(push_session)
+        return sessions
+
+    async def _render_notification_image(self, noti):
+        """为单条通知渲染图片（开始游戏 / 结束游戏），返回临时文件路径或 None"""
+        try:
+            if noti["type"] == "start":
+                status = noti.get("status", {})
+                avatar_url = status.get("avatarfull") or status.get("avatar")
+                superpower = self.get_today_superpower(noti["sid"])
+                font_path = self.get_font_path('NotoSansHans-Regular.otf')
+                zh_game_name, en_game_name = await self.get_game_names(noti["gameid"], noti["game"])
+                online_count = await self.get_game_online_count(noti["gameid"])
+                img_bytes = await render_game_start(
+                    self.data_dir, noti["sid"], noti["name"], avatar_url,
+                    noti["gameid"], zh_game_name,
+                    api_key=self.API_KEY, superpower=superpower,
+                    sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
+                    sgdb_game_name=en_game_name, online_count=online_count,
+                    appid=noti.get("gameid"), proxy=self.proxy)
+            else:
+                from datetime import datetime
+                end_time_str = datetime.fromtimestamp(noti["quit_time"]).strftime("%Y-%m-%d %H:%M")
+                duration_h = noti["duration_min"] / 60 if noti["duration_min"] > 0 else 0
+                avatar_url = noti.get("avatar_url")
+                tip_text = noti.get("tip_text") or "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
+                zh_game_name, en_game_name = await self.get_game_names(noti["gameid"], noti["game"])
+                font_path = self.get_font_path('NotoSansHans-Regular.otf')
+                img_bytes = await render_game_end(
+                    self.data_dir, noti["sid"], noti["name"], avatar_url,
+                    noti["gameid"], zh_game_name,
+                    end_time_str, tip_text, duration_h,
+                    sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
+                    sgdb_game_name=en_game_name, appid=noti.get("gameid"),
+                    proxy=self.proxy)
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                return tmp.name
+        except Exception as e:
+            logger.error(f"渲染通知图片失败 ({noti.get('type')}, {noti.get('name')}): {e}")
+            return None
+
+    async def _send_merged_notification(self, group_id, notifications):
+        """将一批通知合并为一条 MessageChain 并推送到所有对应 session"""
+        if not notifications:
+            return
+        send_text = self.config.get('notify_send_text', True)
+        send_image = self.config.get('notify_send_image', True)
+
+        msg_chain = []
+
+        for noti in notifications:
+            if noti["type"] == "start":
+                line = f"🟢【{noti['name']}】开始游玩 {noti['game']}\n"
+            else:
+                line = f"👋 {noti['name']} 不玩 {noti['game']}，游玩时间 {noti['duration_str']}\n"
+            if send_text:
+                msg_chain.append(Plain(line))
+            if send_image:
+                img_path = await self._render_notification_image(noti)
+                if img_path:
+                    msg_chain.append(Image.fromFileSystem(img_path))
+
+        if not msg_chain:
+            return
+
+        # 收集所有通知涉及的 sid，合并为所有需要推的 session
+        all_sids = set(n["sid"] for n in notifications)
+        all_sessions = []
+        for n in notifications:
+            sessions = self._get_notify_sessions(group_id, n["sid"])
+            for s in sessions:
+                if s not in all_sessions:
+                    all_sessions.append(s)
+
+        for session in all_sessions:
+            try:
+                await self.context.send_message(session, MessageChain(msg_chain))
+            except Exception as e:
+                logger.error(f"推送合并通知失败 (group_id={group_id}): {e}")
+
+    async def _flush_pending_end_notifications(self):
+        """将 _pending_end_notifications 缓冲区中的延迟退出通知按群合并后发送，发送完毕后清空"""
+        if not self._pending_end_notifications:
+            return
+        for group_id, notifications in list(self._pending_end_notifications.items()):
+            await self._send_merged_notification(group_id, notifications)
+        self._pending_end_notifications.clear()
+
     async def _delayed_quit_check(self, group_id, sid, gameid):
         await asyncio.sleep(180)
         info = self.group_pending_quit.get(group_id, {}).get(sid, {}).get(gameid)
@@ -2124,6 +2294,12 @@ class SteamStatusMonitorV3(Star):
             info["notified"] = True
             # >>> 排行榜数据采集：记录本次游玩时长（在推送/return之前执行，确保即使关闭通知也能记录）<<<
             self._record_playtime(sid, gameid, info.get("game_name", "未知游戏"), info.get("duration_min", 0))
+            # >>> Session 级别游玩记录采集（甘特图/热力图数据源）<<<
+            self._record_session(
+                sid=sid, gameid=gameid, game_name=info.get("game_name", "未知游戏"),
+                start_time=info.get("start_time"), end_time=info.get("quit_time"),
+                duration_min=info.get("duration_min", 0), group_id=group_id
+            )
             # 游戏结束通知开关：关闭则跳过推送，但仍清理成就任务和 pending_quit
             if not self.config.get('enable_game_end_notify', True):
                 key = (group_id, sid, gameid)
@@ -2139,58 +2315,47 @@ class SteamStatusMonitorV3(Star):
                 time_str = f"{duration_min:.1f}分钟"
             else:
                 time_str = f"{duration_min/60:.1f}小时"
-            msg = f"👋 {info['name']} 不玩 {info['game_name']}了\n游玩时间 {time_str}"
-            # 推送到主群和所有联动群
-            notify_sessions = []
-            notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-            if notify_session:
-                notify_sessions.append(notify_session)
-            for push_gid in self.push_groups.get(sid, []):
-                push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
-                if push_session and push_session not in notify_sessions:
-                    notify_sessions.append(push_session)
-            for session in notify_sessions:
-                try:
-                    send_image = self.config.get('notify_send_image', True)
-                    send_text = self.config.get('notify_send_text', True)
-                    tmp_path = None
-                    if send_image:
-                        from datetime import datetime
-                        end_time_str = datetime.fromtimestamp(info["quit_time"]).strftime("%Y-%m-%d %H:%M")
-                        duration_h = info["duration_min"] / 60 if info["duration_min"] > 0 else 0
-                        avatar_url = None
-                        last_state = self.group_last_states.get(group_id, {}).get(sid)
-                        if last_state:
-                            avatar_url = last_state.get("avatarfull") or last_state.get("avatar")
-                        if not avatar_url:
-                            status_full = await self.fetch_player_status(sid)
-                            if status_full:
-                                avatar_url = status_full.get("avatarfull") or status_full.get("avatar")
-                        tip_text = info.get("tip_text") or "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
-                        zh_game_name, en_game_name = await self.get_game_names(gameid, info["game_name"])
-                        font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                        img_bytes = await render_game_end(
-                            self.data_dir, sid, info["name"], avatar_url, gameid, zh_game_name,
-                            end_time_str, tip_text, duration_h, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, appid=gameid
-                        , proxy=self.proxy)
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                            tmp.write(img_bytes)
-                            tmp_path = tmp.name
-                    # 按开关组装消息链
-                    msg_chain = []
-                    if send_text:
-                        msg_chain.append(Plain(msg))
-                    if tmp_path:
-                        msg_chain.append(Image.fromFileSystem(tmp_path))
-                    if not msg_chain:
-                        continue
-                    await self.context.send_message(session, MessageChain(msg_chain))
-                except Exception as e:
-                    logger.error(f"推送游戏结束图片失败: {e}")
-                    # 图片渲染失败时，若文本开关开则发纯文本兜底
-                    if self.config.get('notify_send_text', True):
-                        await self.context.send_message(session, MessageChain([Plain(msg)]))
+            # 获取头像 URL 和提示词（供后续图片渲染时使用）
+            from datetime import datetime
+            if duration_min < 5:
+                tip_text = "风扇都没转热，主人就结束了？"
+            elif duration_min < 10:
+                tip_text = "杂鱼杂鱼~主人你就这水平？"
+            elif duration_min < 30:
+                tip_text = "热身一下就结束了？"
+            elif duration_min < 60:
+                tip_text = "歇会儿再来，别太累了喵！"
+            elif duration_min < 120:
+                tip_text = "沉浸在游戏世界，时间过得飞快喵！"
+            elif duration_min < 300:
+                tip_text = "肝到手软了喵！主人不如陪陪咱~"
+            elif duration_min < 600:
+                tip_text = "你吃饭了吗？还是说你已经忘了吃饭这件事？"
+            elif duration_min < 1200:
+                tip_text = "家里电费都要被你玩光了喵！"
+            elif duration_min < 1800:
+                tip_text = "咱都要给你颁发'不眠猫'勋章了！"
+            elif duration_min < 2400:
+                tip_text = "主人你还活着喵？你是不是忘了关电脑呀~"
+            else:
+                tip_text = "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
+            avatar_url = None
+            last_state = self.group_last_states.get(group_id, {}).get(sid)
+            if last_state:
+                avatar_url = last_state.get("avatarfull") or last_state.get("avatar")
+            # 写入通知缓冲区，由主轮询统一 flush 合并发送
+            self._pending_end_notifications.setdefault(group_id, []).append({
+                "type": "end",
+                "name": info["name"],
+                "game": info["game_name"],
+                "duration_str": time_str,
+                "sid": sid,
+                "gameid": gameid,
+                "quit_time": info["quit_time"],
+                "duration_min": duration_min,
+                "avatar_url": avatar_url,
+                "tip_text": tip_text,
+            })
             # 三分钟后再关闭成就轮询和清理快照
             key = (group_id, sid, gameid)
             poll_task = self.achievement_poll_tasks.pop(key, None)
@@ -2213,6 +2378,7 @@ class SteamStatusMonitorV3(Star):
         recent_games = self.group_recent_games.setdefault(group_id, [])
         notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
         msg_lines = []
+        notifications = []  # 本轮收集的状态变更通知，改为统一合并发送
         for sid in steam_ids:
             status = status_override if status_override and sid == single_sid else await self.fetch_player_status(sid)
             if not status:
@@ -2321,52 +2487,16 @@ class SteamStatusMonitorV3(Star):
                     last_states[sid] = status
                     continue
                 start_play_times.setdefault(sid, {})[current_gameid] = now
-                msg = f"🟢【{name}】开始游玩 {zh_game_name}"
-                # 推送到主群和所有push_group
-                notify_sessions = []
-                notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-                if notify_session:
-                    notify_sessions.append(notify_session)
-                for push_gid in self.push_groups.get(sid, []):
-                    push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
-                    if push_session and push_session not in notify_sessions:
-                        notify_sessions.append(push_session)
-                # 渲染图片只做一次（受 notify_send_image 开关控制，关闭则跳过渲染省资源）
-                send_image = self.config.get('notify_send_image', True) if not skip_push else False
-                send_text = self.config.get('notify_send_text', True) if not skip_push else False
-                img_path = None
-                if send_image:
-                    try:
-                        avatar_url = status.get("avatarfull") or status.get("avatar")
-                        superpower = self.get_today_superpower(sid)
-                        font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                        online_count = await self.get_game_online_count(current_gameid)
-                        zh_game_name, en_game_name = await self.get_game_names(current_gameid, zh_game_name)
-                        img_bytes = await render_game_start(
-                            self.data_dir, sid, name, avatar_url, current_gameid, zh_game_name,
-                            api_key=self.API_KEY, superpower=superpower, sgdb_api_key=self.SGDB_API_KEY,
-                            font_path=font_path, sgdb_game_name=en_game_name, online_count=online_count, appid=gameid
-                        , proxy=self.proxy)
-                        import tempfile
-                        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                            tmp.write(img_bytes)
-                            img_path = tmp.name
-                    except Exception as e:
-                        logger.error(f"推送开始游戏图片失败: {e}")
-                        img_path = None
-                for session in notify_sessions:
-                    try:
-                        # 按 notify_send_text / notify_send_image 开关组装消息链
-                        msg_chain = []
-                        if send_text:
-                            msg_chain.append(Plain(f"🟢【{name}】开始游玩 {zh_game_name}"))
-                        if img_path:
-                            msg_chain.append(Image.fromFileSystem(img_path))
-                        if not msg_chain:
-                            continue  # 两个开关都关则跳过
-                        await self.context.send_message(session, MessageChain(msg_chain))
-                    except Exception as e:
-                        logger.error(f"推送开始游戏消息失败: {e}")
+                # 收集通知，由末尾统一合并发送（不在循环内逐条推送）
+                if not skip_push:
+                    notifications.append({
+                        "type": "start",
+                        "name": name,
+                        "game": zh_game_name,
+                        "sid": sid,
+                        "gameid": current_gameid,
+                        "status": status,
+                    })
                 # 成就监控任务启动（受 enable_achievement_poll 配置控制）
                 if skip_push or not self.config.get('enable_achievement_poll', True):
                     last_states[sid] = status
@@ -2462,90 +2592,30 @@ class SteamStatusMonitorV3(Star):
                         time_str = f"{duration_min:.1f}分钟"
                     else:
                         time_str = f"{duration_min/60:.1f}小时"
-                    msg = f"👋 {info['name']} 不玩 {info['game_name']}了\n游玩时间 {time_str}"
-                    try:
-                        # 推送到主群和所有联动群
-                        notify_sessions = []
-                        notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-                        if notify_session:
-                            notify_sessions.append(notify_session)
-                        for push_gid in self.push_groups.get(sid, []):
-                            push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
-                            if push_session and push_session not in notify_sessions:
-                                notify_sessions.append(push_session)
-                        if notify_sessions:
-                            try:
-                                send_image = self.config.get('notify_send_image', True)
-                                send_text = self.config.get('notify_send_text', True)
-                                tmp_path = None
-                                if send_image:
-                                    from datetime import datetime
-                                    end_time_str = datetime.fromtimestamp(info["quit_time"]).strftime("%Y-%m-%d %H:%M")
-                                    avatar_url = None
-                                    last_state = last_states.get(sid)
-                                    if last_state:
-                                        avatar_url = last_state.get("avatarfull") or last_state.get("avatar")
-                                    if not avatar_url:
-                                        status_full = await self.fetch_player_status(sid)
-                                        if status_full:
-                                            avatar_url = status_full.get("avatarfull") or status_full.get("avatar")
-                                    # 获取友好提示词
-                                    if duration_min < 5:
-                                        tip_text = "风扇都没转热，主人就结束了？"
-                                    elif duration_min < 10:
-                                        tip_text = "杂鱼杂鱼~主人你就这水平？"
-                                    elif duration_min < 30:
-                                        tip_text = "热身一下就结束了？"
-                                    elif duration_min < 60:
-                                        tip_text = "歇会儿再来，别太累了喵！"
-                                    elif duration_min < 120:
-                                        tip_text = "沉浸在游戏世界，时间过得飞快喵！"
-                                    elif duration_min < 300:
-                                        tip_text = "肝到手软了喵！主人不如陪陪咱~"
-                                    elif duration_min < 600:
-                                        tip_text = "你吃饭了吗？还是说你已经忘了吃饭这件事？"
-                                    elif duration_min < 1200:
-                                        tip_text = "家里电费都要被你玩光了喵！"
-                                    elif duration_min < 1800:
-                                        tip_text = "咱都要给你颁发'不眠猫'勋章了！"
-                                    elif duration_min < 2400:
-                                        tip_text = "主人你还活着喵？你是不是忘了关电脑呀~"
-                                    else:
-                                        tip_text = "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
-                                    zh_game_name, en_game_name = await self.get_game_names(gameid, info["game_name"])
-                                    font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                                    img_bytes = await render_game_end(
-                                        self.data_dir, sid, info["name"], avatar_url, gameid, zh_game_name,
-                                        end_time_str, tip_text, duration_min/60 if duration_min > 0 else 0, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, appid=gameid
-                                    , proxy=self.proxy)
-                                    import tempfile
-                                    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                                        tmp.write(img_bytes)
-                                        tmp_path = tmp.name
-                                # 按开关组装消息链并推送
-                                msg_chain = []
-                                if send_text:
-                                    msg_chain.append(Plain(msg))
-                                if tmp_path:
-                                    msg_chain.append(Image.fromFileSystem(tmp_path))
-                                if not msg_chain:
-                                    pass  # 两个开关都关则不发
-                                else:
-                                    for session in notify_sessions:
-                                        await self.context.send_message(session, MessageChain(msg_chain))
-                            except Exception as e:
-                                logger.error(f"推送游戏结束图片失败: {e}")
-                                if self.config.get('notify_send_text', True):
-                                    for session in notify_sessions:
-                                        await self.context.send_message(session, MessageChain([Plain(msg)]))
-                        else:
-                            logger.error("未设置推送会话，无法发送消息")
-                    except Exception as e:
-                        logger.error(f"推送正常退出消息失败: {e}")
+                    # 收集到通知缓冲，由主轮询统一合并发送（兜底逻辑，正常由 _delayed_quit_check 处理）
+                    avatar_url = None
+                    ls = last_states.get(sid)
+                    if ls:
+                        avatar_url = ls.get("avatarfull") or ls.get("avatar")
+                    notifications.append({
+                        "type": "end",
+                        "name": info["name"],
+                        "game": info["game_name"],
+                        "duration_str": time_str,
+                        "sid": sid,
+                        "gameid": gameid,
+                        "quit_time": info["quit_time"],
+                        "duration_min": duration_min,
+                        "avatar_url": avatar_url,
+                        "tip_text": "你已经和椅子合为一体，成为传说中的'椅子精'了喵！",
+                    })
                     if gameid in pending_quit[sid]:
                         del pending_quit[sid][gameid]
 
         self._save_persistent_data()
+        # 将本轮收集的开始/结束游戏通知提交到缓冲区，由主轮询统一 flush 合并发送
+        if notifications and not skip_push:
+            self._pending_end_notifications.setdefault(group_id, []).extend(notifications)
         # 只返回日志字符串
         return "\n".join(msg_lines) if msg_lines else None
 

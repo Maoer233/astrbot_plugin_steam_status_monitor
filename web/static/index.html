@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Steam Monitor Admin</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.3.67/css/materialdesignicons.min.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <nav id="sidebar">
+    <div class="sidebar-header">
+      <span class="mdi mdi-steam"></span>
+      <span>Steam Monitor</span>
+    </div>
+    <ul class="nav-list">
+      <li class="nav-item active" data-page="dashboard"><span class="mdi mdi-view-dashboard"></span><span>仪表盘</span></li>
+      <li class="nav-item" data-page="gantt"><span class="mdi mdi-chart-timeline"></span><span>甘特图</span></li>
+      <li class="nav-item" data-page="heatmap"><span class="mdi mdi-calendar-month"></span><span>热力图</span></li>
+      <li class="nav-item" data-page="groups"><span class="mdi mdi-account-group"></span><span>群聊管理</span></li>
+      <li class="nav-item" data-page="bindings"><span class="mdi mdi-link-variant"></span><span>绑定管理</span></li>
+      <li class="nav-item" data-page="push"><span class="mdi mdi-bell-ring"></span><span>每日推送</span></li>
+      <li class="nav-item" data-page="settings"><span class="mdi mdi-cog"></span><span>插件设置</span></li>
+      <li class="nav-item" data-page="test"><span class="mdi mdi-test-tube"></span><span>测试</span></li>
+    </ul>
+  </nav>
+  <main id="content">
+    <div class="page-loading"><span class="mdi mdi-loading mdi-spin"></span><p>加载中...</p></div>
+  </main>
+</div>
+<div id="img-overlay" class="modal-overlay" onclick="this.classList.remove('show')">
+  <div style="position:relative;max-width:90vw;max-height:90vh">
+    <span class="mdi mdi-close" style="position:absolute;top:-30px;right:0;font-size:24px;color:var(--text-secondary);cursor:pointer;z-index:101"></span>
+    <img id="overlay-img" src="" style="max-width:90vw;max-height:90vh;border-radius:var(--border-radius-lg)">
+  </div>
+</div>
+<div id="hplayer-tooltip" class="player-tooltip" style="display:none;position:fixed;z-index:200;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--border-radius-lg);padding:16px;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,0.5);pointer-events:none"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

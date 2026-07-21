@@ -113,11 +113,12 @@ def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
 
 async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
     import httpx
+    import urllib.parse
     if not sgdb_api_key:
         return None
     headers = {"Authorization": f"Bearer {sgdb_api_key}"}
     search_name = sgdb_game_name if sgdb_game_name else game_name
-    search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{search_name}"
+    search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{urllib.parse.quote(search_name)}"
     async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
         try:
             resp = await client.get(search_url, headers=headers)
