@@ -1,7 +1,13 @@
 // Steam Monitor Admin
 const API = {
-  async get(u){const r=await fetch(u);return r.json()},
-  async post(u,d){const r=await fetch(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json()}
+  async request(u,options){
+    const r=await fetch(u,options);const text=await r.text();let data={};
+    if(text){try{data=JSON.parse(text)}catch(_){data={error:text}}}
+    if(!r.ok)throw new Error(data.error||data.message||`HTTP ${r.status}`);
+    return data
+  },
+  async get(u){return this.request(u)},
+  async post(u,d){return this.request(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)})}
 };
 document.querySelectorAll(".nav-item").forEach(it=>{it.addEventListener("click",()=>{const p=it.dataset.page;if(p)navigateTo(p)})});
 
@@ -224,10 +230,31 @@ async function renderPush(){
   window.togGroup=async(gid,on)=>{await API.post(on?"/api/push/groups/add":"/api/push/groups/remove",{group_id:gid})};
   window.togAll=async()=>{const r=await API.post("/api/push/all/toggle",{});toast(`全群推送${r.rank_push_all?"已开启":"已关闭"}`)};
 }
-const SL={steam_api_key:"Steam Web API密钥",sgdb_api_key:"SteamGridDB API密钥",fixed_poll_interval:"固定轮询间隔(秒)",smart_poll_intervals:"智能轮询间隔(分)",retry_times:"API重试次数",max_group_size:"单群最大监控人数",detailed_poll_log:"详细轮询日志",enable_achievement_poll:"成就轮询推送",enable_game_end_notify:"游戏结束通知",notify_send_image:"通知发送图片",notify_send_text:"通知发送文本",enable_proxy:"启用代理",proxy_url:"代理链接",cache_avatar_hours:"头像缓存(小时)",cache_avatar_frame_hours:"头像框缓存(小时)",game_filter_mode:"游戏过滤模式",game_filter_ids:"过滤游戏ID",permission_level:"指令权限等级",web_port:"管理后台端口",rank_push_hour:"推送-时",rank_push_minute:"推送-分"};
-const SO=["steam_api_key","sgdb_api_key","web_port","fixed_poll_interval","smart_poll_intervals","retry_times","max_group_size","enable_game_end_notify","enable_achievement_poll","notify_send_text","notify_send_image","detailed_poll_log","permission_level","game_filter_mode","game_filter_ids","rank_push_hour","rank_push_minute","enable_proxy","proxy_url","cache_avatar_hours","cache_avatar_frame_hours"];
+// ====== Command Permissions ======
+async function loadPermissionSettings(){
+  const body=document.getElementById("permission-settings-body");if(!body)return;
+  body.innerHTML='<div class="page-loading permission-loading"><span class="mdi mdi-loading mdi-spin"></span><p>正在读取 AstrBot 指令权限...</p></div>';
+  try{
+    const data=await API.get("/api/permissions");const commands=data.commands||[];
+    if(!commands.length){body.innerHTML='<div class="empty-state">未发现本插件指令</div>';return}
+    body.innerHTML=`<p class="permission-help">这里直接读取和修改 AstrBot 框架的实际权限。member 表示所有成员可用，admin 表示仅管理员可用。</p>
+      <div class="permission-table-wrap"><table class="table"><thead><tr><th>有效指令</th><th>描述</th><th>权限</th><th>状态</th></tr></thead><tbody id="permission-tbody"></tbody></table></div>`;
+    const tbody=document.getElementById("permission-tbody");
+    tbody.innerHTML=commands.map((command,index)=>`<tr><td class="monospace">${escapeHtml(command.effective_command||command.original_command||command.handler_name||"-")}</td><td>${escapeHtml(command.description||"-")}</td><td><select class="form-input permission-select" data-permission-index="${index}"><option value="admin" ${command.permission==="admin"?"selected":""}>admin</option><option value="member" ${command.permission==="member"?"selected":""}>member</option></select></td><td><span class="badge ${command.enabled?"badge-online":"badge-offline"}">${command.enabled?"已启用":"已停用"}</span></td></tr>`).join("");
+    document.querySelectorAll("[data-permission-index]").forEach(select=>select.addEventListener("change",async()=>{
+      const command=commands[Number(select.dataset.permissionIndex)];const previous=command.permission;select.disabled=true;
+      try{const result=await API.post("/api/permissions/update",{handler_full_name:command.handler_full_name,permission:select.value});command.permission=result.command.permission;select.value=command.permission;toast("指令权限已同步")}
+      catch(error){select.value=previous;toast(error.message,"error")}
+      finally{select.disabled=false}
+    }));
+  }catch(error){body.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>权限加载失败：${escapeHtml(error.message)}</p><button class="btn btn-primary mt-8" onclick="loadPermissionSettings()">重试</button></div>`}
+}
+function escapeHtml(value){const div=document.createElement("div");div.textContent=String(value);return div.innerHTML}
+
+const SL={steam_api_key:"Steam Web API密钥",sgdb_api_key:"SteamGridDB API密钥",fixed_poll_interval:"固定轮询间隔(秒)",smart_poll_intervals:"智能轮询间隔(分)",retry_times:"API重试次数",max_group_size:"单群最大监控人数",detailed_poll_log:"详细轮询日志",enable_achievement_poll:"成就轮询推送",enable_game_end_notify:"游戏结束通知",notify_send_image:"通知发送图片",notify_send_text:"通知发送文本",enable_proxy:"启用代理",proxy_url:"代理链接",cache_avatar_hours:"头像缓存(小时)",cache_avatar_frame_hours:"头像框缓存(小时)",game_filter_mode:"游戏过滤模式",game_filter_ids:"过滤游戏ID",web_port:"管理后台端口",rank_push_hour:"推送-时",rank_push_minute:"推送-分"};
+const SO=["steam_api_key","sgdb_api_key","web_port","fixed_poll_interval","smart_poll_intervals","retry_times","max_group_size","enable_game_end_notify","enable_achievement_poll","notify_send_text","notify_send_image","detailed_poll_log","game_filter_mode","game_filter_ids","rank_push_hour","rank_push_minute","enable_proxy","proxy_url","cache_avatar_hours","cache_avatar_frame_hours"];
 const BK=["detailed_poll_log","enable_achievement_poll","enable_game_end_notify","notify_send_image","notify_send_text"];
-const IK=["fixed_poll_interval","retry_times","max_group_size","permission_level","cache_avatar_hours","cache_avatar_frame_hours","web_port","rank_push_hour","rank_push_minute"];
+const IK=["fixed_poll_interval","retry_times","max_group_size","cache_avatar_hours","cache_avatar_frame_hours","web_port","rank_push_hour","rank_push_minute"];
 const SK=["smart_poll_intervals","proxy_url","game_filter_ids"];const SEK=["steam_api_key","sgdb_api_key"];
 async function renderSettings(){
   const data=await API.get("/api/settings");const c=document.getElementById("content");
@@ -238,7 +265,10 @@ async function renderSettings(){
     else if(BK.includes(k))h+=`<div class="form-group"><label class="flex gap-8" style="align-items:center;cursor:pointer"><label class="toggle"><input type="checkbox" id="cfg-${k}" ${data[k]?"checked":""}><span class="slider"></span></label><span>${l}</span></label></div>`;
     else if(IK.includes(k))h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" type="number" value="${data[k]??""}"></div>`;
     else h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" value="${data[k]??""}"></div>`}
-  h+='<button class="btn btn-primary mt-8" onclick="saveSet()">保存全部设置</button></div>';c.innerHTML=h;
+  h+='<button class="btn btn-primary mt-8" onclick="saveSet()">保存全部设置</button></div>';
+  h+=`<details class="card settings-collapsible" id="permission-settings"><summary><span><span class="mdi mdi-shield-account"></span> 指令权限</span><span class="summary-hint">按指令设置 admin / member</span></summary><div id="permission-settings-body" class="collapsible-body"><p class="permission-help">展开后读取 AstrBot 当前权限配置。</p></div></details>`;
+  c.innerHTML=h;
+  const permissionDetails=document.getElementById("permission-settings");permissionDetails.addEventListener("toggle",()=>{if(permissionDetails.open&&!permissionDetails.dataset.loaded){permissionDetails.dataset.loaded="1";loadPermissionSettings()}});
   window.saveSet=async()=>{const p={};BK.forEach(k=>p[k]=document.getElementById(`cfg-${k}`).checked);SEK.forEach(k=>{const v=document.getElementById(`cfg-${k}`).value;if(v)p[k]=v});p.enable_proxy=document.getElementById("cfg-enable_proxy").checked;IK.forEach(k=>p[k]=parseInt(document.getElementById(`cfg-${k}`).value)||0);SK.forEach(k=>p[k]=document.getElementById(`cfg-${k}`).value);p.game_filter_mode=document.getElementById("cfg-game_filter_mode").value;const r=await API.post("/api/settings/update",p);if(r.ok)toast("已保存，部分需重启生效");else toast(r.error||"失败","error")};
 }
 
