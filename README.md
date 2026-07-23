@@ -21,7 +21,8 @@
 - **字体自动管理**：自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，渲染更稳定
 - **性能优化**：节流写盘、单点异常隔离、批量预拉取，避免拖慢 AstrBot 主进程与 WebUI
 - **原生逐指令权限**：每条指令使用 AstrBot 框架的 `admin/member` 权限，不再维护插件内部权限等级
-- **权限配置同步**：插件 WebUI 的“指令权限”页面直接读写 AstrBot 框架配置，并同步当前运行时权限
+- **AstrBot 内置管理页**：仪表盘、群聊、绑定、每日推送和权限管理直接集成在 AstrBot WebUI，无需额外端口
+- **权限配置同步**：内置管理页的“指令权限”直接读写 AstrBot 框架配置，并同步当前运行时权限
 
 ## 默认轮询间隔说明（智能轮询模式）
 | 玩家最近在线时间      | 轮询间隔 |
@@ -44,6 +45,7 @@
    - `/steam addid 123456789`（8 位好友码）
 4. 启动轮询：
    `/steam on`  启动本群 Steam 状态监控，后续状态变更会自动推送。
+5. 如需使用管理页面，在 AstrBot WebUI 的插件详情中打开“Steam 状态监控”页面。
 
 ## 配置项说明
 | 配置项 | 说明 | 默认值 |
@@ -94,7 +96,7 @@
 - `.steamwho @用户` / `.在干嘛 @用户`  即时查询QQ绑定玩家的Steam状态
 - `/steam rank [天数]` 查看本群游戏时长排行榜（默认今日，可指定天数）
 - `/steam allrank [天数]` 查看所有群游戏时长排行榜（默认今日，可指定天数）
-- `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（all=全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
+- `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（默认每群独立排行；all=显式使用共享全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
 - `/steam rs` 清除所有状态并初始化
 - `/steam achievement_on` 开启本群Steam成就推送
 - `/steam achievement_off` 关闭本群Steam成就推送
@@ -107,7 +109,7 @@
 - Python 3.7+
 - httpx
 - Pillow
-- AstrBot 框架
+- AstrBot >= 4.24.2
 
 ### 依赖安装方法
 如果显示缺少依赖，你可以尝试下载以下工具来进行修复
@@ -120,6 +122,11 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- 未发布
+  - **内置 WebUI**：外置 aiohttp 管理站迁移为 AstrBot Plugin Pages，复用 Dashboard 登录鉴权，不再监听独立端口
+  - **分群每日榜单**：默认按每个目标群的监控成员分别聚合、渲染和推送，单群无记录或失败不影响其他群
+  - **推送范围语义**：管理页明确区分“接收群聊”和“榜单内容范围”，全局榜单仅在显式选择时启用
+
 - V3.2.3（2026/07/23）
   - **权限系统迁移 (by LitChi-bit)**：回退 AstrBot 原生逐指令 `admin/member` 权限，移除插件内部 `permission_level`
   - **WebUI 权限管理 (by LitChi-bit)**：新增"指令权限"逐条配置，直接同步 AstrBot 框架持久化配置与运行时权限

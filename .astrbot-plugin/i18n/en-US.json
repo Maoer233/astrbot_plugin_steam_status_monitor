@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "steam-monitor": {
+      "title": "Steam Status Monitor",
+      "description": "View statistics, manage groups and bindings, and configure daily rankings"
+    }
+  }
+}

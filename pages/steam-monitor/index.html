@@ -6,7 +6,7 @@
 <title>Steam Monitor Admin</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.3.67/css/materialdesignicons.min.css">
-<link rel="stylesheet" href="/static/style.css?v=3.2.2">
+<link rel="stylesheet" href="./style.css">
 </head>
 <body>
 <div id="app">
@@ -37,6 +37,20 @@
   </div>
 </div>
 <div id="hplayer-tooltip" class="player-tooltip" style="display:none;position:fixed;z-index:200;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--border-radius-lg);padding:16px;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,0.5);pointer-events:none"></div>
-<script src="/static/app.js?v=3.2.2"></script>
+<div id="page-dialog" class="modal-overlay">
+  <div class="modal">
+    <div id="page-dialog-title" class="modal-title"></div>
+    <div id="page-dialog-input-wrap" class="form-group">
+      <label id="page-dialog-label" class="form-label"></label>
+      <input id="page-dialog-input" class="form-input">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="resolvePageDialog(false)">取消</button>
+      <button class="btn btn-primary" onclick="resolvePageDialog(true)">确认</button>
+    </div>
+  </div>
+</div>
+<script src="/api/plugin/page/bridge-sdk.js"></script>
+<script src="./app.js"></script>
 </body>
 </html>

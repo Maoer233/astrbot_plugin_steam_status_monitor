@@ -1,0 +1,8 @@
+{
+  "pages": {
+    "steam-monitor": {
+      "title": "Steam 状态监控",
+      "description": "查看统计、管理群聊与绑定，并配置每日排行榜推送"
+    }
+  }
+}

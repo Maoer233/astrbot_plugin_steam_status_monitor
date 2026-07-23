@@ -16,6 +16,7 @@ from .achievement_monitor import AchievementMonitor
 from .game_start_render import render_game_start  # 新增导入
 from .game_end_render import render_game_end  # 新增导入
 from .rank_render import render_rank_image  # 排行榜渲染
+from .rank_push import build_rank_push_scopes
 from PIL import Image as PILImage
 import io
 from datetime import datetime, timedelta
@@ -24,7 +25,7 @@ import tempfile
 import traceback
 import shutil
 from .superpower_util import load_abilities, get_daily_superpower  # 新增导入
-from .web import WebAdminServer  # Web 管理后台
+from .web_api import WebAdminAPI  # AstrBot 内置 WebUI
 
 @register(
     "steam_status_monitor_V3",
@@ -411,6 +412,7 @@ class SteamStatusMonitorV3(Star):
             logger.warning(f"保存 rank_push_groups.json 失败: {e}")
 
     def __init__(self, context: Context, config=None):
+        super().__init__(context)
         # 插件运行状态标志，重启后自动丢失
         if hasattr(self, '_ssm_running') and self._ssm_running:
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
@@ -549,10 +551,10 @@ class SteamStatusMonitorV3(Star):
         self._load_bind_data()
         # --- 通知合并缓冲区：_delayed_quit_check 到期后将通知写入此队列，由主轮询统一 flush ---
         self._pending_end_notifications = {}  # {group_id: [notification_dict, ...]}
-        # --- Web 管理后台 ---
-        self._web_port = self.config.get('web_port', 6195)
-        self._web_server = WebAdminServer(self, self._web_port)
-        self._web_task = asyncio.create_task(self._web_server.start())
+        # --- AstrBot Plugin Pages 管理后台 ---
+        self.web_api = WebAdminAPI(self)
+        self.web_api.register_routes(context)
+        logger.info("[WebAdmin] 管理页面已注册到 AstrBot 内置 WebUI")
 
     async def init_poll_time_once(self):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
@@ -662,11 +664,6 @@ class SteamStatusMonitorV3(Star):
 
     async def terminate(self):
         '''插件被卸载/停用时取消所有后台任务并保存持久化数据'''
-        # 停止 Web 管理后台
-        if hasattr(self, '_web_server'):
-            await self._web_server.stop()
-        if hasattr(self, '_web_task') and not self._web_task.done():
-            self._web_task.cancel()
         # 取消主轮询循环和初始化任务，防止重载/禁用后残留多实例并发
         for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None)):
             if t and not t.done():
@@ -1412,78 +1409,166 @@ class SteamStatusMonitorV3(Star):
         self._save_persistent_data(force=True)  # 清空后保存
         yield event.plain_result("Steam状态监控插件已重置，所有状态已清空。")
 
+    async def _render_daily_rank_file(self, rank_data):
+        """补齐排行榜展示信息并渲染为临时图片。"""
+        sid_set = {player["sid"] for player in rank_data}
+        sid_info = {}
+        if sid_set:
+            status_map = await self.fetch_player_statuses_batch(list(sid_set))
+            for sid, info in status_map.items():
+                sid_info[sid] = {
+                    "name": info.get("name") or sid,
+                    "avatar_url": info.get("avatarfull") or info.get("avatar"),
+                }
+
+        yesterday = self._get_day_key(-1)
+        day_data = self.play_records.get(yesterday, {})
+        for player in rank_data:
+            sid = player["sid"]
+            info = sid_info.get(sid, {})
+            player["name"] = self._resolve_bind_name(
+                sid,
+                info.get("name", sid[-8:]),
+            )
+            player["avatar_url"] = info.get("avatar_url")
+            player["top_game_id"] = None
+            if not player["games"]:
+                continue
+            top_name = player["games"][0]["name"]
+            for game_id, game_info in day_data.get(sid, {}).items():
+                if game_info.get("name") == top_name:
+                    player["top_game_id"] = game_id
+                    break
+
+        async def cover_fetcher(gameid):
+            return await self.get_game_cover_url(gameid)
+
+        avatar_frame_paths = {}
+        from .game_start_render import get_avatar_frame_path, get_avatar_frame_url
+
+        for player in rank_data:
+            sid = player.get("sid", "")
+            if not sid:
+                continue
+            frame_path = get_avatar_frame_path(
+                self.data_dir,
+                sid,
+                proxy=self.proxy,
+            )
+            if not frame_path:
+                frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
+                if frame_url:
+                    frame_path = get_avatar_frame_path(
+                        self.data_dir,
+                        sid,
+                        frame_url,
+                        proxy=self.proxy,
+                    )
+            if frame_path:
+                avatar_frame_paths[sid] = frame_path
+
+        font_path = self.get_font_path("NotoSansHans-Regular.otf")
+        img_bytes = await render_rank_image(
+            self.data_dir,
+            rank_data,
+            "昨日",
+            font_path=font_path,
+            proxy=self.proxy,
+            cover_fetcher=cover_fetcher,
+            avatar_frame_paths=avatar_frame_paths,
+        )
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(img_bytes)
+            return tmp.name
+
     async def _daily_rank_push(self, test_mode=False):
-        """每日自动推送昨日（4:00~4:00）排行榜到已开启的群。test_mode=True 时立即触发不检查日期去重"""
+        """推送昨日榜单；默认按目标群独立聚合，显式全局模式才共享总榜。"""
+        use_global_rank = getattr(self, "rank_push_all", False)
+        scopes = build_rank_push_scopes(
+            getattr(self, "rank_push_groups", []),
+            use_global_rank=use_global_rank,
+        )
+        if not scopes:
+            logger.warning(
+                "[排行榜] 没有目标群可推送"
+                "（请先使用 /steam rank_on 或 /steam rank_on all 开启推送）"
+            )
+            return
+
+        rendered_files = {}
         try:
-            is_all = getattr(self, 'rank_push_all', False)
-            # 推送目标严格来自 rank_push_groups（只有显式开启 rank_on 的群才推送）
-            target_groups = list(self.rank_push_groups)
-            if not target_groups:
-                logger.warning("[排行榜] 没有目标群可推送（请先使用 /steam rank_on 或 /steam rank_on all 开启推送）")
-                return
-            # 获取排行榜数据：rank_push_all 时使用全局排行 (group_id=None)
-            rank_data = self._get_rank_data(days=1, group_id=None if is_all else None, base_day_offset=-1)
-            if not rank_data:
-                logger.info("[排行榜] 昨日无游玩记录，跳过推送")
-                return
-            # 补充玩家信息（只渲染一次，所有群共用同一张图）
-            sid_set = {p["sid"] for p in rank_data}
-            sid_info = {}
-            if sid_set:
-                status_map = await self.fetch_player_statuses_batch(list(sid_set))
-                for sid, info in status_map.items():
-                    sid_info[sid] = {"name": info.get("name") or sid, "avatar_url": info.get("avatarfull") or info.get("avatar")}
-            for p in rank_data:
-                info = sid_info.get(p["sid"], {})
-                p["name"] = self._resolve_bind_name(p["sid"], info.get("name", p["sid"][-8:]))
-                p["avatar_url"] = info.get("avatar_url")
-                p["top_game_id"] = None
-            # 反查封面gameid
-            yesterday = self._get_day_key(-1)
-            for p in rank_data:
-                if not p["games"]: continue
-                top_name = p["games"][0]["name"]
-                day_data = self.play_records.get(yesterday, {})
-                sid_games = day_data.get(p["sid"], {})
-                for gid, ginfo in sid_games.items():
-                    if ginfo.get("name") == top_name:
-                        p["top_game_id"] = gid
-                        break
-            async def cover_fetcher(gameid):
-                return await self.get_game_cover_url(gameid)
-            # 获取头像框路径
-            avatar_frame_paths = {}
-            from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
-            for p in rank_data:
-                sid = p.get("sid", "")
-                if sid:
-                    fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
-                    if not fp:
-                        frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
-                        if frame_url: fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
-                    if fp: avatar_frame_paths[sid] = fp
-            font_path = self.get_font_path('NotoSansHans-Regular.otf')
-            img_bytes = await render_rank_image(self.data_dir, rank_data, "昨日", font_path=font_path, proxy=self.proxy, cover_fetcher=cover_fetcher, avatar_frame_paths=avatar_frame_paths)
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                tmp.write(img_bytes)
-                tmp_path = tmp.name
-            # 推送到所有目标群
-            for group_id in target_groups:
-                try:
-                    session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-                    if session:
-                        await self.context.send_message(session, MessageChain([
-                            Plain("📊 昨日游戏时长排行榜来啦！\n"),
-                            Image.fromFileSystem(tmp_path)
-                        ]))
-                        logger.info(f"[排行榜] 已推送昨日排行榜到群 {group_id}")
+            for target_group_id, data_group_id in scopes:
+                render_key = (
+                    ("global", None)
+                    if data_group_id is None
+                    else ("group", data_group_id)
+                )
+                if render_key not in rendered_files:
+                    rank_data = self._get_rank_data(
+                        days=1,
+                        group_id=data_group_id,
+                        base_day_offset=-1,
+                    )
+                    if not rank_data:
+                        scope_label = (
+                            "全部群"
+                            if data_group_id is None
+                            else f"群 {data_group_id}"
+                        )
+                        logger.info(
+                            f"[排行榜] {scope_label}昨日无游玩记录，跳过推送"
+                        )
+                        rendered_files[render_key] = None
                     else:
-                        logger.warning(f"[排行榜] 群 {group_id} 未找到推送会话，跳过")
+                        try:
+                            rendered_files[render_key] = (
+                                await self._render_daily_rank_file(rank_data)
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"[排行榜] 渲染群 {data_group_id or '全局'} "
+                                f"昨日榜单失败: {e}"
+                            )
+                            rendered_files[render_key] = None
+
+                tmp_path = rendered_files[render_key]
+                if not tmp_path:
+                    continue
+                try:
+                    session = getattr(self, "notify_sessions", {}).get(
+                        target_group_id
+                    )
+                    if not session:
+                        logger.warning(
+                            f"[排行榜] 群 {target_group_id} 未找到推送会话，跳过"
+                        )
+                        continue
+                    await self.context.send_message(
+                        session,
+                        MessageChain([
+                            Plain("📊 昨日游戏时长排行榜来啦！\n"),
+                            Image.fromFileSystem(tmp_path),
+                        ]),
+                    )
+                    logger.info(
+                        f"[排行榜] 已推送昨日排行榜到群 {target_group_id}"
+                    )
                 except Exception as e:
-                    logger.error(f"[排行榜] 推送群 {group_id} 失败: {e}")
+                    logger.error(
+                        f"[排行榜] 推送群 {target_group_id} 失败: {e}"
+                    )
         except Exception as e:
             logger.error(f"[排行榜] 每日推送异常: {e}")
+        finally:
+            for tmp_path in {
+                path for path in rendered_files.values() if path
+            }:
+                try:
+                    os.unlink(tmp_path)
+                except OSError as e:
+                    logger.warning(
+                        f"[排行榜] 清理临时图片失败 {tmp_path}: {e}"
+                    )
     async def _render_and_send_rank(self, event, group_id, days, period_label, is_all=False):
         """生成排行榜图片并发送"""
         try:

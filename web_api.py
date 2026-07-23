@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-"""aiohttp HTTP Server for Steam Monitor Admin Dashboard"""
-import os
+"""AstrBot Plugin Pages API for the Steam Monitor dashboard."""
 import asyncio
+import base64
 import logging
-from aiohttp import web
+import mimetypes
+import os
+from functools import wraps
+
+from astrbot.api.web import error_response, json_response, request
 from astrbot.core.star.command_management import (
     list_commands,
     update_command_permission,
@@ -11,13 +15,13 @@ from astrbot.core.star.command_management import (
 
 # 尝试导入父包的工具函数（运行时可能因 AstrBot 加载机制失败，优雅降级）
 try:
-    from ..rank_render import render_rank_image
+    from .rank_render import render_rank_image
 except ImportError:
     render_rank_image = None
 
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
+PLUGIN_NAME = "steam_status_monitor_V3"
 
 
 def _get_player_display_name(p, sid):
@@ -80,111 +84,92 @@ def _command_descriptor_to_dict(descriptor):
     }
 
 
+class _PluginPageRequest:
+    """Expose the subset of aiohttp's request API used by the legacy handlers."""
+
+    @property
+    def query(self):
+        return request.query
+
+    @property
+    def match_info(self):
+        return request.path_params or {}
+
+    async def json(self):
+        payload = await request.json(default=None)
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        return payload
+
+
 def safe_api(handler):
-    """装饰器：捕获 API handler 中的异常，统一返回 JSON 错误"""
-    async def wrapper(*args, **kwargs):
+    """Catch handler failures and return a consistent Plugin Pages error."""
+
+    @wraps(handler)
+    async def wrapper(*_args, **_kwargs):
         try:
-            resp = await handler(*args, **kwargs)
-            # 所有 API 响应禁止浏览器缓存
-            if isinstance(resp, web.StreamResponse) and hasattr(resp, 'headers'):
-                resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-                resp.headers['Pragma'] = 'no-cache'
-                resp.headers['Expires'] = '0'
-            return resp
+            return await handler(_PluginPageRequest())
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logger.error(f"[WebAdmin] API 异常 {handler.__name__}: {e}", exc_info=True)
-            return web.json_response({"error": str(e), "handler": handler.__name__}, status=500)
-    # Preserve the original name for route registration
-    wrapper.__name__ = handler.__name__
+            logger.error(
+                f"[WebAdmin] API 异常 {handler.__name__}: {e}",
+                exc_info=True,
+            )
+            return error_response(str(e), status_code=500)
+
     return wrapper
 
 
-class WebAdminServer:
-    """嵌入式 HTTP 管理后台服务器，运行在独立端口（默认 6195）"""
+class WebAdminAPI:
+    """Backend API registered into AstrBot's authenticated Dashboard."""
 
-    def __init__(self, plugin_instance, port=6195):
+    def __init__(self, plugin_instance):
         self.plugin = plugin_instance
-        self.port = port
-        self.app = web.Application()
-        self.runner = None
-        self._setup_routes()
 
-    def _setup_routes(self):
-        """注册路由：静态文件 + REST API"""
-        self.app["plugin"] = self.plugin
+    def register_routes(self, context):
+        """Register all routes used by ``pages/steam-monitor``."""
+
         def r(method, path, handler):
-            self.app.router.add_route(method, path, safe_api(handler))
+            context.register_web_api(
+                f"/{PLUGIN_NAME}{path}",
+                safe_api(handler),
+                [method],
+                f"Steam Monitor Page: {handler.__name__}",
+            )
 
-        # 静态首页
-        self.app.router.add_get("/", self._serve_index)
-        self.app.router.add_get("/index.html", self._serve_index)
-
-        # 静态资源
-        self.app.router.add_static("/static", STATIC_DIR, show_index=False)
-
-        # REST API 端点（使用 r 注册自动添加异常捕获）
-        r("GET", "/api/dashboard/stats", self._api_dashboard_stats)
-        r("GET", "/api/dashboard/rank-image", self._api_dashboard_rank_image)
-        r("GET", "/api/gantt/data", self._api_gantt_data)
-        r("GET", "/api/heatmap/data", self._api_heatmap_data)
-        r("GET", "/api/heatmap/player/{steamid}", self._api_heatmap_player)
-        r("GET", "/api/groups", self._api_groups_list)
-        r("POST", "/api/groups/add", self._api_groups_add)
-        r("POST", "/api/groups/delete", self._api_groups_delete)
-        r("POST", "/api/groups/add-group", self._api_groups_add_group)
-        r("POST", "/api/groups/delete-group", self._api_groups_delete_group)
-        r("GET", "/api/groups/{group_id}/players", self._api_group_players)
-        r("GET", "/api/bindings", self._api_bindings_list)
-        r("POST", "/api/bindings/add", self._api_bindings_add)
-        r("POST", "/api/bindings/delete", self._api_bindings_delete)
-        r("POST", "/api/bindings/update", self._api_bindings_update)
-        r("GET", "/api/push/settings", self._api_push_settings)
-        r("POST", "/api/push/update", self._api_push_update)
-        r("POST", "/api/push/groups/add", self._api_push_group_add)
-        r("POST", "/api/push/groups/remove", self._api_push_group_remove)
-        r("POST", "/api/push/all/toggle", self._api_push_all_toggle)
-        r("GET", "/api/settings", self._api_settings_get)
-        r("POST", "/api/settings/update", self._api_settings_update)
-        r("GET", "/api/permissions", self._api_permissions_list)
-        r("POST", "/api/permissions/update", self._api_permissions_update)
-        r("GET", "/api/players/search", self._api_players_search)
-        r("GET", "/api/players/avatar/{steamid}", self._api_player_avatar)
-        r("GET", "/api/players/info/{steamid}", self._api_player_info)
-        r("GET", "/api/games/cover/{gameid}", self._api_game_cover)
-        r("GET", "/api/test/steam", self._api_test_steam)
-        r("GET", "/api/test/cover", self._api_test_cover)
-        r("GET", "/api/test/steamid/{steamid}", self._api_test_steamid)
-
-    async def start(self):
-        """启动 HTTP 服务器"""
-        self.runner = web.AppRunner(self.app)
-        await self.runner.setup()
-        site = web.TCPSite(self.runner, "127.0.0.1", self.port)
-        await site.start()
-        url = f"http://127.0.0.1:{self.port}"
-        logger.info(f"[WebAdmin] 管理后台已启动: {url}")
-        print(f"\n{'='*60}")
-        print(f"  Steam 状态监控 - Web 管理后台")
-        print(f"  请使用浏览器访问: {url}")
-        print(f"{'='*60}\n")
-
-    async def stop(self):
-        """停止 HTTP 服务器"""
-        if self.runner:
-            await self.runner.cleanup()
-            logger.info("[WebAdmin] 管理后台已停止")
-
-    async def _serve_index(self, request):
-        """返回首页 HTML"""
-        index_path = os.path.join(STATIC_DIR, "index.html")
-        if os.path.exists(index_path):
-            return web.FileResponse(index_path)
-        return web.Response(
-            text="<h1>Server running</h1><p>index.html not found yet</p>",
-            content_type="text/html",
-        )
+        # Plugin-local endpoints. The Page bridge adds the plugin prefix.
+        r("GET", "/dashboard/stats", self._api_dashboard_stats)
+        r("GET", "/dashboard/rank-image", self._api_dashboard_rank_image)
+        r("GET", "/gantt/data", self._api_gantt_data)
+        r("GET", "/heatmap/data", self._api_heatmap_data)
+        r("GET", "/heatmap/player/<steamid>", self._api_heatmap_player)
+        r("GET", "/groups", self._api_groups_list)
+        r("POST", "/groups/add", self._api_groups_add)
+        r("POST", "/groups/delete", self._api_groups_delete)
+        r("POST", "/groups/add-group", self._api_groups_add_group)
+        r("POST", "/groups/delete-group", self._api_groups_delete_group)
+        r("GET", "/groups/<group_id>/players", self._api_group_players)
+        r("GET", "/bindings", self._api_bindings_list)
+        r("POST", "/bindings/add", self._api_bindings_add)
+        r("POST", "/bindings/delete", self._api_bindings_delete)
+        r("POST", "/bindings/update", self._api_bindings_update)
+        r("GET", "/push/settings", self._api_push_settings)
+        r("POST", "/push/update", self._api_push_update)
+        r("POST", "/push/groups/add", self._api_push_group_add)
+        r("POST", "/push/groups/remove", self._api_push_group_remove)
+        r("POST", "/push/rank-scope", self._api_push_rank_scope)
+        r("GET", "/settings", self._api_settings_get)
+        r("POST", "/settings/update", self._api_settings_update)
+        r("GET", "/permissions", self._api_permissions_list)
+        r("POST", "/permissions/update", self._api_permissions_update)
+        r("GET", "/players/search", self._api_players_search)
+        r("GET", "/players/avatar/<steamid>", self._api_player_avatar)
+        r("GET", "/players/info/<steamid>", self._api_player_info)
+        r("GET", "/games/cover/<gameid>", self._api_game_cover)
+        r("GET", "/test/steam", self._api_test_steam)
+        r("GET", "/test/cover", self._api_test_cover)
+        r("GET", "/test/steamid/<steamid>", self._api_test_steamid)
 
     def _is_plugin_command(self, command):
         if command.get("plugin") == "steam_status_monitor_V3":
@@ -201,15 +186,16 @@ class WebAdminServer:
 
     async def _api_permissions_list(self, request):
         commands = await self._plugin_commands()
-        return web.json_response({"commands": commands})
+        return json_response({"commands": commands})
 
     async def _api_permissions_update(self, request):
         data = await request.json()
         handler_full_name = str(data.get("handler_full_name") or "").strip()
         permission = str(data.get("permission") or "").strip().lower()
         if permission not in {"admin", "member"}:
-            return web.json_response(
-                {"error": "permission 只允许 admin 或 member"}, status=400
+            return json_response(
+                {"error": "permission 只允许 admin 或 member"},
+                status_code=400,
             )
 
         commands = await self._plugin_commands()
@@ -217,12 +203,13 @@ class WebAdminServer:
             command.get("handler_full_name") == handler_full_name
             for command in commands
         ):
-            return web.json_response(
-                {"error": "指定指令不属于本插件"}, status=404
+            return json_response(
+                {"error": "指定指令不属于本插件"},
+                status_code=404,
             )
 
         descriptor = await update_command_permission(handler_full_name, permission)
-        return web.json_response({
+        return json_response({
             "ok": True,
             "command": _command_descriptor_to_dict(descriptor),
         })
@@ -296,7 +283,7 @@ class WebAdminServer:
                     "avatar_url": state.get("avatarfull") or state.get("avatar", ""),
                 })
 
-        return web.json_response({
+        return json_response({
             "total_groups": total_groups,
             "total_players": total_players,
             "total_bindings": total_bindings,
@@ -314,7 +301,10 @@ class WebAdminServer:
         """生成排行榜图片（参考 rank_render 渲染方式，使用本地缓存的封面/头像）"""
         p = self.plugin
         if not render_rank_image:
-            return web.json_response({"error": "rank_render not available"}, status=500)
+            return json_response(
+                {"error": "rank_render not available"},
+                status_code=500,
+            )
 
         from datetime import datetime, timedelta
         try:
@@ -366,7 +356,7 @@ class WebAdminServer:
 
         rank_data = sorted(player_agg.values(), key=lambda x: -x["total_minutes"])[:25]
         if not rank_data:
-            return web.json_response({"error": "no data"}, status=404)
+            return json_response({"error": "no data"}, status_code=404)
 
         # 补充头像 URL 和 top_game_id（与 rank 指令完全一致的渲染方式）
         avatar_map = {}
@@ -395,9 +385,11 @@ class WebAdminServer:
             if fp:
                 font_path = fp("NotoSansHans-Regular.otf")
             if not font_path:
-                import os as _os
-                base = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-                font_path = _os.path.join(base, "fonts", "NotoSansHans-Regular.otf")
+                font_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "fonts",
+                    "NotoSansHans-Regular.otf",
+                )
         except Exception:
             pass
 
@@ -409,10 +401,14 @@ class WebAdminServer:
                 proxy=getattr(p, "proxy", None),
                 cover_fetcher=cover_fetcher,
             )
-            return web.Response(body=img_bytes, content_type="image/png")
+            encoded = base64.b64encode(img_bytes).decode("ascii")
+            return json_response({"data_url": f"data:image/png;base64,{encoded}"})
         except Exception as e:
             logger.error(f"[WebAdmin] rank_image 渲染失败: {e}", exc_info=True)
-            return web.json_response({"error": f"render failed: {e}"}, status=500)
+            return json_response(
+                {"error": f"render failed: {e}"},
+                status_code=500,
+            )
 
     # ────── Gantt ──────
 
@@ -529,7 +525,7 @@ class WebAdminServer:
         except Exception:
             pass
 
-        return web.json_response({
+        return json_response({
             "players": players,
             "time_range": {
                 "start": range_start.strftime("%Y-%m-%d %H:%M"),
@@ -608,7 +604,7 @@ class WebAdminServer:
             key=lambda x: -x["total_minutes"],
         )
 
-        return web.json_response({
+        return json_response({
             "heatmap_data": heatmap_daily,
             "players": players,
         })
@@ -695,7 +691,7 @@ class WebAdminServer:
             key=lambda x: -x["minutes"],
         )[:10]
 
-        return web.json_response({
+        return json_response({
             "sid": steamid,
             "name": name,
             "heatmap_daily": heatmap_daily,
@@ -724,47 +720,56 @@ class WebAdminServer:
                     "game": last_state.get("gameextrainfo", ""),
                     "personastate": last_state.get("personastate", 0),
                 })
-        return web.json_response({"groups": result})
+        return json_response({"groups": result})
 
     async def _api_groups_add(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", ""))
         sid = str(data.get("steamid", ""))
         if not gid or not sid or not sid.isdigit() or len(sid) != 17:
-            return web.json_response({"error": "invalid group_id or steamid"}, status=400)
+            return json_response(
+                {"error": "invalid group_id or steamid"},
+                status_code=400,
+            )
         groups = getattr(p, "group_steam_ids", {})
         if gid not in groups:
             groups[gid] = []
         if sid in groups[gid]:
-            return web.json_response({"ok": True, "message": "already exists"})
+            return json_response({"ok": True, "message": "already exists"})
         max_size = getattr(p, "max_group_size", 20)
         if len(groups[gid]) >= max_size:
-            return web.json_response({"error": f"group limit reached ({max_size})"}, status=400)
+            return json_response(
+                {"error": f"group limit reached ({max_size})"},
+                status_code=400,
+            )
         groups[gid].append(sid)
         p._save_group_steam_ids()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_groups_delete(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", ""))
         sid = str(data.get("steamid", ""))
         if not gid or not sid:
-            return web.json_response({"error": "invalid group_id or steamid"}, status=400)
+            return json_response(
+                {"error": "invalid group_id or steamid"},
+                status_code=400,
+            )
         groups = getattr(p, "group_steam_ids", {}) or {}
         if gid in groups and sid in groups[gid]:
             groups[gid].remove(sid)
             if not groups[gid]:
                 del groups[gid]
             p._save_group_steam_ids()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_groups_add_group(self, request):
         """新增一个空群聊"""
@@ -772,16 +777,16 @@ class WebAdminServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", "")).strip()
         if not gid:
-            return web.json_response({"error": "invalid group_id"}, status=400)
+            return json_response({"error": "invalid group_id"}, status_code=400)
         groups = getattr(p, "group_steam_ids", {})
         if gid in groups:
-            return web.json_response({"ok": True, "message": "already exists"})
+            return json_response({"ok": True, "message": "already exists"})
         groups[gid] = []
         p._save_group_steam_ids()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_groups_delete_group(self, request):
         """删除一个群聊及其所有 SteamID"""
@@ -789,15 +794,15 @@ class WebAdminServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", "")).strip()
         if not gid:
-            return web.json_response({"error": "invalid group_id"}, status=400)
+            return json_response({"error": "invalid group_id"}, status_code=400)
         groups = getattr(p, "group_steam_ids", {}) or {}
         if gid in groups:
             del groups[gid]
             p._save_group_steam_ids()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_group_players(self, request):
         p = self.plugin
@@ -816,7 +821,7 @@ class WebAdminServer:
                 "game": state.get("gameextrainfo", ""),
                 "personastate": state.get("personastate", 0),
             })
-        return web.json_response({"group_id": group_id, "players": result})
+        return json_response({"group_id": group_id, "players": result})
 
     # ────── Bindings ──────
 
@@ -830,53 +835,56 @@ class WebAdminServer:
                 "steamid": info.get("sid", ""),
                 "nickname": info.get("nickname", ""),
             })
-        return web.json_response({"bindings": result})
+        return json_response({"bindings": result})
 
     async def _api_bindings_add(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         qq = str(data.get("qq", ""))
         sid = str(data.get("steamid", ""))
         nickname = str(data.get("nickname", ""))
         if not qq or not sid:
-            return web.json_response({"error": "qq and steamid required"}, status=400)
+            return json_response(
+                {"error": "qq and steamid required"},
+                status_code=400,
+            )
         p._bind_data[qq] = {"sid": sid, "nickname": nickname}
         p._save_bind_data()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_bindings_delete(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         qq = str(data.get("qq", ""))
         if qq in p._bind_data:
             del p._bind_data[qq]
             p._save_bind_data()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_bindings_update(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         qq = str(data.get("qq", ""))
         nickname = str(data.get("nickname", ""))
         if qq in p._bind_data:
             p._bind_data[qq]["nickname"] = nickname
             p._save_bind_data()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     # ────── Push Settings ──────
 
     async def _api_push_settings(self, request):
         p = self.plugin
-        return web.json_response({
+        return json_response({
             "rank_push_hour": getattr(p, "rank_push_hour", 8),
             "rank_push_minute": getattr(p, "rank_push_minute", 30),
             "rank_push_groups": getattr(p, "rank_push_groups", []),
@@ -889,43 +897,72 @@ class WebAdminServer:
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
-        p.rank_push_hour = data.get("rank_push_hour", p.rank_push_hour)
-        p.rank_push_minute = data.get("rank_push_minute", p.rank_push_minute)
+            return json_response({"error": "invalid JSON"}, status_code=400)
+        try:
+            hour = int(data.get("rank_push_hour", p.rank_push_hour))
+            minute = int(data.get("rank_push_minute", p.rank_push_minute))
+        except (TypeError, ValueError):
+            return json_response(
+                {"error": "invalid push time"},
+                status_code=400,
+            )
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            return json_response(
+                {"error": "push time out of range"},
+                status_code=400,
+            )
+        p.rank_push_hour = hour
+        p.rank_push_minute = minute
         p.config["rank_push_hour"] = p.rank_push_hour
         p.config["rank_push_minute"] = p.rank_push_minute
-        return web.json_response({"ok": True})
+        if hasattr(p.config, "save_config"):
+            p.config.save_config()
+        return json_response({"ok": True})
 
     async def _api_push_group_add(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", ""))
         if gid and gid not in (getattr(p, "rank_push_groups", []) or []):
             getattr(p, "rank_push_groups").append(gid)
         p._save_rank_push_groups()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
     async def _api_push_group_remove(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", ""))
         groups = getattr(p, "rank_push_groups", []) or []
         if gid in groups:
             groups.remove(gid)
         p._save_rank_push_groups()
-        return web.json_response({"ok": True})
+        return json_response({"ok": True})
 
-    async def _api_push_all_toggle(self, request):
+    async def _api_push_rank_scope(self, request):
         p = self.plugin
-        p.rank_push_all = not getattr(p, "rank_push_all", False)
+        try:
+            data = await request.json()
+        except Exception:
+            return json_response({"error": "invalid JSON"}, status_code=400)
+        scope = str(data.get("scope", "")).strip().lower()
+        if scope not in {"group", "global"}:
+            return json_response(
+                {"error": "scope must be group or global"},
+                status_code=400,
+            )
+        p.rank_push_all = scope == "global"
         p._save_rank_push_groups()
-        return web.json_response({"ok": True, "rank_push_all": p.rank_push_all})
+        return json_response({
+            "ok": True,
+            "rank_push_all": p.rank_push_all,
+            "scope": scope,
+        })
 
     # ────── Settings ──────
 
@@ -935,15 +972,15 @@ class WebAdminServer:
         for key in ("steam_api_key", "sgdb_api_key"):
             if config.get(key):
                 config[key] = "******" + config[key][-4:] if len(config[key]) > 4 else "******"
-        config["web_port"] = getattr(p, "_web_port", 6195)
-        return web.json_response(config)
+        config.pop("web_port", None)
+        return json_response(config)
 
     async def _api_settings_update(self, request):
         p = self.plugin
         try:
             data = await request.json()
         except Exception:
-            return web.json_response({"error": "invalid JSON"}, status=400)
+            return json_response({"error": "invalid JSON"}, status_code=400)
         skip_keys = {"steam_api_key", "sgdb_api_key"}
         for key, value in data.items():
             if key in skip_keys:
@@ -973,10 +1010,9 @@ class WebAdminServer:
                 p.config[key] = str(value)
                 if p.config.get("enable_proxy"):
                     p.proxy = str(value)
-            elif key == "web_port":
-                p._web_port = int(value)
-                p.config[key] = int(value)
-        return web.json_response({"ok": True})
+        if hasattr(p.config, "save_config"):
+            p.config.save_config()
+        return json_response({"ok": True})
 
     # ────── Search ──────
 
@@ -992,7 +1028,7 @@ class WebAdminServer:
                 if q and q not in name.lower() and q not in sid:
                     continue
                 results.append({"sid": sid, "name": name, "group_id": gid})
-        return web.json_response({"results": results[:50]})
+        return json_response({"results": results[:50]})
 
     # ────── Player Avatar / Info ──────
 
@@ -1008,7 +1044,7 @@ class WebAdminServer:
                 avatar_url = state.get("avatarfull") or state.get("avatar") or ""
                 if avatar_url:
                     break
-        return web.json_response({"steamid": steamid, "avatar_url": avatar_url})
+        return json_response({"steamid": steamid, "avatar_url": avatar_url})
 
     async def _api_player_info(self, request):
         """获取玩家详细信息卡片数据"""
@@ -1064,7 +1100,7 @@ class WebAdminServer:
         sid_num = int(steamid) if steamid.isdigit() else None
         profile_url = f"https://steamcommunity.com/profiles/{sid_num}" if sid_num else ""
 
-        return web.json_response({
+        return json_response({
             "steamid": steamid,
             "name": name,
             "current_game": current_game,
@@ -1080,15 +1116,22 @@ class WebAdminServer:
         p = self.plugin
         gameid = request.match_info.get("gameid", "")
         if not gameid:
-            return web.json_response({"error": "no gameid"}, status=400)
+            return json_response({"error": "no gameid"}, status_code=400)
         try:
             if hasattr(p, "get_game_cover_url"):
                 cover_path = await p.get_game_cover_url(gameid)
                 if cover_path and os.path.exists(str(cover_path)):
-                    return web.FileResponse(str(cover_path))
-        except Exception:
-            pass
-        return web.json_response({"gameid": gameid, "cover_path": ""})
+                    path = str(cover_path)
+                    mime = mimetypes.guess_type(path)[0] or "image/jpeg"
+                    with open(path, "rb") as cover_file:
+                        encoded = base64.b64encode(cover_file.read()).decode("ascii")
+                    return json_response({
+                        "gameid": gameid,
+                        "data_url": f"data:{mime};base64,{encoded}",
+                    })
+        except Exception as e:
+            logger.warning(f"[WebAdmin] 读取游戏封面失败 gameid={gameid}: {e}")
+        return json_response({"gameid": gameid, "data_url": ""})
 
     # ────── Test APIs ──────
 
@@ -1160,7 +1203,7 @@ class WebAdminServer:
                 log.append(f"[SGDB API] 异常: {e}")
             log.append("[竖版封面] 开始测试...")
             try:
-                from ..game_start_render import get_sgdb_vertical_cover
+                from .game_start_render import get_sgdb_vertical_cover
                 sgdb_url = await get_sgdb_vertical_cover("NEKOPARA Vol. 0", sgdb_api_key=sgdb_k, appid="385800", proxy=proxy)
                 if sgdb_url:
                     results["sgdb_cover"] = "ok"
@@ -1177,7 +1220,7 @@ class WebAdminServer:
             logger.info(f"[WebAdmin] 测试: {line}")
             print(f"  [测试] {line}")
 
-        return web.json_response(results)
+        return json_response(results)
 
     async def _api_test_cover(self, request):
         """测试游戏封面获取"""
@@ -1187,25 +1230,29 @@ class WebAdminServer:
             try:
                 path = await p.get_game_cover_url(test_gid)
                 if path and os.path.exists(str(path)):
-                    return web.json_response({"cover": "ok", "path": str(path), "size_kb": round(os.path.getsize(str(path))/1024, 1)})
-                return web.json_response({"cover": "not_found", "path": str(path)})
+                    return json_response({
+                        "cover": "ok",
+                        "path": str(path),
+                        "size_kb": round(os.path.getsize(str(path)) / 1024, 1),
+                    })
+                return json_response({"cover": "not_found", "path": str(path)})
             except Exception as e:
-                return web.json_response({"cover": "error", "message": str(e)})
-        return web.json_response({"cover": "method_not_found"})
+                return json_response({"cover": "error", "message": str(e)})
+        return json_response({"cover": "method_not_found"})
 
     async def _api_test_steamid(self, request):
         """测试 SteamID 查询"""
         p = self.plugin
         steamid = request.match_info.get("steamid", "")
         if not steamid.isdigit():
-            return web.json_response({"error": "invalid steamid"}, status=400)
+            return json_response({"error": "invalid steamid"}, status_code=400)
         import httpx
         try:
             # 直接从 last_states 读取缓存
             for gid_states in (getattr(p, "group_last_states", {}) or {}).values():
                 state = gid_states.get(steamid, {})
                 if state:
-                    return web.json_response({
+                    return json_response({
                         "from_cache": True,
                         "name": state.get("name"),
                         "game": state.get("gameextrainfo"),
@@ -1215,15 +1262,15 @@ class WebAdminServer:
             # 未缓存则调用 Steam API
             ak = getattr(p, "API_KEY", "")
             if not ak:
-                return web.json_response({"error": "no api key"})
+                return json_response({"error": "no api key"})
             url = f"{p.STEAM_API_BASE}/ISteamUser/GetPlayerSummaries/v2/?key={ak}&steamids={steamid}"
             async with httpx.AsyncClient(timeout=10, proxy=getattr(p, "proxy", None)) as c:
                 r = await c.get(url)
                 if r.status_code == 200:
                     players = r.json().get("response", {}).get("players", [])
                     if players:
-                        return web.json_response({"from_api": True, "player": players[0]})
-                    return web.json_response({"error": "player_not_found"})
-                return web.json_response({"error": f"http_{r.status_code}"})
+                        return json_response({"from_api": True, "player": players[0]})
+                    return json_response({"error": "player_not_found"})
+                return json_response({"error": f"http_{r.status_code}"})
         except Exception as e:
-            return web.json_response({"error": str(e)})
+            return json_response({"error": str(e)})

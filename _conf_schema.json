@@ -123,11 +123,5 @@
     "type": "int",
     "hint": "每日自动推送排行榜的分钟数，默认30（即8:30推送）",
     "default": 30
-  },
-  "web_port": {
-    "description": "管理后台端口 -修改后重启AstrBot生效",
-    "type": "int",
-    "hint": "插件管理后台 HTTP 端口，默认 6195",
-    "default": 6195
   }
 }

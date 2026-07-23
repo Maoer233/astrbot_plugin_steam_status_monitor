@@ -1,13 +1,27 @@
 // Steam Monitor Admin
+const bridge = window.AstrBotPluginPage;
+
+function parsePluginEndpoint(url) {
+  const [rawPath, rawQuery = ""] = String(url).split("?", 2);
+  const endpoint = rawPath
+    .replace(/^\/?api\/?/, "")
+    .replace(/^\/+|\/+$/g, "");
+  const params = {};
+  for (const [key, value] of new URLSearchParams(rawQuery)) {
+    params[key] = value;
+  }
+  return {endpoint, params};
+}
+
 const API = {
-  async request(u,options){
-    const r=await fetch(u,options);const text=await r.text();let data={};
-    if(text){try{data=JSON.parse(text)}catch(_){data={error:text}}}
-    if(!r.ok)throw new Error(data.error||data.message||`HTTP ${r.status}`);
-    return data
+  async get(url) {
+    const {endpoint, params} = parsePluginEndpoint(url);
+    return bridge.apiGet(endpoint, Object.keys(params).length ? params : undefined);
   },
-  async get(u){return this.request(u)},
-  async post(u,d){return this.request(u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)})}
+  async post(url, data) {
+    const {endpoint} = parsePluginEndpoint(url);
+    return bridge.apiPost(endpoint, data || {});
+  },
 };
 document.querySelectorAll(".nav-item").forEach(it=>{it.addEventListener("click",()=>{const p=it.dataset.page;if(p)navigateTo(p)})});
 
@@ -16,13 +30,53 @@ async function navigateTo(page,params){const t=document.getElementById("hplayer-
   const c=document.getElementById("content");
   c.innerHTML='<div class="page-loading"><span class="mdi mdi-loading mdi-spin"></span><p>加载中...</p></div>';
   try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,bindings:renderBindings,push:renderPush,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
-  catch(e){c.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>加载失败: ${e.message}</p><button class="btn btn-primary mt-8" onclick="navigateTo('${page}')">重试</button></div>`}
+  catch(e){c.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>加载失败: ${escapeHtml(e.message)}</p><button class="btn btn-primary mt-8" onclick="navigateTo(${jsArg(page)})">重试</button></div>`}
 }
 
 function toast(msg,t){const e=document.createElement("div");e.className=`toast toast-${t||"success"}`;e.textContent=msg;document.body.appendChild(e);setTimeout(()=>e.remove(),3000)}
+let pageDialogResolve=null;
+let pageDialogMode="confirm";
+function showPageDialog({title,label="",mode="confirm",value=""}){
+  const overlay=document.getElementById("page-dialog");
+  const inputWrap=document.getElementById("page-dialog-input-wrap");
+  const input=document.getElementById("page-dialog-input");
+  document.getElementById("page-dialog-title").textContent=title;
+  document.getElementById("page-dialog-label").textContent=label;
+  inputWrap.style.display=mode==="prompt"?"block":"none";
+  input.value=value;
+  pageDialogMode=mode;
+  overlay.classList.add("show");
+  if(mode==="prompt")setTimeout(()=>input.focus(),0);
+  return new Promise(resolve=>{pageDialogResolve=resolve})
+}
+function pagePrompt(title,label){return showPageDialog({title,label,mode:"prompt"})}
+function pageConfirm(title){return showPageDialog({title,mode:"confirm"})}
+window.resolvePageDialog=confirmed=>{
+  const overlay=document.getElementById("page-dialog");
+  const input=document.getElementById("page-dialog-input");
+  overlay.classList.remove("show");
+  if(!pageDialogResolve)return;
+  const resolve=pageDialogResolve;
+  pageDialogResolve=null;
+  resolve(confirmed?(pageDialogMode==="prompt"?input.value.trim():true):(pageDialogMode==="prompt"?null:false))
+};
 function steamTheme(){return{backgroundColor:"transparent",textStyle:{color:"#e1e8ed"},legend:{textStyle:{color:"#aeb9c2"}},tooltip:{backgroundColor:"#2a475e",borderColor:"#355066",textStyle:{color:"#e1e8ed"}}}}
 function disposeChart(id){const el=document.getElementById(id);if(el){const inst=echarts.getInstanceByDom(el);if(inst)inst.dispose()}}
 function initChart(id){disposeChart(id);const el=document.getElementById(id);return el?echarts.init(el):null}
+const coverCache=new Map();
+async function loadCover(gameid){
+  if(!gameid)return"";
+  if(coverCache.has(gameid))return coverCache.get(gameid);
+  try{
+    const data=await API.get(`/api/games/cover/${gameid}`);
+    const url=data.data_url||"";
+    coverCache.set(gameid,url);
+    return url
+  }catch(_){
+    coverCache.set(gameid,"");
+    return""
+  }
+}
 
 // ====== Dashboard ======
 let dashPeriod="week";
@@ -57,30 +111,44 @@ function renderDashPlayerCards(players){
   container.innerHTML=players.map(p=>{
     const playing=!!p.gameid;const online=p.personastate>0;
     const border=playing?"var(--accent-green)":online?"var(--accent)":"var(--border-color)";
-    const stxt=playing?`🎮 ${p.game||"游戏中"}`:online?"● 在线":"○ 离线";
+    const stxt=playing?`🎮 ${escapeHtml(p.game||"游戏中")}`:online?"● 在线":"○ 离线";
     const sc=playing?"var(--accent-green)":online?"var(--accent)":"var(--text-muted)";
-    return `<div class="dash-pcard" data-sid="${p.sid}" style="border-color:${border}" onclick="navigateTo('heatmap',{player:'${p.sid}'})">
+    return `<div class="dash-pcard" data-sid="${escapeAttr(p.sid)}" style="border-color:${border}" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})">
       <div class="dash-pav"><span class="mdi mdi-loading mdi-spin"></span></div>
-      <div><div style="font-size:13px;font-weight:500;color:var(--text-bright)">${p.name}</div><div style="font-size:11px;color:${sc}">${stxt}</div></div></div>`
+      <div><div style="font-size:13px;font-weight:500;color:var(--text-bright)">${escapeHtml(p.name)}</div><div style="font-size:11px;color:${sc}">${stxt}</div></div></div>`
   }).join("");
-  Promise.all(players.map(p=>loadAvatar(p.sid).then(av=>{const c=document.querySelector(`.dash-pcard[data-sid="${p.sid}"]`);if(!c)return;const a=c.querySelector(".dash-pav");if(a&&av)a.innerHTML=`<img src="${av}">`})));
+  Promise.all(players.map(p=>loadAvatar(p.sid).then(av=>{const c=document.querySelector(`.dash-pcard[data-sid="${CSS.escape(String(p.sid))}"]`);if(!c)return;const a=c.querySelector(".dash-pav");if(a&&av)a.innerHTML=`<img src="${safeImageUrl(av)}">`})));
 }
 
 async function loadDashboardCharts(){
   const pm={today:{d:1,o:0},yesterday:{d:1,o:-1},week:{d:7,o:0},month:{d:30,o:0}};
   const {d:days,o:offset}=pm[dashPeriod]||pm.week;
-  const img=document.getElementById("rank-image");if(img)img.src=`/api/dashboard/rank-image?days=${days}&offset=${offset}&t=${Date.now()}`;
+  const img=document.getElementById("rank-image");
+  if(img){
+    try{
+      const rank=await API.get(`/api/dashboard/rank-image?days=${days}&offset=${offset}`);
+      const rankUrl=safeImageUrl(rank.data_url);
+      img.src=rankUrl;
+      img.style.display=rankUrl?"block":"none"
+    }catch(_){
+      img.removeAttribute("src");
+      img.style.display="none"
+    }
+  }
   const gd=await API.get(`/api/gantt/data?days=${days}&offset=${offset}`);
   const players=gd.players||[];const details=gd.game_details||{};const gameColors=gd.game_colors||{};
   const gm={};
   players.forEach(p=>(p.sessions||[]).forEach(s=>{gm[s.gameid]=gm[s.gameid]||{name:s.game_name,minutes:0,gameid:s.gameid};gm[s.gameid].minutes+=s.duration_min||0}));
   const tg=Object.values(gm).sort((a,b)=>b.minutes-a.minutes);const top9=tg.slice(0,9);const restMins=tg.slice(9).reduce((s,g)=>s+g.minutes,0);if(restMins>0)top9.push({name:"其他",minutes:restMins,gameid:""});
+  const covers={};
+  await Promise.all(top9.filter(g=>g.gameid).map(async g=>{covers[g.gameid]=await loadCover(g.gameid)}));
   const gc=initChart("chart-top-games");if(!gc)return;
   const cols=["#5aa9d6","#b2d430","#e8a030","#b37cd4","#e05050","#50c8c8","#ff8c60","#60b0e0","#e0a0c0","#80d080"];
   gc.setOption({...steamTheme(),tooltip:{trigger:"item",backgroundColor:"#1e2c38",borderColor:"#2e4254",borderWidth:1,extraCssText:"border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.5)",formatter:p=>{
-    const det=details[p.data.gameid];if(!det||!det.players)return`<b>${p.name}</b><br/>${p.value}分钟`;
-    let h=`<div style="min-width:200px;max-width:260px"><b style="font-size:14px">${det.name}</b><img src="/api/games/cover/${p.data.gameid}" style="width:100%;max-width:240px;border-radius:6px;margin:8px 0;display:block" onerror="this.style.display='none'">`;
-    det.players.slice(0,5).forEach(pl=>{h+=`<div style="display:flex;justify-content:space-between;font-size:12px;margin:3px 0"><span>${pl.name}</span><span style="color:var(--accent)">${(pl.minutes/60).toFixed(1)}h</span></div>`});
+    const det=details[p.data.gameid];if(!det||!det.players)return`<b>${escapeHtml(p.name)}</b><br/>${p.value}分钟`;
+    const cover=covers[p.data.gameid]||"";
+    let h=`<div style="min-width:200px;max-width:260px"><b style="font-size:14px">${escapeHtml(det.name)}</b>${cover?`<img src="${safeImageUrl(cover)}" style="width:100%;max-width:240px;border-radius:6px;margin:8px 0;display:block">`:""}`;
+    det.players.slice(0,5).forEach(pl=>{h+=`<div style="display:flex;justify-content:space-between;font-size:12px;margin:3px 0"><span>${escapeHtml(pl.name)}</span><span style="color:var(--accent)">${(pl.minutes/60).toFixed(1)}h</span></div>`});
     if(det.players.length>5){const om=det.players.slice(5).reduce((s,pl)=>s+pl.minutes,0);h+=`<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--text-muted)"><span>其他${det.players.length-5}位</span><span>${(om/60).toFixed(1)}h</span></div>`}
     h+="</div>";return h}},legend:{bottom:0,textStyle:{color:"#aeb9c2"}},series:[{type:"pie",radius:["35%","60%"],center:["50%","32%"],data:top9.map((g,i)=>({name:g.name,value:g.minutes,gameid:g.gameid,itemStyle:{color:g.name==="其他"?"#555":cols[i%cols.length]}})),label:{color:"#e1e8ed",formatter:"{d}%",fontSize:12},emphasis:{label:{fontSize:16,fontWeight:"bold"}}}]});
 }
@@ -105,14 +173,14 @@ async function loadGantt(days,offset){
   const players=data.players||[];
   const gs={};players.forEach(p=>(p.sessions||[]).forEach(s=>{gs[s.gameid]=s.game_name}));
   const leg=document.getElementById("gantt-legend");
-  leg.innerHTML=Object.keys(gs).map(gid=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary)"><span style="width:12px;height:12px;border-radius:2px;background:${gch(gid)};display:inline-block"></span>${gs[gid]}</span>`).join("");
+  leg.innerHTML=Object.keys(gs).map(gid=>`<span style="display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary)"><span style="width:12px;height:12px;border-radius:2px;background:${gch(gid)};display:inline-block"></span>${escapeHtml(gs[gid])}</span>`).join("");
   const chart=initChart("gantt-chart");if(!chart)return;
   if(!players.length){chart.clear();leg.innerHTML='<span style="color:var(--text-muted)">暂无记录</span>';return}
   const names=players.map(p=>p.name);const sd=[];
   players.forEach((p,pi)=>(p.sessions||[]).forEach(s=>{if(s.start>0&&s.end>0)sd.push({name:p.name,value:[pi,new Date(s.start*1000),new Date(s.end*1000)],game_name:s.game_name,duration_min:s.duration_min,gameid:s.gameid,itemStyle:{color:gch(s.gameid)}})}));
   if(!sd.length){chart.clear();return}
   const mT=data.time_range?new Date(data.time_range.start):new Date();const xT=data.time_range?new Date(data.time_range.end):new Date();
-  chart.setOption({...steamTheme(),tooltip:{formatter:p=>{const sd=new Date(p.data.value[1]).toTimeString().slice(0,5);const ed=new Date(p.data.value[2]).toTimeString().slice(0,5);return`<b>${p.name}</b> - ${p.data.game_name}<br/>${sd} → ${ed}<br/>时长: ${p.data.duration_min}分钟`}},grid:{left:140,right:30,top:20,bottom:50},
+  chart.setOption({...steamTheme(),tooltip:{formatter:p=>{const sd=new Date(p.data.value[1]).toTimeString().slice(0,5);const ed=new Date(p.data.value[2]).toTimeString().slice(0,5);return`<b>${escapeHtml(p.name)}</b> - ${escapeHtml(p.data.game_name)}<br/>${sd} → ${ed}<br/>时长: ${p.data.duration_min}分钟`}},grid:{left:140,right:30,top:20,bottom:50},
     xAxis:{type:"time",min:mT,max:xT,axisLabel:{color:"#aeb9c2",formatter:v=>{const d=new Date(v);return`${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`}},splitLine:{show:true,lineStyle:{color:"rgba(255,255,255,0.06)",type:"dashed"}}},
     yAxis:{type:"category",data:names,axisLabel:{color:"#e1e8ed",width:120,overflow:"truncate"}},
     series:[{type:"custom",renderItem:(p,api)=>{const ci=api.value(0);const s=api.coord([api.value(1),ci]);const e=api.coord([api.value(2),ci]);return{type:"rect",shape:{x:s[0],y:s[1]-11,width:Math.max(e[0]-s[0],4),height:22},style:{fill:api.style().fill,opacity:0.85}}},encode:{x:[1,2],y:0},data:sd}],
@@ -144,10 +212,10 @@ async function renderHeatmap(params){
   }
   const pd=document.getElementById("heatmap-players");
   if(!data.players||!data.players.length){pd.innerHTML='<div class="empty-state"><span class="mdi mdi-calendar-blank"></span><p>暂无记录</p></div>';return}
-  pd.innerHTML=data.players.map(p=>`<div class="player-card-mini" data-sid="${p.sid}" onclick="navigateTo('heatmap',{player:'${p.sid}'})">
+  pd.innerHTML=data.players.map(p=>`<div class="player-card-mini" data-sid="${escapeAttr(p.sid)}" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})">
     <div class="player-avatar"><span class="mdi mdi-loading mdi-spin" style="font-size:16px;color:var(--text-muted)"></span></div>
-    <div><div style="font-size:14px;font-weight:500;color:var(--text-bright)">${p.name}</div><div style="font-size:12px;color:var(--text-secondary)">${(p.total_minutes/60).toFixed(1)}h</div></div></div>`).join("");
-  Promise.all(data.players.map(p=>loadAvatar(p.sid).then(av=>{const card=document.querySelector(`.player-card-mini[data-sid="${p.sid}"]`);if(!card)return;const a=card.querySelector(".player-avatar");if(a&&av)a.innerHTML=`<img src="${av}">`})));
+    <div><div style="font-size:14px;font-weight:500;color:var(--text-bright)">${escapeHtml(p.name)}</div><div style="font-size:12px;color:var(--text-secondary)">${(p.total_minutes/60).toFixed(1)}h</div></div></div>`).join("");
+  Promise.all(data.players.map(p=>loadAvatar(p.sid).then(av=>{const card=document.querySelector(`.player-card-mini[data-sid="${CSS.escape(String(p.sid))}"]`);if(!card)return;const a=card.querySelector(".player-avatar");if(a&&av)a.innerHTML=`<img src="${safeImageUrl(av)}">`})));
   document.querySelectorAll(".player-card-mini").forEach(card=>{const sid=card.dataset.sid;
     card.addEventListener("mouseenter",async e=>await showTooltip(e,sid));
     card.addEventListener("mouseleave",()=>{const t=document.getElementById("hplayer-tooltip");if(t)t.style.display="none"});
@@ -157,20 +225,57 @@ async function loadAvatar(sid){try{const r=await API.get(`/api/players/avatar/${
 async function showTooltip(e,sid){
   const t=document.getElementById("hplayer-tooltip");try{
     const info=await API.get(`/api/players/info/${sid}`);const av=await loadAvatar(sid);
-    t.innerHTML=`<div style="display:flex;gap:12px;align-items:flex-start"><img src="${av}" style="width:48px;height:48px;border-radius:8px;background:var(--bg-tertiary)" onerror="this.style.display='none'"><div><div style="font-size:15px;font-weight:500;color:var(--text-bright)">${info.name}</div><div style="font-size:11px;color:var(--text-muted)">SteamID:${info.steamid}</div>${info.current_game?`<div style="font-size:12px;color:var(--accent-green);margin-top:2px">🎮 ${info.current_game}</div>`:""}<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">总计${(info.total_minutes/60).toFixed(1)}h·${info.total_sessions}次</div></div></div>`;
+    t.innerHTML=`<div style="display:flex;gap:12px;align-items:flex-start"><img src="${safeImageUrl(av)}" style="width:48px;height:48px;border-radius:8px;background:var(--bg-tertiary)" onerror="this.style.display='none'"><div><div style="font-size:15px;font-weight:500;color:var(--text-bright)">${escapeHtml(info.name)}</div><div style="font-size:11px;color:var(--text-muted)">SteamID:${escapeHtml(info.steamid)}</div>${info.current_game?`<div style="font-size:12px;color:var(--accent-green);margin-top:2px">🎮 ${escapeHtml(info.current_game)}</div>`:""}<div style="font-size:12px;color:var(--text-secondary);margin-top:6px">总计${(info.total_minutes/60).toFixed(1)}h·${info.total_sessions}次</div></div></div>`;
     t.style.display="block";t.style.left=(e.clientX+16)+"px";t.style.top=(e.clientY+16)+"px"}catch(ex){t.style.display="none"}
 }
 async function renderPlayerHeatmap(sid){
   const data=await API.get(`/api/heatmap/player/${sid}?period=90`);const av=await loadAvatar(sid);
   const c=document.getElementById("content");
-  c.innerHTML=`<div class="flex-between mb-20"><h2 class="page-title"><img src="${av}" style="width:28px;height:28px;border-radius:6px;vertical-align:middle;margin-right:8px;background:var(--bg-tertiary)" onerror="this.style.display='none'">${data.name}的贡献日历</h2><button class="btn btn-primary" onclick="navigateTo('heatmap')">←返回</button></div>
+  c.innerHTML=`<div class="flex-between mb-20"><h2 class="page-title"><img src="${safeImageUrl(av)}" style="width:28px;height:28px;border-radius:6px;vertical-align:middle;margin-right:8px;background:var(--bg-tertiary)" onerror="this.style.display='none'">${escapeHtml(data.name)}的贡献日历</h2><button class="btn btn-primary" onclick="navigateTo('heatmap')">←返回</button></div>
     <div class="stats-grid mb-20"><div class="stat-card"><div class="stat-value">${(data.total_minutes/60).toFixed(1)}h</div><div class="stat-label">总时长</div></div><div class="stat-card"><div class="stat-value">${data.avg_daily_minutes}min</div><div class="stat-label">日均</div></div><div class="stat-card"><div class="stat-value">${data.days_played}</div><div class="stat-label">活跃天数</div></div></div>
     <div class="charts-row"><div class="card"><div class="card-title">日历热力图</div><div id="heatmap-player-cal" class="chart-box"></div></div><div class="card"><div class="card-title">游戏占比</div><div id="heatmap-player-pie" class="chart-box-lg" style="height:480px"></div></div></div>`;
   if(typeof echarts!=="undefined"){
     const hd=data.heatmap_daily||{};const dates=Object.keys(hd).sort();const cd=dates.map(d=>[d,hd[d]]);const maxV=Math.max(...Object.values(hd),60);
     const hm=initChart("heatmap-player-cal");if(hm)hm.setOption({...steamTheme(),tooltip:{formatter:p=>{const hrs=(p.data[1]/60).toFixed(1);return`${p.data[0]}<br/><b>${p.data[1]}</b>分钟(${hrs}h)`}},visualMap:{min:0,max:maxV,orient:"horizontal",left:"center",bottom:0,inRange:{color:["rgb(17,22,28)","rgb(2,46,18)","#006d32","#26a641","#39d353","#6ae07a"]},textStyle:{color:"#aeb9c2"}},calendar:{range:dates.length?[dates[0],dates[dates.length-1]]:"2026-07",cellSize:[20,20],dayLabel:{color:"#aeb9c2"},monthLabel:{color:"#aeb9c2"},itemStyle:{borderColor:"#0a0e12",borderWidth:3,borderRadius:2}},series:[{type:"heatmap",coordinateSystem:"calendar",data:cd}]});
-    const cols=["#5aa9d6","#b2d430","#e8a030","#b37cd4","#e05050","#50c8c8","#ff8c60","#60b0e0"];const pc=initChart("heatmap-player-pie");
-    if(pc){const pg=(data.top_games||[]).sort((a,b)=>b.minutes-a.minutes);const pt9=pg.slice(0,9);const pr=pg.slice(9).reduce((s,g)=>s+g.minutes,0);if(pr>0)pt9.push({name:"其他",minutes:pr});pc.setOption({...steamTheme(),tooltip:{backgroundColor:"#1e2c38",borderColor:"#2e4254",borderWidth:1,extraCssText:"border-radius:8px",trigger:"item",formatter:p=>{const gi=p.data.gameid;return`<div style="min-width:160px"><b>${p.name}</b>${gi?`<br><img src="/api/games/cover/${gi}" style="width:100%;max-width:220px;border-radius:6px;margin:8px 0" onerror="this.style.display='none'">`:""}<br>${p.value}分钟</div>`}},legend:{bottom:0,textStyle:{color:"#aeb9c2"}},series:[{type:"pie",radius:["35%","60%"],center:["50%","32%"],data:pt9.map((g,i)=>({name:g.name,value:g.minutes,itemStyle:{color:g.name==="其他"?"#555":cols[i%cols.length]}})),label:{color:"#e1e8ed",formatter:"{d}%",fontSize:12},emphasis:{label:{fontSize:16,fontWeight:"bold"}}}]});}
+    const cols=["#5aa9d6","#b2d430","#e8a030","#b37cd4","#e05050","#50c8c8","#ff8c60","#60b0e0"];
+    const pc=initChart("heatmap-player-pie");
+    if(pc){
+      const pg=(data.top_games||[]).sort((a,b)=>b.minutes-a.minutes);
+      const pt9=pg.slice(0,9);
+      const pr=pg.slice(9).reduce((s,g)=>s+g.minutes,0);
+      if(pr>0)pt9.push({name:"其他",minutes:pr,gameid:""});
+      const covers={};
+      await Promise.all(pt9.filter(g=>g.gameid).map(async g=>{covers[g.gameid]=await loadCover(g.gameid)}));
+      pc.setOption({
+        ...steamTheme(),
+        tooltip:{
+          backgroundColor:"#1e2c38",
+          borderColor:"#2e4254",
+          borderWidth:1,
+          extraCssText:"border-radius:8px",
+          trigger:"item",
+          formatter:p=>{
+            const gi=p.data.gameid;
+            const cover=covers[gi]||"";
+            return`<div style="min-width:160px"><b>${escapeHtml(p.name)}</b>${cover?`<br><img src="${safeImageUrl(cover)}" style="width:100%;max-width:220px;border-radius:6px;margin:8px 0">`:""}<br>${p.value}分钟</div>`
+          },
+        },
+        legend:{bottom:0,textStyle:{color:"#aeb9c2"}},
+        series:[{
+          type:"pie",
+          radius:["35%","60%"],
+          center:["50%","32%"],
+          data:pt9.map((g,i)=>({
+            name:g.name,
+            value:g.minutes,
+            gameid:g.gameid,
+            itemStyle:{color:g.name==="其他"?"#555":cols[i%cols.length]},
+          })),
+          label:{color:"#e1e8ed",formatter:"{d}%",fontSize:12},
+          emphasis:{label:{fontSize:16,fontWeight:"bold"}},
+        }],
+      });
+    }
   }
 }
 
@@ -181,23 +286,23 @@ async function renderGroups(){
   c.innerHTML=`<div class="flex-between mb-20"><h2 class="page-title">群聊管理</h2><div class="flex gap-8"><span style="color:var(--text-muted)">${gids.length}个群</span><button class="btn btn-primary btn-sm" onclick="addGroup()">+添加群聊</button></div></div>
     <div class="groups-layout"><div class="card" id="group-list"></div><div class="card" id="group-detail"><div class="empty-state">选择一个群</div></div></div>`;
   let sel=gids[0]||null;
-  function renderList(){const l=document.getElementById("group-list");l.innerHTML=gids.map(gid=>`<div class="group-list-item${gid===sel?" active":""}" style="display:flex;justify-content:space-between;align-items:center" onclick="selG('${gid}')"><span>群${gid}(${groups[gid].length}人)</span><button class="btn btn-danger btn-sm" style="padding:2px 6px;font-size:11px" onclick="event.stopPropagation();delGroup('${gid}')">✕</button></div>`).join("")}
+  function renderList(){const l=document.getElementById("group-list");l.innerHTML=gids.map(gid=>`<div class="group-list-item${gid===sel?" active":""}" style="display:flex;justify-content:space-between;align-items:center" onclick="selG(${jsArg(gid)})"><span>群${escapeHtml(gid)}(${groups[gid].length}人)</span><button class="btn btn-danger btn-sm" style="padding:2px 6px;font-size:11px" onclick="event.stopPropagation();delGroup(${jsArg(gid)})">✕</button></div>`).join("")}
   window.selG=g=>{sel=g;renderList();renderDetail(g)};
   async function renderDetail(gid){
     const ps=groups[gid]||[];const d=document.getElementById("group-detail");
-    let h=`<div class="flex-between mb-16"><span class="card-title" style="margin-bottom:0">群${gid}</span><button class="btn btn-primary btn-sm" onclick="addSteamID('${gid}')">+添加SteamID</button></div>`;
+    let h=`<div class="flex-between mb-16"><span class="card-title" style="margin-bottom:0">群${escapeHtml(gid)}</span><button class="btn btn-primary btn-sm" onclick="addSteamID(${jsArg(gid)})">+添加SteamID</button></div>`;
     if(!ps.length){h+='<div class="empty-state"><span class="mdi mdi-account-off"></span><p>暂无玩家</p></div>';d.innerHTML=h;return}
     h+='<table class="table"><thead><tr><th></th><th>玩家</th><th>状态</th><th>操作</th></tr></thead><tbody>';
-    ps.forEach(p=>{const bg=p.gameid?'<span class="badge badge-playing">游戏中</span>':p.personastate>0?'<span class="badge badge-online">在线</span>':'<span class="badge badge-offline">离线</span>';h+=`<tr><td><div class="gav-${p.sid}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary);display:flex;align-items:center;justify-content:center"><span class="mdi mdi-loading mdi-spin" style="font-size:14px;color:var(--text-muted)"></span></div></td><td>${p.name}</td><td>${bg}</td><td><button class="btn btn-danger btn-sm" onclick="removeSteamID('${gid}','${p.sid}','${p.name}')">删除</button></td></tr>`});
+    ps.forEach(p=>{const bg=p.gameid?'<span class="badge badge-playing">游戏中</span>':p.personastate>0?'<span class="badge badge-online">在线</span>':'<span class="badge badge-offline">离线</span>';h+=`<tr><td><div data-avatar-sid="${escapeAttr(p.sid)}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary);display:flex;align-items:center;justify-content:center"><span class="mdi mdi-loading mdi-spin" style="font-size:14px;color:var(--text-muted)"></span></div></td><td>${escapeHtml(p.name)}</td><td>${bg}</td><td><button class="btn btn-danger btn-sm" onclick="removeSteamID(${jsArg(gid)},${jsArg(p.sid)},${jsArg(p.name)})">删除</button></td></tr>`});
     h+='</tbody></table>';d.innerHTML=h;
-    Promise.all(ps.map(p=>loadAvatar(p.sid).then(av=>{const el=document.querySelector(`.gav-${p.sid}`);if(el&&av)el.innerHTML=`<img src="${av}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary)">`})));
+    Promise.all(ps.map(p=>loadAvatar(p.sid).then(av=>{const el=document.querySelector(`[data-avatar-sid="${CSS.escape(String(p.sid))}"]`);if(el&&av)el.innerHTML=`<img src="${safeImageUrl(av)}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary)">`})));
   }
   renderList();if(sel)await renderDetail(sel);
 }
-window.addGroup=async()=>{const g=prompt("群号:");if(!g)return;const r=await API.post("/api/groups/add-group",{group_id:g});if(r.ok){toast("已添加");navigateTo("groups")}else toast(r.error||"失败","error")};
-window.delGroup=async gid=>{if(!confirm(`删除群${gid}？`))return;const r=await API.post("/api/groups/delete-group",{group_id:gid});if(r.ok){toast("已删除");navigateTo("groups")}else toast(r.error||"失败","error")};
-window.addSteamID=async gid=>{const s=prompt("SteamID:");if(!s)return;const r=await API.post("/api/groups/add",{group_id:gid,steamid:s});if(r.ok){toast("添加成功");navigateTo("groups")}else toast(r.error||"失败","error")};
-window.removeSteamID=async(gid,sid,name)=>{if(!confirm(`删除${name}？`))return;const r=await API.post("/api/groups/delete",{group_id:gid,steamid:sid});if(r.ok){toast("已删除");navigateTo("groups")}else toast(r.error||"失败","error")};
+window.addGroup=async()=>{const g=await pagePrompt("添加群聊","群号");if(!g)return;const r=await API.post("/api/groups/add-group",{group_id:g});if(r.ok){toast("已添加");navigateTo("groups")}else toast(r.error||"失败","error")};
+window.delGroup=async gid=>{if(!await pageConfirm(`删除群 ${gid}？`))return;const r=await API.post("/api/groups/delete-group",{group_id:gid});if(r.ok){toast("已删除");navigateTo("groups")}else toast(r.error||"失败","error")};
+window.addSteamID=async gid=>{const s=await pagePrompt(`向群 ${gid} 添加玩家`,"17 位 SteamID");if(!s)return;const r=await API.post("/api/groups/add",{group_id:gid,steamid:s});if(r.ok){toast("添加成功");navigateTo("groups")}else toast(r.error||"失败","error")};
+window.removeSteamID=async(gid,sid,name)=>{if(!await pageConfirm(`从群 ${gid} 删除 ${name}？`))return;const r=await API.post("/api/groups/delete",{group_id:gid,steamid:sid});if(r.ok){toast("已删除");navigateTo("groups")}else toast(r.error||"失败","error")};
 
 // ====== Bindings ======
 async function renderBindings(){
@@ -210,12 +315,12 @@ async function renderBindings(){
       <div class="form-group"><label class="form-label">SteamID</label><input id="bind-sid" class="form-input" placeholder="17位"></div>
       <div class="form-group"><label class="form-label">备注</label><input id="bind-nick" class="form-input"></div>
       <div class="modal-actions"><button class="btn" onclick="hideBindModal()">取消</button><button class="btn btn-primary" onclick="addBind()">确认</button></div></div></div>`;
-  function renderTable(){const t=document.getElementById("bind-tbody");if(!bs.length){t.innerHTML='<tr><td colspan="4" class="empty-state">暂无</td></tr>';return}t.innerHTML=bs.map(b=>`<tr><td>${b.qq}</td><td class="monospace">${b.steamid}</td><td>${b.nickname||"-"}</td><td><button class="btn btn-danger btn-sm" onclick="delBind('${b.qq}')">删除</button></td></tr>`).join("")}
+  function renderTable(){const t=document.getElementById("bind-tbody");if(!bs.length){t.innerHTML='<tr><td colspan="4" class="empty-state">暂无</td></tr>';return}t.innerHTML=bs.map(b=>`<tr><td>${escapeHtml(b.qq)}</td><td class="monospace">${escapeHtml(b.steamid)}</td><td>${escapeHtml(b.nickname||"-")}</td><td><button class="btn btn-danger btn-sm" onclick="delBind(${jsArg(b.qq)})">删除</button></td></tr>`).join("")}
   renderTable();
   window.showBindModal=()=>document.getElementById("bind-modal").classList.add("show");
   window.hideBindModal=()=>document.getElementById("bind-modal").classList.remove("show");
   window.addBind=async()=>{const q=document.getElementById("bind-qq").value,s=document.getElementById("bind-sid").value,n=document.getElementById("bind-nick").value;if(!q||!s){toast("必填","error");return}const r=await API.post("/api/bindings/add",{qq:q,steamid:s,nickname:n});if(r.ok){toast("成功");hideBindModal();navigateTo("bindings")}else toast(r.error||"失败","error")};
-  window.delBind=async qq=>{if(!confirm(`删除QQ${qq}？`))return;await API.post("/api/bindings/delete",{qq});toast("已删除");navigateTo("bindings")};
+  window.delBind=async qq=>{if(!await pageConfirm(`删除 QQ ${qq} 的绑定？`))return;await API.post("/api/bindings/delete",{qq});toast("已删除");navigateTo("bindings")};
 }
 
 // ====== Push & Settings ======
@@ -223,12 +328,13 @@ async function renderPush(){
   const d=await API.get("/api/push/settings");const c=document.getElementById("content");
   c.innerHTML=`<h2 class="page-title">每日推送设置</h2>
     <div class="card mb-20"><div class="card-title">推送时间</div><div class="flex gap-8" style="align-items:center"><input id="push-hour" class="form-input" type="number" min="0" max="23" value="${d.rank_push_hour}" style="width:80px"><span>时</span><input id="push-min" class="form-input" type="number" min="0" max="59" value="${d.rank_push_minute}" style="width:80px"><span>分</span><button class="btn btn-primary" onclick="updPush()">保存</button></div></div>
-    <div class="card"><div class="card-title">推送群聊</div><div class="form-group"><label class="flex gap-8" style="align-items:center;cursor:pointer"><label class="toggle"><input type="checkbox" ${d.rank_push_all?"checked":""} onchange="togAll(this.checked)"><span class="slider"></span></label><span>全群推送</span></label></div><div id="push-group-list"></div></div>`;
+    <div class="card mb-20"><div class="card-title">榜单内容范围</div><select id="push-rank-scope" class="form-input" onchange="setRankScope(this.value)" style="max-width:360px"><option value="group" ${d.rank_push_all?"":"selected"}>每个群独立统计本群玩家</option><option value="global" ${d.rank_push_all?"selected":""}>所有目标群共享全局榜单</option></select><p class="permission-help" style="margin-top:8px">默认使用分群榜单；只有显式选择全局模式时，目标群才会收到同一张总榜。</p></div>
+    <div class="card"><div class="card-title">接收每日榜单的群聊</div><div id="push-group-list"></div></div>`;
   const allG=d.all_groups||[],pushG=d.rank_push_groups||[];
-  document.getElementById("push-group-list").innerHTML=allG.map(gid=>`<div class="form-group" style="margin-bottom:8px"><label class="flex gap-8" style="align-items:center;cursor:pointer"><label class="toggle"><input type="checkbox" ${pushG.includes(gid)?"checked":""} onchange="togGroup('${gid}',this.checked)"><span class="slider"></span></label><span>群${gid}</span></label></div>`).join("");
+  document.getElementById("push-group-list").innerHTML=allG.map(gid=>`<div class="form-group" style="margin-bottom:8px"><label class="flex gap-8" style="align-items:center;cursor:pointer"><label class="toggle"><input type="checkbox" ${pushG.includes(gid)?"checked":""} onchange="togGroup(${jsArg(gid)},this.checked)"><span class="slider"></span></label><span>群${escapeHtml(gid)}</span></label></div>`).join("");
   window.updPush=async()=>{const h=parseInt(document.getElementById("push-hour").value),m=parseInt(document.getElementById("push-min").value);await API.post("/api/push/update",{rank_push_hour:h,rank_push_minute:m});toast("已更新")};
   window.togGroup=async(gid,on)=>{await API.post(on?"/api/push/groups/add":"/api/push/groups/remove",{group_id:gid})};
-  window.togAll=async()=>{const r=await API.post("/api/push/all/toggle",{});toast(`全群推送${r.rank_push_all?"已开启":"已关闭"}`)};
+  window.setRankScope=async scope=>{await API.post("/api/push/rank-scope",{scope});toast(scope==="group"?"已切换为每群独立榜单":"已切换为共享全局榜单")};
 }
 // ====== Command Permissions ======
 async function loadPermissionSettings(){
@@ -249,12 +355,23 @@ async function loadPermissionSettings(){
     }));
   }catch(error){body.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>权限加载失败：${escapeHtml(error.message)}</p><button class="btn btn-primary mt-8" onclick="loadPermissionSettings()">重试</button></div>`}
 }
-function escapeHtml(value){const div=document.createElement("div");div.textContent=String(value);return div.innerHTML}
+function escapeHtml(value){const div=document.createElement("div");div.textContent=String(value??"");return div.innerHTML}
+function escapeAttr(value){return escapeHtml(value).replace(/"/g,"&quot;").replace(/'/g,"&#39;").replace(/`/g,"&#96;")}
+function jsArg(value){return escapeAttr(JSON.stringify(String(value??"")))}
+function safeImageUrl(value){
+  const url=String(value||"").trim();
+  if(/^data:image\/[a-z0-9.+-]+;base64,/i.test(url))return escapeAttr(url);
+  try{
+    const parsed=new URL(url);
+    if(parsed.protocol==="https:"||parsed.protocol==="http:")return escapeAttr(url)
+  }catch(_){}
+  return""
+}
 
-const SL={steam_api_key:"Steam Web API密钥",sgdb_api_key:"SteamGridDB API密钥",fixed_poll_interval:"固定轮询间隔(秒)",smart_poll_intervals:"智能轮询间隔(分)",retry_times:"API重试次数",max_group_size:"单群最大监控人数",detailed_poll_log:"详细轮询日志",enable_achievement_poll:"成就轮询推送",enable_game_end_notify:"游戏结束通知",notify_send_image:"通知发送图片",notify_send_text:"通知发送文本",enable_proxy:"启用代理",proxy_url:"代理链接",cache_avatar_hours:"头像缓存(小时)",cache_avatar_frame_hours:"头像框缓存(小时)",game_filter_mode:"游戏过滤模式",game_filter_ids:"过滤游戏ID",web_port:"管理后台端口",rank_push_hour:"推送-时",rank_push_minute:"推送-分"};
-const SO=["steam_api_key","sgdb_api_key","web_port","fixed_poll_interval","smart_poll_intervals","retry_times","max_group_size","enable_game_end_notify","enable_achievement_poll","notify_send_text","notify_send_image","detailed_poll_log","game_filter_mode","game_filter_ids","rank_push_hour","rank_push_minute","enable_proxy","proxy_url","cache_avatar_hours","cache_avatar_frame_hours"];
+const SL={steam_api_key:"Steam Web API密钥",sgdb_api_key:"SteamGridDB API密钥",fixed_poll_interval:"固定轮询间隔(秒)",smart_poll_intervals:"智能轮询间隔(分)",retry_times:"API重试次数",max_group_size:"单群最大监控人数",detailed_poll_log:"详细轮询日志",enable_achievement_poll:"成就轮询推送",enable_game_end_notify:"游戏结束通知",notify_send_image:"通知发送图片",notify_send_text:"通知发送文本",enable_proxy:"启用代理",proxy_url:"代理链接",cache_avatar_hours:"头像缓存(小时)",cache_avatar_frame_hours:"头像框缓存(小时)",game_filter_mode:"游戏过滤模式",game_filter_ids:"过滤游戏ID",rank_push_hour:"推送-时",rank_push_minute:"推送-分"};
+const SO=["steam_api_key","sgdb_api_key","fixed_poll_interval","smart_poll_intervals","retry_times","max_group_size","enable_game_end_notify","enable_achievement_poll","notify_send_text","notify_send_image","detailed_poll_log","game_filter_mode","game_filter_ids","rank_push_hour","rank_push_minute","enable_proxy","proxy_url","cache_avatar_hours","cache_avatar_frame_hours"];
 const BK=["detailed_poll_log","enable_achievement_poll","enable_game_end_notify","notify_send_image","notify_send_text"];
-const IK=["fixed_poll_interval","retry_times","max_group_size","cache_avatar_hours","cache_avatar_frame_hours","web_port","rank_push_hour","rank_push_minute"];
+const IK=["fixed_poll_interval","retry_times","max_group_size","cache_avatar_hours","cache_avatar_frame_hours","rank_push_hour","rank_push_minute"];
 const SK=["smart_poll_intervals","proxy_url","game_filter_ids"];const SEK=["steam_api_key","sgdb_api_key"];
 async function renderSettings(){
   const data=await API.get("/api/settings");const c=document.getElementById("content");
@@ -263,8 +380,8 @@ async function renderSettings(){
     if(SEK.includes(k))h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" type="password"></div>`;
     else if(k==="game_filter_mode"){h+=`<div class="form-group"><label class="form-label">${l}</label><select id="cfg-${k}" class="form-input">${["全部游戏","白名单","黑名单"].map(m=>`<option ${data.game_filter_mode===m?"selected":""}>${m}</option>`).join("")}</select></div>`}
     else if(BK.includes(k))h+=`<div class="form-group"><label class="flex gap-8" style="align-items:center;cursor:pointer"><label class="toggle"><input type="checkbox" id="cfg-${k}" ${data[k]?"checked":""}><span class="slider"></span></label><span>${l}</span></label></div>`;
-    else if(IK.includes(k))h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" type="number" value="${data[k]??""}"></div>`;
-    else h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" value="${data[k]??""}"></div>`}
+    else if(IK.includes(k))h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" type="number" value="${escapeAttr(data[k]??"")}"></div>`;
+    else h+=`<div class="form-group"><label class="form-label">${l}</label><input id="cfg-${k}" class="form-input" value="${escapeAttr(data[k]??"")}"></div>`}
   h+='<button class="btn btn-primary mt-8" onclick="saveSet()">保存全部设置</button></div>';
   h+=`<details class="card settings-collapsible" id="permission-settings"><summary><span><span class="mdi mdi-shield-account"></span> 指令权限</span><span class="summary-hint">按指令设置 admin / member</span></summary><div id="permission-settings-body" class="collapsible-body"><p class="permission-help">展开后读取 AstrBot 当前权限配置。</p></div></details>`;
   c.innerHTML=h;
@@ -289,10 +406,48 @@ window.runSteamTest=async()=>{
   document.getElementById("test-sgdb-result").innerHTML='<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--text-muted)"><span class="mdi mdi-loading mdi-spin" style="font-size:24px"></span><p style="margin-top:8px">测试中...</p></div>';
   try{
     const r=await API.get("/api/test/steam");
-    document.getElementById("test-steam-result").innerHTML=["steam_api","steam_store","cover_horizontal"].map(k=>`<div class="test-stat"><div class="test-stat-val" style="color:${r[k]==="ok"?"var(--accent-green)":"var(--accent-red)"}">${r[k]}</div><div class="test-stat-lbl">${k}</div></div>`).join("");
-    document.getElementById("test-sgdb-result").innerHTML=["sgdb","sgdb_cover"].map(k=>`<div class="test-stat"><div class="test-stat-val" style="color:${r[k]==="ok"?"var(--accent-green)":"var(--accent-red)"}">${r[k]}</div><div class="test-stat-lbl">${k}</div></div>`).join("");
-  }catch(e){document.getElementById("test-steam-result").innerHTML=`<span style="color:var(--accent-red)">${e.message}</span>`}
+    document.getElementById("test-steam-result").innerHTML=["steam_api","steam_store","cover_horizontal"].map(k=>`<div class="test-stat"><div class="test-stat-val" style="color:${r[k]==="ok"?"var(--accent-green)":"var(--accent-red)"}">${escapeHtml(r[k])}</div><div class="test-stat-lbl">${k}</div></div>`).join("");
+    document.getElementById("test-sgdb-result").innerHTML=["sgdb","sgdb_cover"].map(k=>`<div class="test-stat"><div class="test-stat-val" style="color:${r[k]==="ok"?"var(--accent-green)":"var(--accent-red)"}">${escapeHtml(r[k])}</div><div class="test-stat-lbl">${k}</div></div>`).join("");
+  }catch(e){document.getElementById("test-steam-result").innerHTML=`<span style="color:var(--accent-red)">${escapeHtml(e.message)}</span>`}
 };
-window.runSidTest=async()=>{const sid=document.getElementById("test-sid-input").value.trim();if(!sid||sid.length!==17){toast("输入17位SteamID","error");return}const rs=document.getElementById("test-sid-result");rs.innerHTML='<span style="color:var(--text-muted)">查询中...</span>';try{const r=await API.get(`/api/test/steamid/${sid}`);if(r.from_cache||r.from_api){const pl=r.player||r;rs.innerHTML=`<div style="display:flex;gap:12px;padding:16px;background:var(--bg-primary);border-radius:var(--border-radius-lg);border:1px solid var(--border-color)"><img src="${pl.avatar||r.avatar}" style="width:56px;height:56px;border-radius:8px;background:var(--bg-tertiary)" onerror="this.style.display='none'"><div><div style="font-size:15px;font-weight:500;color:var(--text-bright)">${pl.name||r.name||sid}</div><div style="font-size:12px;color:var(--text-muted)">${sid}</div>${pl.gameextrainfo||r.game?`<div style="font-size:12px;color:var(--accent-green);margin-top:4px">🎮${pl.gameextrainfo||r.game}</div>`:""}<div style="font-size:11px;color:var(--text-muted);margin-top:4px">来源:${r.from_cache?"本地缓存":"Steam API"}</div></div></div>`}else rs.innerHTML=`<span style="color:var(--accent-red)">${r.error||"查询失败"}</span>`}catch(e){rs.innerHTML=`<span style="color:var(--accent-red)">${e.message}</span>`}};
+window.runSidTest=async()=>{
+  const sid=document.getElementById("test-sid-input").value.trim();
+  if(!/^\d{17}$/.test(sid)){toast("输入17位SteamID","error");return}
+  const rs=document.getElementById("test-sid-result");
+  rs.innerHTML='<span style="color:var(--text-muted)">查询中...</span>';
+  try{
+    const r=await API.get(`/api/test/steamid/${sid}`);
+    if(r.from_cache||r.from_api){
+      const pl=r.player||r;
+      const avatar=safeImageUrl(pl.avatar||r.avatar);
+      const name=escapeHtml(pl.name||r.name||sid);
+      const game=pl.gameextrainfo||r.game;
+      rs.innerHTML=`<div style="display:flex;gap:12px;padding:16px;background:var(--bg-primary);border-radius:var(--border-radius-lg);border:1px solid var(--border-color)"><img src="${avatar}" style="width:56px;height:56px;border-radius:8px;background:var(--bg-tertiary)" onerror="this.style.display='none'"><div><div style="font-size:15px;font-weight:500;color:var(--text-bright)">${name}</div><div style="font-size:12px;color:var(--text-muted)">${escapeHtml(sid)}</div>${game?`<div style="font-size:12px;color:var(--accent-green);margin-top:4px">🎮${escapeHtml(game)}</div>`:""}<div style="font-size:11px;color:var(--text-muted);margin-top:4px">来源:${r.from_cache?"本地缓存":"Steam API"}</div></div></div>`
+    }else{
+      rs.innerHTML=`<span style="color:var(--accent-red)">${escapeHtml(r.error||"查询失败")}</span>`
+    }
+  }catch(e){
+    rs.innerHTML=`<span style="color:var(--accent-red)">${escapeHtml(e.message)}</span>`
+  }
+};
 
-navigateTo("dashboard");
+function applyBridgeContext(context) {
+  document.documentElement.dataset.theme = context?.isDark ? "dark" : "light";
+}
+
+async function initPluginPage() {
+  if (!bridge) {
+    throw new Error("AstrBot Plugin Page bridge is unavailable");
+  }
+  const context = await bridge.ready();
+  applyBridgeContext(context);
+  bridge.onContext?.(applyBridgeContext);
+  await navigateTo("dashboard");
+}
+
+initPluginPage().catch((error) => {
+  const content = document.getElementById("content");
+  if (content) {
+    content.innerHTML = `<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>页面初始化失败: ${escapeHtml(error.message)}</p></div>`;
+  }
+});
