@@ -30,7 +30,7 @@ from .web import WebAdminServer  # Web 管理后台
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.2.1",
+    "3.2.3",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):

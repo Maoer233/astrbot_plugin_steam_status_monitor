@@ -120,9 +120,10 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
-- V3.2.2（2026/07/23）
-  - **权限系统迁移**：回退 AstrBot 原生逐指令 `admin/member` 权限，移除插件内部 `permission_level`
-  - **WebUI 权限管理**：新增“指令权限”逐条配置，直接同步 AstrBot 框架持久化配置与运行时权限
+- V3.2.3（2026/07/23）
+  - **权限系统迁移 (by LitChi-bit)**：回退 AstrBot 原生逐指令 `admin/member` 权限，移除插件内部 `permission_level`
+  - **WebUI 权限管理 (by LitChi-bit)**：新增"指令权限"逐条配置，直接同步 AstrBot 框架持久化配置与运行时权限
+  - **权限提示优化**：框架权限不足提示改为 WebUI 操作引导
 
 - V3.2.1（2026/07/16）
   - **WebUI 管理后台（Beta）**：基于 aiohttp 的嵌入式管理页面，支持仪表盘、甘特图、热力图、群聊管理、绑定管理、每日推送设置
