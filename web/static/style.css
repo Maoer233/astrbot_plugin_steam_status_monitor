@@ -75,6 +75,21 @@ body {
 .form-input:focus { border-color:var(--accent); }
 select.form-input { cursor:pointer; }
 
+/* Collapsible permission settings */
+.settings-collapsible { padding:0; overflow:hidden; }
+.settings-collapsible summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 20px; color:var(--text-bright); cursor:pointer; list-style:none; font-size:15px; font-weight:500; }
+.settings-collapsible summary::-webkit-details-marker { display:none; }
+.settings-collapsible summary::after { content:"›"; color:var(--text-muted); font-size:22px; transform:rotate(90deg); transition:transform 0.15s; }
+.settings-collapsible[open] summary { border-bottom:1px solid var(--border-color); }
+.settings-collapsible[open] summary::after { transform:rotate(270deg); }
+.summary-hint { margin-left:auto; color:var(--text-muted); font-size:12px; font-weight:400; }
+.collapsible-body { padding:18px 20px 20px; }
+.permission-help { color:var(--text-muted); font-size:12px; margin-bottom:14px; }
+.permission-table-wrap { max-height:520px; overflow:auto; border:1px solid var(--border-color); border-radius:var(--border-radius); }
+.permission-table-wrap .table th { position:sticky; top:0; z-index:1; background:var(--bg-primary); }
+.permission-select { width:120px; min-width:120px; }
+.permission-loading { height:160px; }
+
 /* Table */
 .table { width:100%; border-collapse:collapse; }
 .table th,.table td { padding:11px 14px; text-align:left; border-bottom:1px solid var(--border-color); font-size:13px; }

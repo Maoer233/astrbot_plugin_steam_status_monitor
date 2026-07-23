@@ -51,12 +51,6 @@
     "hint": "开启后玩家退出游戏会推送结束通知（含游玩时长），关闭则只推送开始游戏（修改后重启AstrBot生效）",
     "default": true
   },
-  "permission_level": {
-    "description": "指令权限等级 -修改后重启AstrBot生效",
-    "type": "int",
-    "hint": "1=管理员限定(默认) 2=查询类指令全员放开 3=全部指令全员放开",
-    "default": 1
-  },
   "notify_send_image": {
     "description": "通知发送图片开关",
     "type": "bool",

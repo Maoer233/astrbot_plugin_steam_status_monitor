@@ -4,6 +4,10 @@ import os
 import asyncio
 import logging
 from aiohttp import web
+from astrbot.core.star.command_management import (
+    list_commands,
+    update_command_permission,
+)
 
 # 尝试导入父包的工具函数（运行时可能因 AstrBot 加载机制失败，优雅降级）
 try:
@@ -37,6 +41,43 @@ def _get_player_display_name(p, sid):
             if str(_sid) == str(sid) and state.get("name"):
                 return state["name"]
     return str(sid)
+
+
+def _flatten_commands(commands):
+    """递归展开框架返回的命令树。"""
+    flattened = []
+    for command in commands or []:
+        flattened.append(command)
+        flattened.extend(_flatten_commands(command.get("sub_commands") or []))
+    return flattened
+
+
+def _command_descriptor_to_dict(descriptor):
+    """将框架更新函数返回的 CommandDescriptor 转为可 JSON 序列化字典。"""
+    return {
+        "handler_full_name": descriptor.handler_full_name,
+        "handler_name": descriptor.handler_name,
+        "plugin": descriptor.plugin_name,
+        "plugin_display_name": descriptor.plugin_display_name,
+        "module_path": descriptor.module_path,
+        "description": descriptor.description,
+        "type": descriptor.command_type,
+        "parent_signature": descriptor.parent_signature,
+        "parent_group_handler": descriptor.parent_group_handler,
+        "original_command": descriptor.original_command,
+        "current_fragment": descriptor.current_fragment,
+        "effective_command": descriptor.effective_command,
+        "aliases": descriptor.aliases,
+        "permission": descriptor.permission,
+        "enabled": descriptor.enabled,
+        "is_group": descriptor.is_group,
+        "has_conflict": descriptor.has_conflict,
+        "reserved": descriptor.reserved,
+        "sub_commands": [
+            _command_descriptor_to_dict(child)
+            for child in descriptor.sub_commands
+        ],
+    }
 
 
 def safe_api(handler):
@@ -106,6 +147,8 @@ class WebAdminServer:
         r("POST", "/api/push/all/toggle", self._api_push_all_toggle)
         r("GET", "/api/settings", self._api_settings_get)
         r("POST", "/api/settings/update", self._api_settings_update)
+        r("GET", "/api/permissions", self._api_permissions_list)
+        r("POST", "/api/permissions/update", self._api_permissions_update)
         r("GET", "/api/players/search", self._api_players_search)
         r("GET", "/api/players/avatar/{steamid}", self._api_player_avatar)
         r("GET", "/api/players/info/{steamid}", self._api_player_info)
@@ -142,6 +185,47 @@ class WebAdminServer:
             text="<h1>Server running</h1><p>index.html not found yet</p>",
             content_type="text/html",
         )
+
+    def _is_plugin_command(self, command):
+        if command.get("plugin") == "steam_status_monitor_V3":
+            return True
+        module_path = command.get("module_path") or ""
+        plugin_module = self.plugin.__class__.__module__
+        return module_path == plugin_module or module_path.startswith(f"{plugin_module}.")
+
+    async def _plugin_commands(self):
+        commands = _flatten_commands(await list_commands())
+        return [command for command in commands if self._is_plugin_command(command)]
+
+    # ────── Command Permissions ──────
+
+    async def _api_permissions_list(self, request):
+        commands = await self._plugin_commands()
+        return web.json_response({"commands": commands})
+
+    async def _api_permissions_update(self, request):
+        data = await request.json()
+        handler_full_name = str(data.get("handler_full_name") or "").strip()
+        permission = str(data.get("permission") or "").strip().lower()
+        if permission not in {"admin", "member"}:
+            return web.json_response(
+                {"error": "permission 只允许 admin 或 member"}, status=400
+            )
+
+        commands = await self._plugin_commands()
+        if not any(
+            command.get("handler_full_name") == handler_full_name
+            for command in commands
+        ):
+            return web.json_response(
+                {"error": "指定指令不属于本插件"}, status=404
+            )
+
+        descriptor = await update_command_permission(handler_full_name, permission)
+        return web.json_response({
+            "ok": True,
+            "command": _command_descriptor_to_dict(descriptor),
+        })
 
     # ────── Dashboard Stats ──────
 
