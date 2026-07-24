@@ -115,13 +115,20 @@
 如果显示缺少依赖，你可以尝试下载以下工具来进行修复
 pip install httpx pillow
 
-可以添加QQ：1912584909 来反馈功能和建议 闲聊也欢迎喵~
+可以添加QQ：1912584909 或加交流群：881855879 来反馈功能和建议 闲聊也欢迎喵~
+
+## 🔗 关联项目
+📢 **Steam Monitor 独立版**：[@NeP](https://github.com/nep-0) 用 Go 重写的零依赖版本，无需 AstrBot，单文件运行，Web 管理界面，开箱即用。
+→ [github.com/nep-0/steam-monitor](https://github.com/nep-0/steam-monitor)
 
 ## ⭐ Stars
 
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.2.6（2026/07/24）
+  - **Bug 修复**：甘特图数据源重复叠加导致出现幽灵时间段（session_records 和 play_records 同时存在时重复渲染）
+
 - V3.2.5（2026/07/24）
   - **通知开关优化**：新增 `enable_game_start_notify` 配置项，关闭后不发送开始游戏通知但仍记录时长
   - **addid 自动启用监控**：`/steam addid` 后自动启动监控，无需额外 `/steam on`

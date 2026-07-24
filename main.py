@@ -31,7 +31,7 @@ from .web_api import WebAdminAPI  # AstrBot 内置 WebUI
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.2.5",
+    "3.2.6",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):

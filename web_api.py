@@ -468,6 +468,8 @@ class WebAdminAPI:
             if date_key < start_key or date_key >= end_key:
                 continue
             for sid, games in date_data.items():
+                if sid in player_map:  # session_records 已覆盖此玩家，跳过 play_records 合成
+                    continue
                 day_start_ts = int(datetime.strptime(date_key, "%Y-%m-%d").timestamp()) + 4 * 3600
                 offset_ts = day_start_ts
                 for gid, ginfo in games.items():

@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Steam Monitor Admin</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.3.67/css/materialdesignicons.min.css">
 <link rel="stylesheet" href="./style.css">
 </head>
@@ -27,7 +26,7 @@
     </ul>
   </nav>
   <main id="content">
-    <div class="page-loading"><span class="mdi mdi-loading mdi-spin"></span><p>加载中...</p></div>
+    <div class="page-loading"><span class="mdi mdi-steam" style="font-size:48px;opacity:0.2;display:block;margin-bottom:12px"></span><span class="mdi mdi-loading mdi-spin" style="font-size:20px;margin-right:8px"></span>正在连接 Dashboard...<p style="font-size:12px;color:var(--text-muted);margin-top:8px">首次加载可能需要几秒</p></div>
   </main>
 </div>
 <div id="img-overlay" class="modal-overlay" onclick="this.classList.remove('show')">
@@ -50,6 +49,7 @@
     </div>
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 <script src="/api/plugin/page/bridge-sdk.js"></script>
 <script src="./app.js"></script>
 </body>
