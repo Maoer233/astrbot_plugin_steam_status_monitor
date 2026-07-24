@@ -149,6 +149,7 @@ class WebAdminAPI:
         r("POST", "/groups/delete", self._api_groups_delete)
         r("POST", "/groups/add-group", self._api_groups_add_group)
         r("POST", "/groups/delete-group", self._api_groups_delete_group)
+        r("POST", "/groups/import-batch", self._api_groups_import_batch)
         r("GET", "/groups/<group_id>/players", self._api_group_players)
         r("GET", "/bindings", self._api_bindings_list)
         r("POST", "/bindings/add", self._api_bindings_add)
@@ -750,6 +751,11 @@ class WebAdminAPI:
             )
         groups[gid].append(sid)
         p._save_group_steam_ids()
+        qq = str(data.get("qq", "")).strip()
+        if qq:
+            nick = str(data.get("nickname", "")).strip()
+            p._bind_data[qq] = {"sid": sid, "nickname": nick or "*"}
+            p._save_bind_data()
         return json_response({"ok": True})
 
     async def _api_groups_delete(self, request):
@@ -805,6 +811,80 @@ class WebAdminAPI:
             del groups[gid]
             p._save_group_steam_ids()
         return json_response({"ok": True})
+
+    async def _api_groups_import_batch(self, request):
+        """批量导入：每行 steamid/链接 [qq] [备注]，空格分隔"""
+        p = self.plugin
+        try:
+            data = await request.json()
+        except Exception:
+            return json_response({"error": "invalid JSON"}, status_code=400)
+        gid = str(data.get("group_id", ""))
+        text = str(data.get("text", ""))
+        if not gid:
+            return json_response({"error": "group_id required"}, status_code=400)
+        if not text.strip():
+            return json_response({"error": "text is empty"}, status_code=400)
+
+        groups = getattr(p, "group_steam_ids", {})
+        if gid not in groups:
+            groups[gid] = []
+        existing = set(groups[gid])
+        max_size = getattr(p, "max_group_size", 20)
+
+        imported = []
+        errors = []
+        for i, line in enumerate(text.split("\n")):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            parts = stripped.split()
+            raw_sid = parts[0] if parts else ""
+            qq = parts[1] if len(parts) > 1 else ""
+            nickname = parts[2] if len(parts) > 2 else ""
+
+            if not raw_sid:
+                errors.append(f"第{i+1}行: SteamID为空")
+                continue
+
+            # 解析SteamID（支持好友码/URL/链接）
+            try:
+                sid = await p.resolve_steam_input(raw_sid)
+            except Exception as e:
+                errors.append(f"第{i+1}行: 解析失败 - {e}")
+                continue
+            if not sid or not sid.isdigit() or len(sid) != 17:
+                errors.append(f"第{i+1}行: 无效SteamID - {raw_sid}")
+                continue
+
+            # 检查上限
+            if len(groups[gid]) >= max_size and sid not in existing:
+                errors.append(f"第{i+1}行: 群已满 (上限{max_size})")
+                continue
+
+            # 去重
+            if sid in existing:
+                errors.append(f"第{i+1}行: {sid} 已存在")
+                continue
+
+            groups[gid].append(sid)
+            existing.add(sid)
+            imported.append(sid)
+
+            # 绑定QQ
+            if qq:
+                bind_data = getattr(p, "_bind_data", {})
+                bind_data[str(qq)] = {"sid": sid, "nickname": nickname or "*"}
+                p._save_bind_data()
+
+        if imported:
+            p._save_group_steam_ids()
+
+        return json_response({
+            "ok": True,
+            "imported": len(imported),
+            "errors": errors,
+        })
 
     async def _api_group_players(self, request):
         p = self.plugin

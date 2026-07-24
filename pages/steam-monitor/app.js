@@ -29,7 +29,7 @@ async function navigateTo(page,params){const t=document.getElementById("hplayer-
   document.querySelectorAll(".nav-item").forEach(i=>i.classList.toggle("active",i.dataset.page===page));
   const c=document.getElementById("content");
   c.innerHTML='<div class="page-loading"><span class="mdi mdi-loading mdi-spin"></span><p>加载中...</p></div>';
-  try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,bindings:renderBindings,push:renderPush,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
+  try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,push:renderPush,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
   catch(e){c.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>加载失败: ${escapeHtml(e.message)}</p><button class="btn btn-primary mt-8" onclick="navigateTo(${jsArg(page)})">重试</button></div>`}
 }
 
@@ -281,19 +281,34 @@ async function renderPlayerHeatmap(sid){
 
 // ====== Groups ======
 async function renderGroups(){
-  const data=await API.get("/api/groups");const groups=data.groups||{};const gids=Object.keys(groups);
+  const [gData,bData]=await Promise.all([API.get("/api/groups"),API.get("/api/bindings")]);
+  const groups=gData.groups||{};const gids=Object.keys(groups);const binds={}; (bData.bindings||[]).forEach(b=>{if(b.steamid)binds[b.steamid]={qq:b.qq,nickname:b.nickname}});
   const c=document.getElementById("content");
   c.innerHTML=`<div class="flex-between mb-20"><h2 class="page-title">群聊管理</h2><div class="flex gap-8"><span style="color:var(--text-muted)">${gids.length}个群</span><button class="btn btn-primary btn-sm" onclick="addGroup()">+添加群聊</button></div></div>
-    <div class="groups-layout"><div class="card" id="group-list"></div><div class="card" id="group-detail"><div class="empty-state">选择一个群</div></div></div>`;
+    <div class="groups-layout"><div class="card" id="group-list"></div><div class="card" id="group-detail"><div class="empty-state">选择一个群</div></div></div>
+    <div class="modal-overlay" id="batch-modal"><div class="modal" style="max-width:560px"><div class="modal-title">批量导入</div>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">每行一条：SteamID/链接  QQ号  备注名（后两项可选，支持 # 注释）</p>
+      <textarea id="batch-text" class="form-input" style="height:200px;font-family:monospace;font-size:12px" placeholder="76561198123456789 123456789 小明&#10;https://steamcommunity.com/id/MaoerMaster/ 987654321&#10;123456789&#10;# 这是注释行"></textarea>
+      <div id="batch-result" style="margin-top:8px;font-size:12px"></div>
+      <div class="modal-actions"><button class="btn" onclick="document.getElementById('batch-modal').classList.remove('show')">取消</button><button class="btn btn-primary" onclick="runBatch(${jsArg(gids[0])})">导入</button></div></div></div>
+    <div class="modal-overlay" id="addsid-modal"><div class="modal" style="max-width:400px"><div class="modal-title" id="addsid-title"></div>
+      <div class="form-group"><label class="form-label">SteamID</label><input id="addsid-sid" class="form-input" placeholder="17位SteamID / 链接 / 好友码"></div>
+      <div class="form-group"><label class="form-label">QQ号（可选）</label><input id="addsid-qq" class="form-input"></div>
+      <div class="form-group"><label class="form-label">备注名（可选）</label><input id="addsid-nick" class="form-input"></div>
+      <div class="modal-actions"><button class="btn" onclick="document.getElementById('addsid-modal').classList.remove('show')">取消</button><button class="btn btn-primary" id="addsid-confirm">添加</button></div></div></div>
+    <div class="modal-overlay" id="bind-modal"><div class="modal" style="max-width:360px"><div class="modal-title">绑定QQ</div>
+      <div class="form-group"><label class="form-label">QQ号</label><input id="bind-qq" class="form-input"></div>
+      <div class="form-group"><label class="form-label">备注名（可选）</label><input id="bind-nick" class="form-input"></div>
+      <div class="modal-actions"><button class="btn" onclick="document.getElementById('bind-modal').classList.remove('show')">取消</button><button class="btn btn-primary" id="bind-confirm">确认</button></div></div></div>`;
   let sel=gids[0]||null;
   function renderList(){const l=document.getElementById("group-list");l.innerHTML=gids.map(gid=>`<div class="group-list-item${gid===sel?" active":""}" style="display:flex;justify-content:space-between;align-items:center" onclick="selG(${jsArg(gid)})"><span>群${escapeHtml(gid)}(${groups[gid].length}人)</span><button class="btn btn-danger btn-sm" style="padding:2px 6px;font-size:11px" onclick="event.stopPropagation();delGroup(${jsArg(gid)})">✕</button></div>`).join("")}
   window.selG=g=>{sel=g;renderList();renderDetail(g)};
   async function renderDetail(gid){
     const ps=groups[gid]||[];const d=document.getElementById("group-detail");
-    let h=`<div class="flex-between mb-16"><span class="card-title" style="margin-bottom:0">群${escapeHtml(gid)}</span><button class="btn btn-primary btn-sm" onclick="addSteamID(${jsArg(gid)})">+添加SteamID</button></div>`;
+    let h=`<div class="flex-between mb-16"><span class="card-title" style="margin-bottom:0">群${escapeHtml(gid)}</span><div class="flex gap-8"><button class="btn btn-primary btn-sm" onclick="showAddSIDModal(${jsArg(gid)})">+添加</button><button class="btn btn-sm" onclick="showBatchModal(${jsArg(gid)})">📋批量导入</button></div></div>`;
     if(!ps.length){h+='<div class="empty-state"><span class="mdi mdi-account-off"></span><p>暂无玩家</p></div>';d.innerHTML=h;return}
-    h+='<table class="table"><thead><tr><th></th><th>玩家</th><th>状态</th><th>操作</th></tr></thead><tbody>';
-    ps.forEach(p=>{const bg=p.gameid?'<span class="badge badge-playing">游戏中</span>':p.personastate>0?'<span class="badge badge-online">在线</span>':'<span class="badge badge-offline">离线</span>';h+=`<tr><td><div data-avatar-sid="${escapeAttr(p.sid)}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary);display:flex;align-items:center;justify-content:center"><span class="mdi mdi-loading mdi-spin" style="font-size:14px;color:var(--text-muted)"></span></div></td><td>${escapeHtml(p.name)}</td><td>${bg}</td><td><button class="btn btn-danger btn-sm" onclick="removeSteamID(${jsArg(gid)},${jsArg(p.sid)},${jsArg(p.name)})">删除</button></td></tr>`});
+    h+='<table class="table"><thead><tr><th></th><th>玩家</th><th style="width:100px">绑定QQ</th><th>备注</th><th>状态</th><th>操作</th></tr></thead><tbody>';
+    ps.forEach(p=>{const bg=p.gameid?'<span class="badge badge-playing">游戏中</span>':p.personastate>0?'<span class="badge badge-online">在线</span>':'<span class="badge badge-offline">离线</span>';const b=binds[p.sid];const qqCell=b?`<span class="monospace" onclick="editBindNick(${jsArg(p.sid)},${jsArg(b.qq)},${jsArg(b.nickname)})" style="cursor:pointer" title="点击修改备注">${escapeHtml(b.qq)}</span><button class="btn btn-danger btn-sm" style="padding:0 5px;margin-left:6px;font-size:10px" onclick="event.stopPropagation();unbindQQ(${jsArg(p.sid)},${jsArg(b.qq)})" title="解绑">✕</button>`:`<button class="btn btn-sm" onclick="showBindModal(${jsArg(p.sid)})" title="绑定QQ">绑定</button>`;const nickCell=b?`<span onclick="editBindNick(${jsArg(p.sid)},${jsArg(b.qq)},${jsArg(b.nickname)})" style="cursor:pointer;color:var(--accent)" title="点击修改备注">${escapeHtml(b.nickname&&b.nickname!=="*"?b.nickname:"-")}</span>`:"-";h+=`<tr><td><div data-avatar-sid="${escapeAttr(p.sid)}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary);display:flex;align-items:center;justify-content:center"><span class="mdi mdi-loading mdi-spin" style="font-size:14px;color:var(--text-muted)"></span></div></td><td>${escapeHtml(p.name)}</td><td>${qqCell}</td><td>${nickCell}</td><td>${bg}</td><td><button class="btn btn-danger btn-sm" onclick="removeSteamID(${jsArg(gid)},${jsArg(p.sid)},${jsArg(p.name)})">删除</button></td></tr>`});
     h+='</tbody></table>';d.innerHTML=h;
     Promise.all(ps.map(p=>loadAvatar(p.sid).then(av=>{const el=document.querySelector(`[data-avatar-sid="${CSS.escape(String(p.sid))}"]`);if(el&&av)el.innerHTML=`<img src="${safeImageUrl(av)}" style="width:28px;height:28px;border-radius:6px;background:var(--bg-tertiary)">`})));
   }
@@ -301,27 +316,13 @@ async function renderGroups(){
 }
 window.addGroup=async()=>{const g=await pagePrompt("添加群聊","群号");if(!g)return;const r=await API.post("/api/groups/add-group",{group_id:g});if(r.ok){toast("已添加");navigateTo("groups")}else toast(r.error||"失败","error")};
 window.delGroup=async gid=>{if(!await pageConfirm(`删除群 ${gid}？`))return;const r=await API.post("/api/groups/delete-group",{group_id:gid});if(r.ok){toast("已删除");navigateTo("groups")}else toast(r.error||"失败","error")};
-window.addSteamID=async gid=>{const s=await pagePrompt(`向群 ${gid} 添加玩家`,"17 位 SteamID");if(!s)return;const r=await API.post("/api/groups/add",{group_id:gid,steamid:s});if(r.ok){toast("添加成功");navigateTo("groups")}else toast(r.error||"失败","error")};
+window.showAddSIDModal=gid=>{document.getElementById("addsid-title").textContent=`向群 ${gid} 添加玩家`;document.getElementById("addsid-sid").value="";document.getElementById("addsid-qq").value="";document.getElementById("addsid-nick").value="";const btn=document.getElementById("addsid-confirm");const newBtn=btn.cloneNode(true);btn.parentNode.replaceChild(newBtn,btn);newBtn.onclick=async()=>{const s=document.getElementById("addsid-sid").value,q=document.getElementById("addsid-qq").value,n=document.getElementById("addsid-nick").value;if(!s){toast("请输入SteamID","error");return}const r=await API.post("/api/groups/add",{group_id:gid,steamid:s,qq:q,nickname:n});if(r.ok){toast("添加成功");document.getElementById("addsid-modal").classList.remove("show");navigateTo("groups")}else toast(r.error||"失败","error")};document.getElementById("addsid-modal").classList.add("show")};
 window.removeSteamID=async(gid,sid,name)=>{if(!await pageConfirm(`从群 ${gid} 删除 ${name}？`))return;const r=await API.post("/api/groups/delete",{group_id:gid,steamid:sid});if(r.ok){toast("已删除");navigateTo("groups")}else toast(r.error||"失败","error")};
-
-// ====== Bindings ======
-async function renderBindings(){
-  const data=await API.get("/api/bindings");const bs=data.bindings||[];
-  const c=document.getElementById("content");
-  c.innerHTML=`<div class="flex-between mb-20"><h2 class="page-title">绑定管理</h2><button class="btn btn-primary" onclick="showBindModal()">+添加</button></div>
-    <div class="card"><table class="table"><thead><tr><th>QQ号</th><th>SteamID</th><th>备注</th><th>操作</th></tr></thead><tbody id="bind-tbody"></tbody></table></div>
-    <div class="modal-overlay" id="bind-modal"><div class="modal"><div class="modal-title">添加绑定</div>
-      <div class="form-group"><label class="form-label">QQ号</label><input id="bind-qq" class="form-input"></div>
-      <div class="form-group"><label class="form-label">SteamID</label><input id="bind-sid" class="form-input" placeholder="17位"></div>
-      <div class="form-group"><label class="form-label">备注</label><input id="bind-nick" class="form-input"></div>
-      <div class="modal-actions"><button class="btn" onclick="hideBindModal()">取消</button><button class="btn btn-primary" onclick="addBind()">确认</button></div></div></div>`;
-  function renderTable(){const t=document.getElementById("bind-tbody");if(!bs.length){t.innerHTML='<tr><td colspan="4" class="empty-state">暂无</td></tr>';return}t.innerHTML=bs.map(b=>`<tr><td>${escapeHtml(b.qq)}</td><td class="monospace">${escapeHtml(b.steamid)}</td><td>${escapeHtml(b.nickname||"-")}</td><td><button class="btn btn-danger btn-sm" onclick="delBind(${jsArg(b.qq)})">删除</button></td></tr>`).join("")}
-  renderTable();
-  window.showBindModal=()=>document.getElementById("bind-modal").classList.add("show");
-  window.hideBindModal=()=>document.getElementById("bind-modal").classList.remove("show");
-  window.addBind=async()=>{const q=document.getElementById("bind-qq").value,s=document.getElementById("bind-sid").value,n=document.getElementById("bind-nick").value;if(!q||!s){toast("必填","error");return}const r=await API.post("/api/bindings/add",{qq:q,steamid:s,nickname:n});if(r.ok){toast("成功");hideBindModal();navigateTo("bindings")}else toast(r.error||"失败","error")};
-  window.delBind=async qq=>{if(!await pageConfirm(`删除 QQ ${qq} 的绑定？`))return;await API.post("/api/bindings/delete",{qq});toast("已删除");navigateTo("bindings")};
-}
+window.showBatchModal=gid=>{document.getElementById("batch-text").value="";document.getElementById("batch-result").innerHTML="";const textarea=document.getElementById("batch-text");textarea.dataset.gid=gid;document.getElementById("batch-modal").classList.add("show")};
+window.runBatch=async gid=>{const text=document.getElementById("batch-text").value;if(!text.trim())return;const btn=event.target;btn.disabled=true;btn.textContent="导入中...";try{const r=await API.post("/api/groups/import-batch",{group_id:gid,text:text});const res=document.getElementById("batch-result");if(r.ok)res.innerHTML=`<span style="color:var(--accent-green)">✅ 已导入 ${r.imported} 条</span>${r.errors.length?`<br><span style="color:var(--accent-red)">${r.errors.join('<br>')}</span>`:""}`;if(r.imported>0)navigateTo("groups")}catch(e){toast(e.message,"error")}finally{btn.disabled=false;btn.textContent="导入"}};
+window.showBindModal=sid=>{document.getElementById("bind-qq").value="";document.getElementById("bind-nick").value="";const btn=document.getElementById("bind-confirm");const newBtn=btn.cloneNode(true);btn.parentNode.replaceChild(newBtn,btn);newBtn.onclick=async()=>{const q=document.getElementById("bind-qq").value,n=document.getElementById("bind-nick").value;if(!q){toast("请输入QQ号","error");return}const r=await API.post("/api/bindings/add",{qq:q,steamid:sid,nickname:n});if(r.ok){toast("绑定成功");document.getElementById("bind-modal").classList.remove("show");navigateTo("groups")}else toast(r.error||"失败","error")};document.getElementById("bind-modal").classList.add("show")};
+window.unbindQQ=async(sid,qq)=>{if(!await pageConfirm(`解除 ${qq} 的绑定？`))return;const r=await API.post("/api/bindings/delete",{qq});if(r.ok){toast("已解绑");navigateTo("groups")}else toast(r.error||"失败","error")};
+window.editBindNick=async(sid,qq,oldNick)=>{const nick=await pagePrompt("修改备注",oldNick||"");if(nick===null)return;const r=await API.post("/api/bindings/update",{qq,nickname:nick});if(r.ok){toast("已更新");navigateTo("groups")}else toast(r.error||"失败","error")};
 
 // ====== Push & Settings ======
 async function renderPush(){
