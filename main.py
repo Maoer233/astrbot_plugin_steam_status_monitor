@@ -31,7 +31,7 @@ from .web_api import WebAdminAPI  # AstrBot 内置 WebUI
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.2.4",
+    "3.2.5",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -173,6 +173,28 @@ class SteamStatusMonitorV3(Star):
                 logger.info(f"[SteamStatusMonitor] 已保存 notify_sessions: {self.notify_sessions}")
             except Exception as e:
                 logger.warning(f"保存 notify_sessions 失败: {e}")
+
+    def _record_platform_id(self, event):
+        """从消息事件中提取并缓存平台ID，用于WebUI自动构造通知目标"""
+        if self._platform_id:
+            return
+        self._platform_id = event.unified_msg_origin.split(":")[0]
+        self._auto_fill_notify_sessions()
+
+    def _auto_fill_notify_sessions(self):
+        """为WebUI添加的群（有群有ID但无notify_sessions）自动构造通知目标"""
+        if not self._platform_id:
+            return
+        if not hasattr(self, 'notify_sessions'):
+            self.notify_sessions = {}
+        filled = 0
+        for gid in getattr(self, 'group_steam_ids', {}) or {}:
+            if gid not in self.notify_sessions or not self.notify_sessions[gid]:
+                self.notify_sessions[gid] = f"{self._platform_id}:GroupMessage:0_{gid}"
+                filled += 1
+        if filled:
+            self._save_notify_session()
+            logger.info(f"[WebUI自动投递] 已为 {filled} 个群补全通知目标")
 
     def _ensure_fonts(self):
         """检测插件fonts目录是否有NotoSansHans系列字体，有则复制到缓存目录并缓存路径"""
@@ -515,6 +537,9 @@ class SteamStatusMonitorV3(Star):
         self.running_groups = set()  # 正在运行的群号集合
         self.group_monitor_enabled = {}      # {group_id: bool} 监控开关
         self.group_achievement_enabled = {}  # {group_id: bool} 成就推送开关
+        self._platform_id = None  # 记录消息平台ID，用于WebUI自动补全通知目标
+        # --- WebUI 群自动补全 notify_sessions ---
+        self._auto_fill_notify_sessions()
         # --- 新增：重启后自动恢复所有群的轮询 ---
         if hasattr(self, 'notify_sessions') and self.notify_sessions and self.API_KEY and self.group_steam_ids:
             logger.info(f"[SteamStatusMonitor] 检测到 notify_sessions={self.notify_sessions}，自动启动监控轮询")
@@ -1181,6 +1206,7 @@ class SteamStatusMonitorV3(Star):
         if not hasattr(self, 'notify_sessions'):
             self.notify_sessions = {}
         self.notify_sessions[group_id] = event.unified_msg_origin
+        self._record_platform_id(event)
         self._save_notify_session()
         # 初始化状态
         now = int(time.time())
@@ -1272,6 +1298,20 @@ class SteamStatusMonitorV3(Star):
             msg += f"以下SteamID已存在于本群监控组: {', '.join(already)}\n"
         if len(steam_ids) >= limit and len(added) < len(steamid_list):
             msg += f"本群监控组人数已达上限（{limit}人），部分ID未添加。\n"
+        # 自动启用本群监控（幂等）
+        if added and group_id not in self.running_groups:
+            self.group_monitor_enabled[group_id] = True
+            self.running_groups.add(group_id)
+            if not hasattr(self, 'notify_sessions'):
+                self.notify_sessions = {}
+            self.notify_sessions[group_id] = event.unified_msg_origin
+            self._record_platform_id(event)
+            self._save_notify_session()
+            if group_id not in self.group_last_states:
+                self.group_last_states[group_id] = {}
+            if group_id not in self.group_start_play_times:
+                self.group_start_play_times[group_id] = {}
+            msg += "监控已自动启动。\n"
         yield event.plain_result(msg.strip() if msg else "未添加任何SteamID。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -2514,7 +2554,7 @@ class SteamStatusMonitorV3(Star):
                     continue
                 start_play_times.setdefault(sid, {})[current_gameid] = now
                 # 收集通知，由末尾统一合并发送（不在循环内逐条推送）
-                if not skip_push:
+                if not skip_push and self.config.get('enable_game_start_notify', True):
                     notifications.append({
                         "type": "start",
                         "name": name,

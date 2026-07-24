@@ -995,6 +995,8 @@ class WebAdminAPI:
                 if isinstance(value, str):
                     p.smart_poll_intervals = [int(x.strip()) for x in value.split(",") if x.strip()]
                     p.config[key] = ",".join(str(x) for x in p.smart_poll_intervals)
+            elif key == "enable_game_start_notify":
+                p.config[key] = bool(value)
             elif key == "enable_game_end_notify":
                 p.config[key] = bool(value)
             elif key == "enable_achievement_poll":
