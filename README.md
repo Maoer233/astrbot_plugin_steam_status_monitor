@@ -1,4 +1,4 @@
-# Steam 状态监控插件V3
+# Steam 状态监控插件V3 ![MIT](https://img.shields.io/badge/LICENSE-MIT-blue?style=flat-square) ![Python](https://img.shields.io/badge/Python-3.7+-blue?style=flat-square) ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.2-purple?style=flat-square) [![Stars](https://img.shields.io/github/stars/Maoer233/astrbot_plugin_steam_status_monitor?style=flat-square)](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor) [![Last Commit](https://img.shields.io/github/last-commit/Maoer233/astrbot_plugin_steam_status_monitor?style=flat-square)](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor/pulls)
 
 ## 访问统计
 ![访问统计](https://count.getloli.com/get/@astrbot_ssm?theme=rule34)

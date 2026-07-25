@@ -2593,7 +2593,7 @@ class SteamStatusMonitorV3(Star):
             intervals = self.smart_poll_intervals if isinstance(self.smart_poll_intervals, list) and len(self.smart_poll_intervals) == 6 else [1, 3, 5, 10, 20, 30]
             if self.fixed_poll_interval and self.fixed_poll_interval > 0:
                 poll_interval = self.fixed_poll_interval
-                poll_level_str = f"固定{self.fixed_poll_interval//60 if self.fixed_poll_interval>=60 else self.fixed_poll_interval}秒轮询"
+                poll_level_str = f"固定{self.fixed_poll_interval//60 if self.fixed_poll_interval>=60 else self.fixed_poll_interval}{'分钟' if self.fixed_poll_interval>=60 else '秒'}轮询"
             else:
                 # 优先级：游戏中 > 在线 > 离线 > 默认
                 if gameid:
