@@ -31,7 +31,7 @@ from .web_api import WebAdminAPI  # AstrBot 内置 WebUI
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.3.0",
+    "3.3.1",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -1490,7 +1490,7 @@ class SteamStatusMonitorV3(Star):
             sid = player.get("sid", "")
             if not sid:
                 continue
-            frame_path = get_avatar_frame_path(
+            frame_path = await get_avatar_frame_path(
                 self.data_dir,
                 sid,
                 proxy=self.proxy,
@@ -1498,7 +1498,7 @@ class SteamStatusMonitorV3(Star):
             if not frame_path:
                 frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
                 if frame_url:
-                    frame_path = get_avatar_frame_path(
+                    frame_path = await get_avatar_frame_path(
                         self.data_dir,
                         sid,
                         frame_url,
@@ -1661,11 +1661,11 @@ class SteamStatusMonitorV3(Star):
             for p in rank_data:
                 sid = p.get("sid", "")
                 if sid:
-                    fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
+                    fp = await get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
                     if not fp:
                         frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
                         if frame_url:
-                            fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
+                            fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
                     if fp:
                         avatar_frame_paths[sid] = fp
 
@@ -1863,10 +1863,10 @@ class SteamStatusMonitorV3(Star):
         # 获取头像框
         from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
         avatar_frame_paths = {}
-        fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
+        fp = await get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
         if not fp:
             frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
-            if frame_url: fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
+            if frame_url: fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
         if fp: avatar_frame_paths[sid] = fp
         # 获取封面
         covers = {}
@@ -2778,11 +2778,11 @@ class SteamStatusMonitorV3(Star):
         for u in user_list:
             sid = u.get('sid', '')
             if sid:
-                fp = get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
+                fp = await get_avatar_frame_path(self.data_dir, sid, proxy=self.proxy)
                 if not fp:
                     frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
                     if frame_url:
-                        fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
+                        fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
                 if fp:
                     avatar_frame_paths[sid] = fp
         font_path = self.get_font_path('NotoSansHans-Regular.otf')

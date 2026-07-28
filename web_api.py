@@ -733,11 +733,20 @@ class WebAdminAPI:
             return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", ""))
         sid = str(data.get("steamid", ""))
-        if not gid or not sid or not sid.isdigit() or len(sid) != 17:
+        if not gid:
+            return json_response({"error": "invalid group_id"}, status_code=400)
+        if not sid:
+            return json_response({"error": "steamid required"}, status_code=400)
+        try:
+            resolved = await p.resolve_steam_input(sid)
+        except Exception:
+            resolved = None
+        if not resolved or not resolved.isdigit() or len(resolved) != 17:
             return json_response(
-                {"error": "invalid group_id or steamid"},
+                {"error": "无效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 8位好友码"},
                 status_code=400,
             )
+        sid = resolved
         groups = getattr(p, "group_steam_ids", {})
         if gid not in groups:
             groups[gid] = []

@@ -80,7 +80,7 @@ async def get_avatar_frame_url(steamid, proxy=None):
         print(f"[get_avatar_frame_url] 异常: {e}")
     return None
 
-def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
+async def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
     import hashlib, time
     frame_dir = os.path.join(data_dir, "avatar_frames")
     os.makedirs(frame_dir, exist_ok=True)
@@ -104,11 +104,14 @@ def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
     elif refresh_interval == 0 and os.path.exists(path):
         return path
     try:
-        resp = httpx.get(url, timeout=10, proxy=proxy)
-        if resp.status_code == 200:
-            with open(path, "wb") as f: f.write(resp.content)
-            return path
-    except Exception: pass
+        async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+                return path
+    except Exception:
+        pass
     return path if os.path.exists(path) else None
 
 async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
@@ -528,10 +531,10 @@ async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, 
     if api_key:
         playtime_hours = await get_playtime_hours(api_key, steamid, gameid, proxy=proxy)
         playtime_unowned = (playtime_hours == 0.0)
-    avatar_frame_path = get_avatar_frame_path(data_dir, steamid, proxy=proxy)
+    avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
-        avatar_frame_path = get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
+        avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
     img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")

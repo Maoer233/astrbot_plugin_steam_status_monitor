@@ -126,6 +126,9 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.3.1（2026/07/28）
+  - **Bug 修复**：WebUI 群聊管理添加玩家时，好友码和链接被拒绝；改用 resolve_steam_input 统一解析
+
 - V3.3.0（2026/07/28）
   - **Bug 修复**：免费游戏（如 Apex Legends）开始游戏通知中游玩时长显示"缺省"，修复 GetOwnedGames API 缺少 include_played_free_games 参数
   - **文档优化**：优化 README 绑定机制说明，明确 @用户 绑定方式，修正命令前缀描述

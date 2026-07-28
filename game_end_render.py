@@ -401,10 +401,10 @@ async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, ga
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
     # 获取横版封面（竖版缺失时叠加用）
     horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy)
-    avatar_frame_path = get_avatar_frame_path(data_dir, steamid, proxy=proxy)
+    avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
-        avatar_frame_path = get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
+        avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
     img = render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=font_path, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path)
     buf = io.BytesIO()
     img.save(buf, format="PNG")

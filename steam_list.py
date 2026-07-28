@@ -109,11 +109,11 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
     for u in user_list:
         sid = u.get("sid", "")
         if sid:
-            fp = get_avatar_frame_path(self.data_dir, sid, proxy=proxy)
+            fp = await get_avatar_frame_path(self.data_dir, sid, proxy=proxy)
             if not fp:
                 frame_url = await get_avatar_frame_url(sid, proxy=proxy)
                 if frame_url:
-                    fp = get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=proxy)
+                    fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=proxy)
             if fp:
                 avatar_frame_paths[sid] = fp
     # 渲染图片
