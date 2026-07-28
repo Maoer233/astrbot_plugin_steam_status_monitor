@@ -310,7 +310,7 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
     import asyncio
     url = (
         f"https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
-        f"?key={api_key}&steamid={steamid}&include_appinfo=0&appids_filter[0]={appid}"
+        f"?key={api_key}&steamid={steamid}&include_appinfo=0&include_played_free_games=1&appids_filter[0]={appid}"
     )
     for attempt in range(retry_times):
         try:

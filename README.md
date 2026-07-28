@@ -88,12 +88,12 @@
 - `/steam alllist [img|text]` 列出所有群聊玩家状态（默认图片，`text` 纯文本输出）
 - `/steam config` 查看当前插件配置
 - `/steam set [参数] [值]` 设置配置参数（如 `/steam set poll_interval_sec 30`）
-- `/steam addid [SteamID/链接/好友码] [@用户] [备注名]` 添加玩家并可选绑定QQ（支持多种格式）
+- `/steam addid [SteamID/链接/好友码] [@用户] [备注名]` 添加玩家并可选 **@用户** 绑定（通过 @ 群成员完成QQ绑定，支持多种格式）
 - `/steam delid [SteamID/好友码/链接]` 从本群监控列表删除SteamID
 - `/steam push_group [SteamID]` 添加id到联动推送的副群（轮询一次通知多个群聊）
 - `/steam delpush_group [SteamID]` 删除id联动推送的副群
 - `/steam openbox [SteamID/好友码/链接]` 查看指定SteamID的全部详细信息
-- `.steamwho @用户` / `.在干嘛 @用户`  即时查询QQ绑定玩家的Steam状态
+- `/steamwho @用户` / `/在干嘛 @用户`  即时查询 @绑定玩家的 Steam 状态
 - `/steam rank [天数]` 查看本群游戏时长排行榜（默认今日，可指定天数）
 - `/steam allrank [天数]` 查看所有群游戏时长排行榜（默认今日，可指定天数）
 - `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（默认每群独立排行；all=显式使用共享全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
@@ -126,9 +126,13 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.3.0（2026/07/28）
+  - **Bug 修复**：免费游戏（如 Apex Legends）开始游戏通知中游玩时长显示"缺省"，修复 GetOwnedGames API 缺少 include_played_free_games 参数
+  - **文档优化**：优化 README 绑定机制说明，明确 @用户 绑定方式，修正命令前缀描述
+
 - V3.2.7（2026/07/24）
-  - **群聊管理聚合**：群详情表格增加绑定QQ/备注列，添加SteamID时支持同时绑定QQ
-  - **批量导入**：新增"批量导入"按钮，支持空格分隔格式（SteamID/链接 QQ 备注），每行一条
+  - **群聊管理聚合**：群详情表格增加绑定(@)/备注列，添加SteamID时支持同时绑定QQ
+  - **批量导入**：新增"批量导入"按钮，支持空格分隔格式（SteamID/链接 @用户 备注），每行一条
 
 - V3.2.6（2026/07/24）
   - **Bug 修复**：甘特图数据源重复叠加导致出现幽灵时间段（session_records 和 play_records 同时存在时重复渲染）
@@ -172,8 +176,8 @@ pip install httpx pillow
 
 - V3.1.12（2026/07/08）
   - **QQ-SteamID 绑定系统**：addid 支持 @用户 [备注名]，绑定即监控
-  - **自定义备注名**：所有推送通知、list、rank、alllist、.在干嘛 图片优先显示备注
-  - **新增指令**：.steamwho @用户 / .在干嘛 @用户 即时查询单人 Steam 状态
+  - **自定义备注名**：所有推送通知、list、rank、alllist、/在干嘛 图片优先显示备注
+  - **新增指令**：/steamwho @用户 / /在干嘛 @用户 即时查询单人 Steam 状态
   - **delid/openbox 支持多格式**：好友码、链接均可
 
 - V3.1.11（2026/07/07）

@@ -31,7 +31,7 @@ from .web_api import WebAdminAPI  # AstrBot 内置 WebUI
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.2.7",
+    "3.3.0",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -1816,7 +1816,7 @@ class SteamStatusMonitorV3(Star):
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steamwho")
     async def steam_who(self, event: AstrMessageEvent, qq: str):
-        '''查询指定QQ绑定的Steam玩家状态（ .steamwho @用户 或 .在干嘛 @用户 ）'''
+        '''查询指定QQ绑定的Steam玩家状态（ /steamwho @用户 或 /在干嘛 @用户 ）'''
         
         m = re.search(r'\[CQ:at,qq=(\d+)\]|\[At:(\d+)\]|@.+?\((\d+)\)|@(\d+)', qq.strip()); qq_clean = m.group(1) or m.group(2) or m.group(3) or m.group(4) if m else qq.strip().lstrip('@')
         info = getattr(self, "_bind_data", {}).get(qq_clean)
@@ -1890,7 +1890,7 @@ class SteamStatusMonitorV3(Star):
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("在干嘛")
     async def steam_zai_gan_ma(self, event: AstrMessageEvent, qq: str):
-        '''.在干嘛 @用户 —— steamwho 的别名'''
+        '''/在干嘛 @用户 —— steamwho 的别名'''
         async for r in self.steam_who(event, qq):
             yield r
 
