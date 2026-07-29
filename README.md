@@ -126,6 +126,9 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.3.2（2026/07/29）
+  - **Bug 修复**：成就渲染 total_height 为浮点数导致 TypeError；修复为强制 int 转换
+
 - V3.3.1（2026/07/28）
   - **Bug 修复**：WebUI 群聊管理添加玩家时，好友码和链接被拒绝；改用 resolve_steam_input 统一解析
 

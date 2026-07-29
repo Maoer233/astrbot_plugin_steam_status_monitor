@@ -391,7 +391,7 @@ class AchievementMonitor:
             card_heights.append(card_h)
             card_texts.append((name_lines, desc_lines, percent_str))
             percents.append(percent_num)
-        total_height = padding_v + header_h + padding_v + sum(card_heights) + card_gap * (len(card_heights) - 1) + padding_v
+        total_height = int(padding_v + header_h + padding_v + sum(card_heights) + card_gap * (len(card_heights) - 1) + padding_v)
 
         img = Image.new('RGBA', (width, total_height), (20, 26, 33, 255))
         draw = ImageDraw.Draw(img)
