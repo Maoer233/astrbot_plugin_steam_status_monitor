@@ -57,6 +57,12 @@
     "hint": "开启后玩家退出游戏会推送结束通知（含游玩时长），关闭则只推送开始游戏（修改后重启AstrBot生效）",
     "default": true
   },
+  "enable_network_fluctuation_notify": {
+    "description": "网络波动通知开关",
+    "type": "bool",
+    "hint": "开启后当检测到网络波动时发送纯文本提醒，关闭则不发送（修改后重启AstrBot生效）",
+    "default": true
+  },
   "notify_send_image": {
     "description": "通知发送图片开关",
     "type": "bool",

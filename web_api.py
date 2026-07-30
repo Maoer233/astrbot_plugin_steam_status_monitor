@@ -1090,6 +1090,8 @@ class WebAdminAPI:
                 p.config[key] = bool(value)
             elif key == "enable_game_end_notify":
                 p.config[key] = bool(value)
+            elif key == "enable_network_fluctuation_notify":
+                p.config[key] = bool(value)
             elif key == "enable_achievement_poll":
                 p.config[key] = bool(value)
             elif key == "notify_send_image":

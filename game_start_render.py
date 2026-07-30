@@ -346,7 +346,7 @@ def get_font_path(font_name):
         return font_path2
     return font_name
 
-def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None):
+def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None, version=None):
     # 字体
     fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
@@ -518,9 +518,21 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     if online_text:
         draw.text((IMG_W - online_text_w, 10), online_text, font=font_online, fill=(120,180,255,180))
 
+    # 右下角版本号水印
+    if version:
+        try:
+            font_version = ImageFont.truetype(font_regular, 8)
+        except:
+            font_version = ImageFont.load_default()
+        v_text = f"v{version}"
+        v_bbox = draw.textbbox((0, 0), v_text, font=font_version)
+        v_w = v_bbox[2] - v_bbox[0]
+        v_h = v_bbox[3] - v_bbox[1]
+        draw.text((IMG_W - v_w - 6, IMG_H - v_h - 4), v_text, font=font_version, fill=(33, 46, 49, 120))
+
     return img.convert("RGB")
 
-async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, game_name, api_key=None, superpower=None, online_count=None, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None):
+async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, game_name, api_key=None, superpower=None, online_count=None, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, version=None):
     print(f"[render_game_start] superpower参数: {superpower}")
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
@@ -535,7 +547,7 @@ async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, 
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
         avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
-    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path)
+    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path, version=version)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)

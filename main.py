@@ -31,7 +31,7 @@ from .web_api import WebAdminAPI  # AstrBot 内置 WebUI
     "steam_status_monitor_V3",
     "Maoer",
     "Steam状态监控插件V2版",
-    "3.3.2",
+    "3.3.3",
     "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
 )
 class SteamStatusMonitorV3(Star):
@@ -440,6 +440,7 @@ class SteamStatusMonitorV3(Star):
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
+        self._plugin_version = "3.3.3"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -1976,7 +1977,7 @@ class SteamStatusMonitorV3(Star):
             online_count = await self.get_game_online_count(gameid)
             img_bytes = await render_game_start(
                 self.data_dir, steamid, player_name, avatar_url, gameid, zh_game_name, api_key=self.API_KEY, superpower=superpower, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, online_count=online_count, appid=gameid
-            , proxy=self.proxy)
+                , proxy=self.proxy, version=self._plugin_version)
             logger.info(f"[测试开始游戏渲染] render_game_start 返回类型: {type(img_bytes)} 长度: {len(img_bytes) if img_bytes else 'None'}")
             if img_bytes:
                 import tempfile
@@ -2271,7 +2272,8 @@ class SteamStatusMonitorV3(Star):
                     api_key=self.API_KEY, superpower=superpower,
                     sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
                     sgdb_game_name=en_game_name, online_count=online_count,
-                    appid=noti.get("gameid"), proxy=self.proxy)
+                    appid=noti.get("gameid"), proxy=self.proxy,
+                    version=self._plugin_version)
             else:
                 from datetime import datetime
                 end_time_str = datetime.fromtimestamp(noti["quit_time"]).strftime("%Y-%m-%d %H:%M")
@@ -2530,6 +2532,10 @@ class SteamStatusMonitorV3(Star):
                         self._pending_quit_tasks[sid].pop(current_gameid, None)
                     quit_info["notified"] = True
                     msg = f"⚠️ {name} 游玩 {zh_game_name} 时网络波动了"
+                    # 网络波动通知开关检查
+                    if not self.config.get('enable_network_fluctuation_notify', True):
+                        last_states[sid] = status
+                        continue
                     if skip_push:
                         last_states[sid] = status
                         continue
