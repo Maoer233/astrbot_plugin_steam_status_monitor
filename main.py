@@ -2049,7 +2049,7 @@ class SteamStatusMonitorV3(Star):
             img_bytes = await render_game_end(
                 self.data_dir, steamid, player_name, avatar_url, gameid, zh_game_name,
                 end_time_str, tip_text, duration_h, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, appid=gameid
-            , proxy=self.proxy)
+            , proxy=self.proxy, api_key=self.API_KEY)
             msg = f"👋 {player_name} 不玩 {zh_game_name} 了\n游玩时间 {duration_h:.1f}小时"
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -2297,7 +2297,7 @@ class SteamStatusMonitorV3(Star):
                     end_time_str, tip_text, duration_h,
                     sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
                     sgdb_game_name=en_game_name, appid=noti.get("gameid"),
-                    proxy=self.proxy)
+                    proxy=self.proxy, api_key=self.API_KEY)
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(img_bytes)
