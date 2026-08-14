@@ -45,6 +45,12 @@
     "hint": "开启后玩家游戏过程中解锁成就会推送通知，关闭则完全不轮询成就（修改后重启AstrBot生效）",
     "default": true
   },
+  "enable_steam_style": {
+    "description": "Steam列表渲染风格开关",
+    "type": "bool",
+    "hint": "开启后 /steam list、/steamwho、/steam alllist 等列表图片使用新版steam风格；关闭则使用原卡片风格（含封面/群号/SteamID/下次轮询）（修改后重启AstrBot生效）",
+    "default": true
+  },
   "enable_game_start_notify": {
     "description": "游戏开始通知开关",
     "type": "bool",

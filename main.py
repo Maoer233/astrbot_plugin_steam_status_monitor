@@ -1869,16 +1869,16 @@ class SteamStatusMonitorV3(Star):
             frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
             if frame_url: fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
         if fp: avatar_frame_paths[sid] = fp
-        # 获取封面
+        # 渲染列表卡片（新版steam风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取）
+        from .steam_list_render import render_steam_list_image
+        font_path = self.get_font_path('NotoSansHans-Regular.otf')
+        steam_style = self.config.get('enable_steam_style', True)
         covers = {}
-        if gameid:
+        if not steam_style and gameid:
             from .game_start_render import get_cover_path
             cp = await get_cover_path(self.data_dir, gameid, game or zh_game_name, proxy=self.proxy)
             if cp: covers[sid] = cp
-        # 渲染列表卡片
-        from .steam_list_render import render_steam_list_image
-        font_path = self.get_font_path('NotoSansHans-Regular.otf')
-        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
         if img_bytes:
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -2792,16 +2792,18 @@ class SteamStatusMonitorV3(Star):
                 if fp:
                     avatar_frame_paths[sid] = fp
         font_path = self.get_font_path('NotoSansHans-Regular.otf')
-        # 获取封面
+        # 新版steam风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取
+        steam_style = self.config.get('enable_steam_style', True)
         covers = {}
-        for u in user_list:
-            gid = u.get('gameid', '')
-            if gid:
-                from .game_start_render import get_cover_path
-                cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=self.proxy)
-                if cp:
-                    covers[u['sid']] = cp
-        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
+        if not steam_style:
+            for u in user_list:
+                gid = u.get('gameid', '')
+                if gid:
+                    from .game_start_render import get_cover_path
+                    cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=self.proxy)
+                    if cp:
+                        covers[u['sid']] = cp
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
         if img_bytes:
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
