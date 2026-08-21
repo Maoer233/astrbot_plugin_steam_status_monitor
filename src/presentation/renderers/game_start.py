@@ -5,6 +5,8 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont
 import random
 
+from ...shared.paths import FONTS_DIR, IMAGES_DIR
+
 BG_COLOR_TOP = (49, 80, 66)
 BG_COLOR_BOTTOM = (28, 35, 44)
 AVATAR_SIZE = 80
@@ -224,7 +226,7 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
             print(f"[get_cover_path] SGDB下载异常: {e} url={url}")
     # 新增：SGDB未收录或下载失败时，使用missingcover.jpg
     print(f"[get_cover_path] SGDB未收录或下载失败: {gameid} {game_name}，使用默认封面")
-    missing_cover = os.path.join(os.path.dirname(__file__), "missingcover.jpg")
+    missing_cover = str(IMAGES_DIR / "missingcover.jpg")
     if os.path.exists(missing_cover):
         return missing_cover
     return None
@@ -337,7 +339,7 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
     return 0.0
 
 def get_font_path(font_name):
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_path = os.path.join(fonts_dir, font_name)
     if os.path.exists(font_path):
         return font_path
@@ -348,7 +350,7 @@ def get_font_path(font_name):
 
 def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None, version=None):
     # 字体
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
     font_medium = os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
     if not os.path.exists(font_regular):

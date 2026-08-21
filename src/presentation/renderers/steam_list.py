@@ -3,7 +3,8 @@ import io
 import math
 import httpx
 from PIL import Image, ImageDraw, ImageFont
-from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
+from .game_start import get_avatar_frame_url, get_avatar_frame_path
+from ...shared.paths import FONTS_DIR
 import asyncio
 import logging
 
@@ -120,7 +121,7 @@ def make_status_gradient(card_w, card_h, status_color, status):
 
 
 def get_font_path(font_name):
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_path = os.path.join(fonts_dir, font_name)
     if os.path.exists(font_path):
         return font_path
@@ -132,7 +133,7 @@ def get_font_path(font_name):
 async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None, avatar_frame_paths=None, covers=None):
     # 字体
     if font_path is None:
-        font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansHans-Regular.otf')
+        font_path = os.path.join(str(FONTS_DIR), 'NotoSansHans-Regular.otf')
     logger.info(f"[Font] render_steam_list_image 使用字体路径: {font_path}")
     try:
         font_title = ImageFont.truetype(font_path, 28)

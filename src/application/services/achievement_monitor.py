@@ -7,6 +7,9 @@ import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 from typing import Set, Optional, Dict, Any
 
+from ...shared.paths import FONTS_DIR
+
+
 class AchievementMonitor:
     def __init__(self, data_dir: str, steam_api_base: str = "https://api.steampowered.com", proxy: str = None):
         self.data_dir = data_dir
@@ -295,7 +298,7 @@ class AchievementMonitor:
         max_text_width = width - padding_h * 2 - icon_size - icon_margin_right - 18
 
         # 字体路径
-        fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+        fonts_dir = str(FONTS_DIR)
         # 优先使用传入 font_path
         font_regular = font_path or os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
         font_medium = font_regular.replace('Regular', 'Medium') if 'Regular' in font_regular else os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')

@@ -15,7 +15,7 @@ from astrbot.core.star.command_management import (
 
 # 尝试导入父包的工具函数（运行时可能因 AstrBot 加载机制失败，优雅降级）
 try:
-    from .rank_render import render_rank_image
+    from ..renderers.rank import render_rank_image
 except ImportError:
     render_rank_image = None
 
@@ -1298,7 +1298,7 @@ class WebAdminAPI:
                 log.append(f"[SGDB API] 异常: {e}")
             log.append("[竖版封面] 开始测试...")
             try:
-                from .game_start_render import get_sgdb_vertical_cover
+                from ..renderers.game_start import get_sgdb_vertical_cover
                 sgdb_url = await get_sgdb_vertical_cover("NEKOPARA Vol. 0", sgdb_api_key=sgdb_k, appid="385800", proxy=proxy)
                 if sgdb_url:
                     results["sgdb_cover"] = "ok"
