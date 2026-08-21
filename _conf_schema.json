@@ -87,6 +87,12 @@
     "hint": "填写代理IP和端口，如：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890",
     "default": ""
   },
+  "ssl_ca_file": {
+    "description": "自定义 CA 证书文件",
+    "type": "string",
+    "hint": "填写宿主环境内 PEM 格式 CA 文件的绝对路径；留空使用系统默认信任链，请勿关闭 TLS 校验",
+    "default": ""
+  },
   "cache_avatar_hours": {
     "description": "头像缓存时间（小时）-修改后重启AstrBot生效",
     "type": "int",

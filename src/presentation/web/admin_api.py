@@ -11,6 +11,7 @@ from functools import wraps
 from astrbot.api.web import error_response, json_response, request
 
 from .response_cache import AsyncTTLCache
+from ...shared.network import configure_tls, httpx_client_kwargs
 from .statistics import (
     build_dashboard_stats,
     build_groups,
@@ -988,8 +989,15 @@ class WebAdminAPI:
                 p.proxy = p.config.get("proxy_url") if bool(value) and p.config.get("proxy_url") else None
             elif key == "proxy_url":
                 p.config[key] = str(value)
-                if p.config.get("enable_proxy"):
-                    p.proxy = str(value)
+                p.proxy = str(value) if p.config.get("enable_proxy") and value else None
+            elif key == "ssl_ca_file":
+                try:
+                    configure_tls(value)
+                except ValueError as exc:
+                    return error_response(str(exc), status_code=400)
+                p.SSL_CA_FILE = str(value or "")
+        if hasattr(p, "achievement_monitor"):
+            p.achievement_monitor.proxy = p.proxy
         if hasattr(p.config, "save_config"):
             p.config.save_config()
         return json_response({"ok": True})
@@ -1137,7 +1145,7 @@ class WebAdminAPI:
         else:
             try:
                 url = f"{p.STEAM_API_BASE}/ISteamUser/GetPlayerSummaries/v2/?key={ak}&steamids=0"
-                async with httpx.AsyncClient(timeout=10, proxy=proxy) as c:
+                async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as c:
                     r = await c.get(url)
                     results["steam_api"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
                     log.append(f"[Steam API] HTTP {r.status_code}")
@@ -1148,7 +1156,7 @@ class WebAdminAPI:
         # Steam Store + 横版封面
         log.append("[Steam Store] 开始测试...")
         try:
-            async with httpx.AsyncClient(timeout=10, proxy=proxy) as c:
+            async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as c:
                 r = await c.get(f"{p.STEAM_STORE_BASE}/api/appdetails?appids=730")
                 results["steam_store"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
                 log.append(f"[Steam Store] HTTP {r.status_code}")
@@ -1178,7 +1186,7 @@ class WebAdminAPI:
         else:
             log.append("[SGDB API] 开始测试...")
             try:
-                async with httpx.AsyncClient(timeout=10, proxy=proxy) as c:
+                async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as c:
                     r = await c.get(f"{p.SGDB_API_BASE}/api/v2/games/steam/385800", headers={"Authorization": f"Bearer {sgdb_k}"})
                     results["sgdb"] = "ok" if r.status_code == 200 else f"http_{r.status_code}"
                     log.append(f"[SGDB API] HTTP {r.status_code}, url=games/steam/385800")
@@ -1248,7 +1256,7 @@ class WebAdminAPI:
             if not ak:
                 return json_response({"error": "no api key"})
             url = f"{p.STEAM_API_BASE}/ISteamUser/GetPlayerSummaries/v2/?key={ak}&steamids={steamid}"
-            async with httpx.AsyncClient(timeout=10, proxy=getattr(p, "proxy", None)) as c:
+            async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(getattr(p, "proxy", None))) as c:
                 r = await c.get(url)
                 if r.status_code == 200:
                     players = r.json().get("response", {}).get("players", [])

@@ -14,7 +14,11 @@ class ModularStructureTests(unittest.TestCase):
         classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
         imports = [node for node in tree.body if isinstance(node, ast.ImportFrom)]
 
-        self.assertEqual([], classes)
+        self.assertEqual(["Main"], [node.name for node in classes])
+        self.assertEqual("SteamStatusMonitorV3", classes[0].bases[0].id)
+        self.assertTrue(
+            all(isinstance(node, (ast.Expr, ast.Pass)) for node in classes[0].body)
+        )
         self.assertTrue(
             any(
                 node.module == "src.plugin.steam_status_monitor"

@@ -1,5 +1,6 @@
-from astrbot.api.star import Star, register, Context
-from astrbot.api import logger
+from astrbot.api.star import Star, Context
+from ..shared.logging import logger, register_sensitive_values
+from ..shared.network import configure_tls, httpx_client_kwargs, requests_verify
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image  # 确保已导入 Image
@@ -30,13 +31,6 @@ from ..infrastructure.persistence.plugin_data import PersistenceMixin
 from ..infrastructure.clients.steam import SteamClientMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 
-@register(
-    "steam_status_monitor_V3",
-    "Maoer",
-    "Steam状态监控插件V2版",
-    "3.3.3",
-    "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
-)
 class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
 
     def __init__(self, context: Context, config=None):
@@ -83,6 +77,14 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             logger.info(f"已自动迁移旧 steam_ids 配置到 group_steam_ids['default']")
         # 读取配置项，提供默认值
         self.API_KEY = self.config.get('steam_api_key', '')
+        register_sensitive_values(self.API_KEY, self.config.get('sgdb_api_key', ''))
+        self.SSL_CA_FILE = self.config.get('ssl_ca_file', '')
+        try:
+            configure_tls(self.SSL_CA_FILE)
+        except ValueError as exc:
+            logger.error(f"TLS 配置无效，将使用系统默认信任链: {exc}")
+            self.SSL_CA_FILE = ''
+            configure_tls()
         # API Base URL（支持自定义，默认官方地址）
         self.STEAM_API_BASE = (self.config.get('steam_api_base', '') or 'https://api.steampowered.com').rstrip('/')
         self.STEAM_STORE_BASE = (self.config.get('steam_store_base', '') or 'https://store.steampowered.com').rstrip('/')
@@ -192,13 +194,11 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
         await asyncio.sleep(10)
         all_logs = []
-        seen_sids = set()  # 防止同一sid在多个群中被重复推送
         for group_id in self.group_steam_ids:
             steam_ids = self.group_steam_ids[group_id]
             group_lines = []
             for sid in steam_ids:
-                if sid in seen_sids: continue
-                seen_sids.add(sid)
+                # 状态基线按群保存；即使同一玩家属于多个群，也必须逐群初始化。
                 msg = await self.check_status_change(group_id, single_sid=sid, skip_push=True)
                 if msg:
                     group_lines.append(msg)
@@ -289,9 +289,9 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                 # terminate 主动取消，正常退出循环，不要吞掉
                 logger.info("[SteamStatusMonitor] 主轮询循环已取消")
                 raise
-            except Exception as e:
-                # 其他异常：记录后继续循环，防止单次异常导致轮询彻底失效
-                logger.error(f"[SteamStatusMonitor] 主轮询循环异常，已吞并继续: {e}")
+            except Exception:
+                # 其他异常：保留堆栈后继续循环，防止单次异常导致轮询彻底失效
+                logger.exception("[SteamStatusMonitor] 主轮询循环异常，5 秒后继续")
                 await asyncio.sleep(5)
 
     async def terminate(self):
@@ -302,9 +302,8 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                 t.cancel()
         # 取消所有延迟退出检查任务
         if hasattr(self, '_pending_quit_tasks'):
-            for sid_tasks in self._pending_quit_tasks.values():
-                for task in sid_tasks.values():
-                    task.cancel()
+            for task in self._pending_quit_tasks.values():
+                task.cancel()
             self._pending_quit_tasks.clear()
         # 停止所有成就定时任务
         for task in self.achievement_poll_tasks.values():
@@ -326,7 +325,8 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         if isinstance(img_path_or_bytes, PILImage.Image):
             img = img_path_or_bytes.convert("RGB")
         elif isinstance(img_path_or_bytes, str) and (img_path_or_bytes.startswith("http://") or img_path_or_bytes.startswith("https://")):
-            resp = requests.get(img_path_or_bytes)
+            resp = requests.get(img_path_or_bytes, timeout=15, verify=requests_verify())
+            resp.raise_for_status()
             img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
         elif isinstance(img_path_or_bytes, bytes):
             img = PILImage.open(io.BytesIO(img_path_or_bytes)).convert("RGB")
@@ -1597,43 +1597,35 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             return None
 
     async def _send_merged_notification(self, group_id, notifications):
-        """将一批通知合并为一条 MessageChain 并推送到所有对应 session"""
+        """按接收会话过滤通知后合并发送，避免联动群收到无关玩家消息。"""
         if not notifications:
             return
         send_text = self.config.get('notify_send_text', True)
         send_image = self.config.get('notify_send_image', True)
+        session_notifications = {}
+        for notification in notifications:
+            for session in self._get_notify_sessions(group_id, notification["sid"]):
+                session_notifications.setdefault(session, []).append(notification)
 
-        msg_chain = []
-
-        for noti in notifications:
-            if noti["type"] == "start":
-                line = f"🟢【{noti['name']}】开始游玩 {noti['game']}\n"
-            else:
-                line = f"👋 {noti['name']} 不玩 {noti['game']}，游玩时间 {noti['duration_str']}\n"
-            if send_text:
-                msg_chain.append(Plain(line))
-            if send_image:
-                img_path = await self._render_notification_image(noti)
-                if img_path:
-                    msg_chain.append(Image.fromFileSystem(img_path))
-
-        if not msg_chain:
-            return
-
-        # 收集所有通知涉及的 sid，合并为所有需要推的 session
-        all_sids = set(n["sid"] for n in notifications)
-        all_sessions = []
-        for n in notifications:
-            sessions = self._get_notify_sessions(group_id, n["sid"])
-            for s in sessions:
-                if s not in all_sessions:
-                    all_sessions.append(s)
-
-        for session in all_sessions:
+        for session, matched_notifications in session_notifications.items():
+            msg_chain = []
+            for notification in matched_notifications:
+                if notification["type"] == "start":
+                    line = f"🟢【{notification['name']}】开始游玩 {notification['game']}\n"
+                else:
+                    line = f"👋 {notification['name']} 不玩 {notification['game']}，游玩时间 {notification['duration_str']}\n"
+                if send_text:
+                    msg_chain.append(Plain(line))
+                if send_image:
+                    img_path = await self._render_notification_image(notification)
+                    if img_path:
+                        msg_chain.append(Image.fromFileSystem(img_path))
+            if not msg_chain:
+                continue
             try:
                 await self.context.send_message(session, MessageChain(msg_chain))
-            except Exception as e:
-                logger.error(f"推送合并通知失败 (group_id={group_id}): {e}")
+            except Exception:
+                logger.exception(f"推送合并通知失败 (group_id={group_id}, session={session})")
 
     async def _flush_pending_end_notifications(self):
         """将 _pending_end_notifications 缓冲区中的延迟退出通知按群合并后发送，发送完毕后清空"""
@@ -1801,17 +1793,16 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                             asyncio.create_task(self.achievement_delayed_final_check(group_id, sid, prev_gameid, player_name, game_name))
                     except Exception as e:
                         logger.error(f"结算成就时异常: {e}")
-                    # 启动延迟任务
+                    # 延迟退出任务必须包含群维度，避免同一玩家在多个群的任务互相取消。
                     if not hasattr(self, '_pending_quit_tasks'):
                         self._pending_quit_tasks = {}
-                    if sid not in self._pending_quit_tasks:
-                        self._pending_quit_tasks[sid] = {}
-                    old_task = self._pending_quit_tasks[sid].get(prev_gameid)
+                    task_key = (group_id, sid, prev_gameid)
+                    old_task = self._pending_quit_tasks.get(task_key)
                     if old_task:
                         old_task.cancel()
                     if not skip_push:
                         task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
-                        self._pending_quit_tasks[sid][prev_gameid] = task
+                        self._pending_quit_tasks[task_key] = task
                 else:
                     logger.info(f"[游戏过滤] {name} 退出游戏 {zh_prev_game_name}({prev_gameid}) 被跳过（黑白名单过滤）")
                 last_quit_times.setdefault(sid, {})[prev_gameid] = now
@@ -1825,10 +1816,11 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                 quit_info = pending_quit.setdefault(sid, {}).get(current_gameid)
                 # 检查是否为网络波动（3分钟内重启同一游戏）
                 if quit_info and now - quit_info["quit_time"] <= 180 and not quit_info.get("notified"):
-                    # 取消延迟任务
-                    if hasattr(self, '_pending_quit_tasks') and self._pending_quit_tasks.get(sid, {}).get(current_gameid):
-                        self._pending_quit_tasks[sid][current_gameid].cancel()
-                        self._pending_quit_tasks[sid].pop(current_gameid, None)
+                    # 只取消当前群对应的延迟任务。
+                    task_key = (group_id, sid, current_gameid)
+                    pending_task = getattr(self, '_pending_quit_tasks', {}).pop(task_key, None)
+                    if pending_task:
+                        pending_task.cancel()
                     quit_info["notified"] = True
                     msg = f"⚠️ {name} 游玩 {zh_game_name} 时网络波动了"
                     # 网络波动通知开关检查
@@ -1996,7 +1988,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             return None
         url = f"{self.STEAM_API_BASE}/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={gameid}"
         try:
-            async with httpx.AsyncClient(timeout=10, proxy=self.proxy) as client:
+            async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(self.proxy)) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     data = resp.json()

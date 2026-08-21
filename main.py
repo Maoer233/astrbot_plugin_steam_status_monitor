@@ -5,4 +5,9 @@
 
 from .src.plugin.steam_status_monitor import SteamStatusMonitorV3
 
-__all__ = ["SteamStatusMonitorV3"]
+
+class Main(SteamStatusMonitorV3):
+    """AstrBot plugin entry point."""
+
+
+__all__ = ["Main", "SteamStatusMonitorV3"]

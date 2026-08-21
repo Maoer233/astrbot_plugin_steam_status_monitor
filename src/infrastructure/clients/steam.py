@@ -3,7 +3,9 @@ import os
 import time
 
 import httpx
-from astrbot.api import logger
+
+from ...shared.logging import logger
+from ...shared.network import httpx_client_kwargs
 
 
 class SteamClientMixin:
@@ -17,7 +19,7 @@ class SteamClientMixin:
         retry = retry if retry is not None else self.RETRY_TIMES
         for attempt in range(retry):
             try:
-                async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
+                async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                     resp = await client.get(url)
                     if resp.status_code != 200:
                         raise Exception(f"HTTP {resp.status_code}")
@@ -71,7 +73,7 @@ class SteamClientMixin:
             delay = 1
             for attempt in range(retry):
                 try:
-                    async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
+                    async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                         resp = await client.get(url)
                         if resp.status_code != 200:
                             raise Exception(f"HTTP {resp.status_code}")
@@ -171,7 +173,7 @@ class SteamClientMixin:
             f"?key={self.API_KEY}&vanityurl={vanity}"
         )
         try:
-            async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
+            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                 resp = await client.get(url)
                 if resp.status_code != 200:
                     logger.warning(f"[vanity解析] HTTP {resp.status_code} (vanity={vanity})")

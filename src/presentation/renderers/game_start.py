@@ -6,6 +6,8 @@ from PIL import Image, ImageDraw, ImageFont
 import random
 
 from ...shared.paths import FONTS_DIR, IMAGES_DIR
+from ...shared.logging import logger
+from ...shared.network import httpx_client_kwargs
 
 BG_COLOR_TOP = (49, 80, 66)
 BG_COLOR_BOTTOM = (28, 35, 44)
@@ -53,7 +55,7 @@ async def get_avatar_frame_url(steamid, proxy=None):
             return cached_url
     try:
         url = f"https://steamcommunity.com/profiles/{steamid}/?l=english"
-        async with httpx.AsyncClient(timeout=10, proxy=proxy, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, **httpx_client_kwargs(proxy)) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
                 div_match = re.search(r'<div class="profile_avatar_frame">(.*?)</div>', resp.text, re.DOTALL)
@@ -106,7 +108,7 @@ async def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
     elif refresh_interval == 0 and os.path.exists(path):
         return path
     try:
-        async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+        async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
                 with open(path, "wb") as f:
@@ -124,7 +126,7 @@ async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=N
     headers = {"Authorization": f"Bearer {sgdb_api_key}"}
     search_name = sgdb_game_name if sgdb_game_name else game_name
     search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{urllib.parse.quote(search_name)}"
-    async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+    async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
         try:
             resp = await client.get(search_url, headers=headers)
             data = resp.json()
@@ -319,7 +321,7 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
     )
     for attempt in range(retry_times):
         try:
-            async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+            async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     data = resp.json()
