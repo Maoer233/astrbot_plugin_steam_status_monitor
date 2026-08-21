@@ -263,6 +263,102 @@ Steam 资料或游戏详情不可见时，请检查目标玩家的 Steam 隐私�
 └── requirements.txt            # Python 运行时依赖
 ```
 
+## 功能与文件地图
+
+以下位置以当前源码为准，用于定位功能实现、数据边界和维护入口。
+
+### 插件入口与核心编排
+
+| 文件 | 类或关键方法 | 职责 |
+| --- | --- | --- |
+| `main.py` | `SteamStatusMonitorV3` | AstrBot 兼容入口，仅导出插件类。 |
+| `src/plugin/steam_status_monitor.py` | `SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star)` | 插件生命周期、聊天指令、全局轮询、状态比较、通知、排行与成就编排。 |
+| `src/plugin/steam_status_monitor.py` | `global_poll_and_log_loop()` | 合并各群玩家并批量轮询 Steam 状态，同时调度每日排行。 |
+| `src/plugin/steam_status_monitor.py` | `check_status_change()` | 识别开始游戏、切换游戏和结束游戏，并触发记录及通知。 |
+| `src/plugin/steam_status_monitor.py` | `_daily_rank_push()` | 按配置向目标群推送昨日分群或全局排行。 |
+| `src/plugin/steam_status_monitor.py` | `terminate()` | 停止后台任务并强制保存运行数据。 |
+
+### 应用服务与领域逻辑
+
+| 文件 | 类或函数 | 职责 |
+| --- | --- | --- |
+| `src/application/services/achievement_monitor.py` | `AchievementMonitor` | 查询成就、比较快照、应用游戏过滤与成就黑名单，并渲染成就通知。 |
+| `src/application/services/openbox.py` | `SteamOpenboxService` | 为 `/steam openbox` 查询并整理玩家 API 字段。 |
+| `src/application/services/steam_list.py` | `SteamListService` | 汇总本群或全部群玩家状态，供列表指令渲染。 |
+| `src/domain/ranking/push_scopes.py` | `build_rank_push_scopes()` | 规范化每日排行目标群，区分分群数据与全局数据并对群号去重。 |
+
+### Steam 接口与本地持久化
+
+| 文件 | 类或关键方法 | 职责 |
+| --- | --- | --- |
+| `src/infrastructure/clients/steam.py` | `SteamClientMixin` | 调用 Steam Web API 和 Store API，批量查询玩家状态，解析 SteamID64、好友码、资料链接及自定义 ID，并获取游戏名称和封面。 |
+| `src/infrastructure/persistence/plugin_data.py` | `PersistenceMixin` | 在 `data/steam_status_monitor/` 下加载和保存 JSON 数据，同时维护字体缓存。 |
+
+主要持久化文件如下：
+
+| 文件模式 | 内容 |
+| --- | --- |
+| `steam_groups.json` | 各群监控的 SteamID 列表。 |
+| `bind_data.json` | 聊天平台用户、SteamID 和备注名的绑定关系。 |
+| `notify_sessions.json` | 各群的 AstrBot 通知会话。 |
+| `push_groups.json` | SteamID 对应的联动推送群。 |
+| `rank_push_groups.json` | 每日排行目标群及分群或全局统计模式。 |
+| `play_records.json` | 按日期、玩家和游戏汇总的游玩分钟数，保存时清理超过 30 天的数据。 |
+| `session_records.json` | 单次游戏会话，供甘特图和热力图使用，保存时清理超过 90 天的数据。 |
+| `group_<群号>_states.json` | 分群玩家最后状态。 |
+| `group_<群号>_start_play_times.json` | 分群玩家各游戏的开始时间。 |
+| `group_<群号>_last_quit_times.json` | 分群玩家最后退出时间。 |
+| `group_<群号>_pending_logs.json` | 分群待处理日志。 |
+| `group_<群号>_pending_quit.json` | 分群延迟确认的退出状态。 |
+| `group_<群号>_recent_games.json` | 分群最近游戏记录。 |
+
+`/data/steam_status_monitor/` 已加入 `.gitignore`。部署、迁移或备份时仍应单独保护该目录，因为其中可能包含群号、用户绑定、SteamID、通知会话和活动记录。
+
+### 图片渲染
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/presentation/renderers/game_start.py` | 开始游戏通知图片，以及头像、头像框和竖版封面处理。 |
+| `src/presentation/renderers/game_end.py` | 结束游戏通知图片。 |
+| `src/presentation/renderers/rank.py` | 游戏时长排行榜图片。 |
+| `src/presentation/renderers/steam_list.py` | 玩家状态列表图片。 |
+| `assets/` | 字体、默认图片和文案资源。 |
+
+### 管理页面
+
+| 文件 | 类或函数 | 职责 |
+| --- | --- | --- |
+| `src/presentation/web/admin_api.py` | `WebAdminAPI` | 向 AstrBot Plugin Pages 注册 Dashboard、排行榜图片、甘特图、热力图、群组、绑定、推送、配置、指令权限、玩家、封面和连通性测试接口。 |
+| `src/presentation/web/response_cache.py` | `AsyncTTLCache` | 为统计响应提供 TTL 缓存、同键并发合并、取消保护和按名称失效。 |
+| `src/presentation/web/statistics.py` | `build_dashboard_stats()`、`build_groups()`、`build_player_search_index()`、`build_heatmap_data()` | 在工作线程中构建 Dashboard、群组、玩家搜索和热力图数据，减少事件循环阻塞。 |
+| `pages/steam-monitor/index.html` | — | Plugin Pages 页面结构。 |
+| `pages/steam-monitor/app.js` | — | 页面交互、数据请求和视图更新。 |
+| `pages/steam-monitor/style.css` | — | 页面样式。 |
+
+`WebAdminAPI` 注册的接口覆盖以下能力：
+
+- Dashboard 统计与排行榜图片；
+- 游玩甘特图、全局热力图和单玩家热力图；
+- 群组、群玩家和批量导入管理；
+- 用户绑定的新增、更新和删除；
+- 每日排行时间、目标群和统计范围设置；
+- 插件配置读取与更新，读取时隐藏 API Key；
+- 插件指令权限查询与更新；
+- 玩家搜索、头像、详情和游戏封面；
+- Steam API、Steam Store、SteamGridDB、封面和指定 SteamID 的连通性测试。
+
+所有管理接口均通过 AstrBot 的 `context.register_web_api()` 注册到 `steam_status_monitor_V3` 插件命名空间，不额外启动独立 Web 服务。
+
+### 测试覆盖
+
+| 文件 | 覆盖范围 |
+| --- | --- |
+| `tests/unit/test_modular_structure.py` | 根入口轻量化、分层文件存在性和插件 Mixin 继承关系。 |
+| `tests/unit/test_web_performance.py` | Web 统计缓存复用、失效、同键并发合并和统计结果兼容性。 |
+| `tests/test_rank_push.py` | 每日排行按群或全局取数、目标群去重。 |
+
+`tests/integration/` 当前仅保留目录结构，尚无集成测试文件。
+
 ## 开发与测试
 
 克隆仓库并安装依赖：
