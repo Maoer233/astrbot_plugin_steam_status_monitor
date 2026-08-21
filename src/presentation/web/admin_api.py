@@ -5,9 +5,18 @@ import base64
 import logging
 import mimetypes
 import os
+from datetime import datetime
 from functools import wraps
 
 from astrbot.api.web import error_response, json_response, request
+
+from .response_cache import AsyncTTLCache
+from .statistics import (
+    build_dashboard_stats,
+    build_groups,
+    build_heatmap_data,
+    build_player_search_index,
+)
 from astrbot.core.star.command_management import (
     list_commands,
     update_command_permission,
@@ -126,6 +135,16 @@ class WebAdminAPI:
 
     def __init__(self, plugin_instance):
         self.plugin = plugin_instance
+        self._response_cache = AsyncTTLCache()
+
+    async def _cached_response(self, key, ttl, builder):
+        payload = await self._response_cache.get_or_create(
+            key, ttl, lambda: asyncio.to_thread(builder)
+        )
+        return json_response(payload)
+
+    def invalidate_cache(self, *names):
+        self._response_cache.invalidate(*names)
 
     def register_routes(self, context):
         """Register all routes used by ``pages/steam-monitor``."""
@@ -219,82 +238,17 @@ class WebAdminAPI:
 
     async def _api_dashboard_stats(self, request):
         p = self.plugin
-        from datetime import datetime
-
-        groups = getattr(p, "group_steam_ids", {}) or {}
-        total_groups = len(groups)
-        all_sids = set()
-        for sids in groups.values():
-            all_sids.update(sids)
-        total_players = len(all_sids)
-        bind_data = getattr(p, "_bind_data", {}) or {}
-        total_bindings = len(bind_data)
-
-        today = p._get_day_key(0) if hasattr(p, "_get_day_key") else datetime.now().strftime("%Y-%m-%d")
-        play_records = getattr(p, "play_records", {}) or {}
-        today_records = play_records.get(today, {})
-        today_active = len(today_records)
-        top_games = []
-        game_totals = {}
-        for sid_data in today_records.values():
-            for gid, ginfo in sid_data.items():
-                mins = ginfo.get("minutes", 0) if isinstance(ginfo, dict) else 0
-                name = ginfo.get("name", gid) if isinstance(ginfo, dict) else str(gid)
-                game_totals.setdefault(gid, {"name": name, "minutes": 0, "player_count": 0})
-                game_totals[gid]["minutes"] += mins
-                game_totals[gid]["player_count"] += 1
-        top_games = sorted(
-            [{"name": v["name"], "minutes": v["minutes"], "player_count": v["player_count"]}
-             for v in game_totals.values()],
-            key=lambda x: -x["minutes"],
-        )[:10]
-
-        player_totals = {}
-        for sid, sid_data in today_records.items():
-            total = sum(
-                ginfo.get("minutes", 0) if isinstance(ginfo, dict) else 0
-                for ginfo in sid_data.values()
-            )
-            if total > 0:
-                player_totals[sid] = total
-        top_players = sorted(
-            [{"sid": sid, "name": _get_player_display_name(p, sid), "minutes": mins}
-             for sid, mins in player_totals.items()],
-            key=lambda x: -x["minutes"],
-        )[:10]
-
-        last_states = getattr(p, "group_last_states", {}) or {}
-        online_count = 0
-        player_status_list = []  # 去重的玩家状态列表
-        seen_players = set()
-        for gid_states in last_states.values():
-            for sid, state in gid_states.items():
-                if sid in seen_players:
-                    continue
-                seen_players.add(sid)
-                if state.get("gameid") or state.get("personastate", 0) > 0:
-                    online_count += 1
-                game_name = state.get("gameextrainfo", "")
-                player_status_list.append({
-                    "sid": sid,
-                    "name": _get_player_display_name(p, sid),
-                    "gameid": state.get("gameid", ""),
-                    "game": game_name,
-                    "personastate": state.get("personastate", 0),
-                    "avatar_url": state.get("avatarfull") or state.get("avatar", ""),
-                })
-
-        return json_response({
-            "total_groups": total_groups,
-            "total_players": total_players,
-            "total_bindings": total_bindings,
-            "today_active_players": today_active,
-            "online_players": online_count,
-            "top_games_today": top_games,
-            "top_players_today": top_players,
-            "players": player_status_list,
-            "last_update": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        })
+        today = (
+            p._get_day_key(0)
+            if hasattr(p, "_get_day_key")
+            else datetime.now().strftime("%Y-%m-%d")
+        )
+        last_update = datetime.now().strftime("%Y-%m-%d %H:%M")
+        return await self._cached_response(
+            ("dashboard", today),
+            10,
+            lambda: build_dashboard_stats(p, today, last_update),
+        )
 
     # ────── Dashboard Rank Image ──────
 
@@ -541,76 +495,17 @@ class WebAdminAPI:
     # ────── Heatmap ──────
 
     async def _api_heatmap_data(self, request):
-        p = self.plugin
-        from datetime import datetime, timedelta
-
         try:
             period = int(request.query.get("period", "30"))
         except (ValueError, TypeError):
             period = 30
-
-        end_date = datetime.now().replace(hour=4, minute=0, second=0, microsecond=0)
-        if end_date <= datetime.now():
-            end_date += timedelta(days=1)
-        start_date = end_date - timedelta(days=period)
-
-        session_records = getattr(p, "session_records", {}) or {}
-        heatmap_daily = {}
-        player_totals = {}
-
-        # 1) 从 session_records 统计
-        for sid, sessions in session_records.items():
-            sid_total = 0
-            for s in sessions:
-                s_date = s.get("date", "")
-                if not s_date:
-                    continue
-                try:
-                    s_dt = datetime.strptime(s_date, "%Y-%m-%d")
-                except ValueError:
-                    continue
-                if s_dt < start_date or s_dt > end_date:
-                    continue
-                mins = s.get("duration_min", 0)
-                heatmap_daily[s_date] = heatmap_daily.get(s_date, 0) + mins
-                sid_total += mins
-            if sid_total > 0:
-                player_totals[sid] = {"name": _get_player_display_name(p, sid), "total_minutes": sid_total}
-
-        # 2) 补充 play_records 数据
-        play_records = getattr(p, "play_records", {}) or {}
-        day = start_date
-        while day <= end_date:
-            date_key = day.strftime("%Y-%m-%d")
-            day_records = play_records.get(date_key, {})
-            if day_records:
-                day_total = 0
-                for sid, games in day_records.items():
-                    mins = sum(
-                        (ginfo.get("minutes", 0) if isinstance(ginfo, dict) else 0)
-                        for ginfo in games.values()
-                    )
-                    if mins > 0:
-                        day_total += mins
-                        heatmap_daily[date_key] = heatmap_daily.get(date_key, 0) + mins
-                        if sid not in player_totals:
-                            player_totals[sid] = {"name": _get_player_display_name(p, sid), "total_minutes": mins}
-                        else:
-                            player_totals[sid]["total_minutes"] += mins
-            else:
-                # 确保空白日期也出现在 heatmap_daily 中
-                heatmap_daily.setdefault(date_key, 0)
-            day += timedelta(days=1)
-
-        players = sorted(
-            [{"sid": sid, **info} for sid, info in player_totals.items()],
-            key=lambda x: -x["total_minutes"],
+        period = max(1, min(period, 366))
+        now = datetime.now()
+        return await self._cached_response(
+            ("heatmap", period, now.strftime("%Y-%m-%d-%H")),
+            30,
+            lambda: build_heatmap_data(self.plugin, period, now),
         )
-
-        return json_response({
-            "heatmap_data": heatmap_daily,
-            "players": players,
-        })
 
     async def _api_heatmap_player(self, request):
         p = self.plugin
@@ -708,22 +603,12 @@ class WebAdminAPI:
     # ────── Groups ──────
 
     async def _api_groups_list(self, request):
-        p = self.plugin
-        groups = getattr(p, "group_steam_ids", {}) or {}
-        result = {}
-        for gid, sids in groups.items():
-            result[gid] = []
-            for sid in sids:
-                name = _get_player_display_name(p, sid)
-                last_state = (getattr(p, "group_last_states", {}) or {}).get(gid, {}).get(sid, {})
-                result[gid].append({
-                    "sid": sid,
-                    "name": name,
-                    "gameid": last_state.get("gameid", ""),
-                    "game": last_state.get("gameextrainfo", ""),
-                    "personastate": last_state.get("personastate", 0),
-                })
-        return json_response({"groups": result})
+        groups = await self._response_cache.get_or_create(
+            ("groups",),
+            10,
+            lambda: asyncio.to_thread(build_groups, self.plugin),
+        )
+        return json_response({"groups": groups})
 
     async def _api_groups_add(self, request):
         p = self.plugin
@@ -1112,18 +997,22 @@ class WebAdminAPI:
     # ────── Search ──────
 
     async def _api_players_search(self, request):
-        p = self.plugin
-        q = (request.query.get("q", "") or "").lower()
-        groups = getattr(p, "group_steam_ids", {}) or {}
-        bind_data = getattr(p, "_bind_data", {}) or {}
-        results = []
-        for gid, sids in groups.items():
-            for sid in sids:
-                name = _get_player_display_name(p, sid)
-                if q and q not in name.lower() and q not in sid:
-                    continue
-                results.append({"sid": sid, "name": name, "group_id": gid})
-        return json_response({"results": results[:50]})
+        query = (request.query.get("q", "") or "").lower()
+        index = await self._response_cache.get_or_create(
+            ("player_search_index",),
+            30,
+            lambda: asyncio.to_thread(build_player_search_index, self.plugin),
+        )
+        results = await asyncio.to_thread(
+            lambda: [
+                item
+                for item in index
+                if not query
+                or query in item["name"].lower()
+                or query in item["sid"]
+            ][:50]
+        )
+        return json_response({"results": results})
 
     # ────── Player Avatar / Info ──────
 
