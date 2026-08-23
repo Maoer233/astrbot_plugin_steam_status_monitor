@@ -29,7 +29,7 @@ async function navigateTo(page,params){const t=document.getElementById("hplayer-
   document.querySelectorAll(".nav-item").forEach(i=>i.classList.toggle("active",i.dataset.page===page));
   const c=document.getElementById("content");
   c.innerHTML='<div class="page-loading"><span class="mdi mdi-loading mdi-spin"></span><p>加载中...</p></div>';
-  try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,push:renderPush,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
+  try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,push:renderPush,qqofficial:renderQQOfficial,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
   catch(e){c.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>加载失败: ${escapeHtml(e.message)}</p><button class="btn btn-primary mt-8" onclick="navigateTo(${jsArg(page)})">重试</button></div>`}
 }
 
@@ -362,6 +362,47 @@ function safeImageUrl(value){
   }catch(_){}
   return""
 }
+
+async function renderQQOfficial(){
+  const data=await API.get("/api/qq-official/settings");const c=document.getElementById("content");
+  c.innerHTML=`<h2 class="page-title">QQ 官方机器人</h2>
+    <div class="card qq-config-card">
+      <div class="flex-between mb-20"><div><div class="card-title">基础接入配置</div><p class="form-help">配置仅保存在当前插件中；密钥读取时自动脱敏。修改后建议重载插件。</p></div><label class="toggle"><input type="checkbox" id="qq-official-enabled" ${data.qq_official_enabled?"checked":""}><span class="slider"></span></label></div>
+      <div class="settings-grid">
+        <div class="form-group"><label class="form-label" for="qq-appid">机器人 AppID</label><input id="qq-appid" class="form-input" inputmode="numeric" maxlength="20" value="${escapeAttr(data.qq_official_appid||"")}" placeholder="QQ 开放平台 AppID"><p class="form-help">5 至 20 位数字。</p></div>
+        <div class="form-group"><label class="form-label" for="qq-secret">机器人密钥</label><div class="secret-input"><input id="qq-secret" class="form-input" type="password" maxlength="256" value="${escapeAttr(data.qq_official_secret||"")}" placeholder="QQ 开放平台机器人密钥"><button class="btn btn-sm" type="button" onclick="toggleQQSecret()">显示/隐藏</button></div><p class="form-help">保留脱敏值不会覆盖现有密钥。</p></div>
+        <div class="form-group settings-span"><label class="form-label" for="qq-callback">回调地址</label><input id="qq-callback" class="form-input" type="url" value="${escapeAttr(data.qq_official_callback_url||"")}" placeholder="https://example.com/qq/webhook"><p class="form-help">仅 Webhook 接入需要，必须是完整 HTTP/HTTPS 地址。</p></div>
+        <div class="form-group"><label class="form-label" for="qq-format">消息格式</label><select id="qq-format" class="form-input"><option value="plain" ${data.qq_official_message_format==="plain"?"selected":""}>纯文本（plain）</option><option value="markdown" ${data.qq_official_message_format==="markdown"?"selected":""}>Markdown</option></select></div>
+      </div>
+    </div>
+    <div class="card qq-config-card">
+      <div class="card-title mb-20">指令面板</div>
+      <div class="settings-grid">
+        <div class="form-group"><label class="flex gap-8 qq-toggle-row"><label class="toggle"><input type="checkbox" id="qq-menu-enabled" ${data.qq_menu_enabled?"checked":""}><span class="slider"></span></label><span>启用 QQ 指令面板</span></label></div>
+        <div class="form-group"><label class="form-label" for="qq-menu-scope">使用场景</label><select id="qq-menu-scope" class="form-input"><option value="group" ${data.qq_menu_scope==="group"?"selected":""}>群聊（group）</option><option value="c2c" ${data.qq_menu_scope==="c2c"?"selected":""}>单聊（c2c）</option></select></div>
+        <div class="form-group settings-span"><label class="form-label" for="qq-openids">目标群 OpenID</label><textarea id="qq-openids" class="form-input" rows="4" placeholder="每行一个群 OpenID，也可使用逗号分隔">${escapeHtml((data.qq_menu_group_openids||[]).join("\n"))}</textarea><p class="form-help">普通 QQ 群号无效；也可留空后在目标官方群中执行 /steam qq菜单同步 自动获取。</p></div>
+        <div class="form-group settings-span"><div class="flex-between mb-8"><label class="form-label">群指令菜单项</label><button class="btn btn-sm" type="button" onclick="addQQMenuCommand()">添加指令</button></div><div id="qq-menu-commands" class="qq-menu-commands">${(data.qq_menu_commands||[]).map((item,index)=>qqMenuCommandRow(item,index)).join("")}</div><p class="form-help">仅控制菜单显示内容，不会自动实现新指令。可用上下按钮调整顺序，保存后执行 /steam qq菜单同步。</p></div>
+      </div>
+      <div class="settings-actions"><button class="btn btn-primary" type="button" onclick="saveQQOfficial()">保存配置</button><button class="btn btn-danger" type="button" onclick="resetQQOfficial()">恢复默认</button></div>
+    </div>`;
+}
+function qqMenuCommandRow(item,index){return `<div class="qq-menu-command" data-index="${index}"><input class="form-input qq-menu-command-name" maxlength="100" value="${escapeAttr(item.command||"")}" placeholder="/steam help"><input class="form-input qq-menu-command-desc" maxlength="100" value="${escapeAttr(item.description||"")}" placeholder="菜单中显示的说明"><div class="qq-menu-command-actions"><button class="btn btn-sm" type="button" title="上移" onclick="moveQQMenuCommand(this,-1)">↑</button><button class="btn btn-sm" type="button" title="下移" onclick="moveQQMenuCommand(this,1)">↓</button><button class="btn btn-sm btn-danger" type="button" onclick="removeQQMenuCommand(this)">删除</button></div></div>`}
+window.addQQMenuCommand=()=>{const list=document.getElementById("qq-menu-commands");if(list.children.length>=20){toast("菜单指令最多 20 项","error");return}list.insertAdjacentHTML("beforeend",qqMenuCommandRow({},list.children.length))};
+window.removeQQMenuCommand=button=>button.closest(".qq-menu-command").remove();
+window.moveQQMenuCommand=(button,direction)=>{const row=button.closest(".qq-menu-command");const target=direction<0?row.previousElementSibling:row.nextElementSibling;if(target)row.parentNode.insertBefore(direction<0?row:target,direction<0?target:row)};
+function collectQQMenuCommands(){return [...document.querySelectorAll(".qq-menu-command")].map(row=>({command:row.querySelector(".qq-menu-command-name").value.trim(),description:row.querySelector(".qq-menu-command-desc").value.trim()})).filter(item=>item.command||item.description)}
+window.toggleQQSecret=()=>{const input=document.getElementById("qq-secret");input.type=input.type==="password"?"text":"password"};
+window.saveQQOfficial=async()=>{
+  const appid=document.getElementById("qq-appid").value.trim();
+  const callback=document.getElementById("qq-callback").value.trim();
+  if(appid&&!/^\d{5,20}$/.test(appid)){toast("AppID 必须为 5 至 20 位数字","error");return}
+  if(callback&&!/^https?:\/\//i.test(callback)){toast("回调地址必须以 http:// 或 https:// 开头","error");return}
+  const menuCommands=collectQQMenuCommands();
+  if(menuCommands.some(item=>!item.command.startsWith("/")||!item.description)){toast("每个菜单项都需要以 / 开头的指令和说明","error");return}
+  const payload={qq_official_enabled:document.getElementById("qq-official-enabled").checked,qq_official_appid:appid,qq_official_secret:document.getElementById("qq-secret").value.trim(),qq_official_callback_url:callback,qq_official_message_format:document.getElementById("qq-format").value,qq_menu_enabled:document.getElementById("qq-menu-enabled").checked,qq_menu_scope:document.getElementById("qq-menu-scope").value,qq_menu_group_openids:document.getElementById("qq-openids").value,qq_menu_commands:menuCommands};
+  try{const result=await API.post("/api/qq-official/settings",payload);if(result.ok){toast("QQ 官方机器人配置已保存");await renderQQOfficial()}else toast(result.error||"保存失败","error")}catch(error){toast(error.message||"保存失败","error")}
+};
+window.resetQQOfficial=async()=>{if(!await pageConfirm("确认恢复 QQ 官方机器人默认配置？AppID、密钥和面板 ID 将被清空。"))return;try{const result=await API.post("/api/qq-official/settings/reset",{});if(result.ok){toast("已恢复默认配置");await renderQQOfficial()}else toast(result.error||"重置失败","error")}catch(error){toast(error.message||"重置失败","error")}};
 
 const SL={steam_api_key:"Steam Web API密钥",sgdb_api_key:"SteamGridDB API密钥",fixed_poll_interval:"固定轮询间隔(秒)",smart_poll_intervals:"智能轮询间隔(分)",retry_times:"API重试次数",max_group_size:"单群最大监控人数",detailed_poll_log:"详细轮询日志",enable_achievement_poll:"成就轮询推送",enable_game_start_notify:"游戏开始通知",enable_game_end_notify:"游戏结束通知",notify_send_image:"通知发送图片",notify_send_text:"通知发送文本",enable_proxy:"启用代理",proxy_url:"代理链接",cache_avatar_hours:"头像缓存(小时)",cache_avatar_frame_hours:"头像框缓存(小时)",game_filter_mode:"游戏过滤模式",game_filter_ids:"过滤游戏ID",rank_push_hour:"推送-时",rank_push_minute:"推送-分"};
 const SO=["steam_api_key","sgdb_api_key","fixed_poll_interval","smart_poll_intervals","retry_times","max_group_size","enable_game_start_notify","enable_game_end_notify","enable_network_fluctuation_notify","enable_achievement_poll","notify_send_text","notify_send_image","detailed_poll_log","game_filter_mode","game_filter_ids","rank_push_hour","rank_push_minute","enable_proxy","proxy_url","cache_avatar_hours","cache_avatar_frame_hours"];

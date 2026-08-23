@@ -87,6 +87,76 @@
     "hint": "填写代理IP和端口，如：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890",
     "default": ""
   },
+  "qq_official_enabled": {
+    "description": "启用后台 QQ 官方机器人配置",
+    "type": "bool",
+    "hint": "控制插件后台保存的 QQ 官方机器人参数是否启用；修改后建议重载插件。",
+    "default": false
+  },
+  "qq_official_appid": {
+    "description": "QQ 官方机器人 AppID",
+    "type": "string",
+    "hint": "从 QQ 开放平台机器人开发设置中获取，仅允许 5 至 20 位数字。",
+    "default": ""
+  },
+  "qq_official_secret": {
+    "description": "QQ 官方机器人密钥",
+    "type": "string",
+    "hint": "从 QQ 开放平台获取，请勿泄露。后台管理页读取时会自动脱敏。",
+    "default": ""
+  },
+  "qq_official_callback_url": {
+    "description": "QQ 官方机器人回调地址",
+    "type": "string",
+    "hint": "完整的 HTTP/HTTPS URL；仅 Webhook 接入方式需要填写。",
+    "default": ""
+  },
+  "qq_official_message_format": {
+    "description": "QQ 官方机器人消息格式",
+    "type": "string",
+    "options": ["plain", "markdown"],
+    "hint": "plain 为纯文本，markdown 为 Markdown 消息。",
+    "default": "plain"
+  },
+  "qq_menu_enabled": {
+    "description": "启用 QQ 官方机器人指令面板",
+    "type": "bool",
+    "hint": "仅支持 AstrBot 的 qq_official 与 qq_official_webhook 平台；启用后由管理员执行 /steam qq菜单同步",
+    "default": false
+  },
+  "qq_menu_scope": {
+    "description": "QQ 指令面板场景",
+    "type": "string",
+    "options": ["group", "c2c"],
+    "hint": "group 为群聊，c2c 为单聊；修改场景后请先删除旧面板再同步",
+    "default": "group"
+  },
+  "qq_menu_group_openids": {
+    "description": "QQ 指令面板群 OpenID",
+    "type": "list",
+    "items": {"type": "string"},
+    "hint": "群聊面板必填，填写 QQ 开放平台中的群 OpenID，可配置多个群",
+    "default": []
+  },
+  "qq_menu_commands": {
+    "description": "QQ 指令面板展示项",
+    "type": "list",
+    "items": {"type": "object"},
+    "hint": "由插件后台页面维护，控制指令名称、说明与显示顺序",
+    "default": [
+      {"command": "/steam help", "description": "查看 Steam 插件指令帮助"},
+      {"command": "/steam list", "description": "查看本群玩家当前状态"},
+      {"command": "/steam rank", "description": "查看本群今日时长排行"},
+      {"command": "/steam rank 7", "description": "查看本群最近七天排行"},
+      {"command": "/steam rank 30", "description": "查看本群最近三十天排行"}
+    ]
+  },
+  "qq_menu_panel_id": {
+    "description": "QQ 指令面板 ID",
+    "type": "string",
+    "hint": "同步成功后由插件自动保存，请勿手动修改",
+    "default": ""
+  },
   "ssl_ca_file": {
     "description": "自定义 CA 证书文件",
     "type": "string",

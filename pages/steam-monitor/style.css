@@ -93,6 +93,26 @@ body {
 .form-input { width:100%; padding:9px 12px; border-radius:var(--border-radius); border:1px solid var(--border-color); background:var(--bg-primary); color:var(--text-primary); font-size:13px; outline:none; transition:border-color 0.15s; }
 .form-input:focus { border-color:var(--accent); }
 select.form-input { cursor:pointer; }
+textarea.form-input { resize:vertical; min-height:80px; }
+.settings-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 20px; }
+.settings-span { grid-column:1/-1; }
+.settings-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:4px; }
+.secret-input { display:flex; gap:8px; }
+.secret-input .form-input { flex:1; }
+.qq-config-card { max-width:920px; }
+.qq-toggle-row { align-items:center; min-height:42px; }
+.qq-menu-commands { display:flex; flex-direction:column; gap:8px; margin-bottom:10px; }
+.qq-menu-command { display:grid; grid-template-columns:minmax(180px,.8fr) minmax(260px,1.4fr) auto; gap:8px; align-items:center; padding:10px; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:var(--border-radius); }
+.qq-menu-command-actions { display:flex; gap:6px; white-space:nowrap; }
+@media(max-width:720px) {
+  .settings-grid { grid-template-columns:1fr; }
+  .settings-span { grid-column:auto; }
+  .settings-actions { justify-content:stretch; }
+  .settings-actions .btn { flex:1; }
+  .secret-input { align-items:stretch; }
+  .qq-menu-command { grid-template-columns:1fr; }
+  .qq-menu-command-actions { justify-content:flex-end; }
+}
 
 /* Collapsible permission settings */
 .settings-collapsible { padding:0; overflow:hidden; }

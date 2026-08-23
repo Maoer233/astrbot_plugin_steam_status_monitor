@@ -10,6 +10,11 @@ from functools import wraps
 
 from astrbot.api.web import error_response, json_response, request
 
+from .qqofficial_settings import (
+    QQ_OFFICIAL_DEFAULTS,
+    mask_secret,
+    normalise_qq_official_settings,
+)
 from .response_cache import AsyncTTLCache
 from ...shared.network import configure_tls, httpx_client_kwargs
 from .statistics import (
@@ -182,6 +187,9 @@ class WebAdminAPI:
         r("POST", "/push/rank-scope", self._api_push_rank_scope)
         r("GET", "/settings", self._api_settings_get)
         r("POST", "/settings/update", self._api_settings_update)
+        r("GET", "/qq-official/settings", self._api_qq_official_settings_get)
+        r("POST", "/qq-official/settings", self._api_qq_official_settings_update)
+        r("POST", "/qq-official/settings/reset", self._api_qq_official_settings_reset)
         r("GET", "/permissions", self._api_permissions_list)
         r("POST", "/permissions/update", self._api_permissions_update)
         r("GET", "/players/search", self._api_players_search)
@@ -1007,6 +1015,58 @@ class WebAdminAPI:
         if hasattr(p.config, "save_config"):
             p.config.save_config()
         return json_response({"ok": True})
+
+    # ────── QQ Official Settings ──────
+
+    def _qq_official_settings_payload(self):
+        config = self.plugin.config
+        payload = {
+            key: config.get(key, default)
+            for key, default in QQ_OFFICIAL_DEFAULTS.items()
+        }
+        payload["qq_official_secret"] = mask_secret(
+            payload["qq_official_secret"]
+        )
+        return payload
+
+    async def _api_qq_official_settings_get(self, request):
+        return json_response(self._qq_official_settings_payload())
+
+    async def _api_qq_official_settings_update(self, request):
+        try:
+            data = await request.json()
+        except Exception:
+            return json_response({"error": "请求内容必须是有效 JSON"}, status_code=400)
+        if not isinstance(data, dict):
+            return json_response({"error": "配置内容必须是对象"}, status_code=400)
+
+        try:
+            settings = normalise_qq_official_settings(
+                data,
+                current_secret=str(
+                    self.plugin.config.get("qq_official_secret", "") or ""
+                ),
+            )
+        except ValueError as exc:
+            return json_response({"error": str(exc)}, status_code=400)
+
+        for key, value in settings.items():
+            self.plugin.config[key] = value
+        self.plugin.config.save_config()
+        return json_response({
+            "ok": True,
+            "settings": self._qq_official_settings_payload(),
+        })
+
+    async def _api_qq_official_settings_reset(self, request):
+        for key, value in QQ_OFFICIAL_DEFAULTS.items():
+            self.plugin.config[key] = list(value) if isinstance(value, list) else value
+        self.plugin.config["qq_menu_panel_id"] = ""
+        self.plugin.config.save_config()
+        return json_response({
+            "ok": True,
+            "settings": self._qq_official_settings_payload(),
+        })
 
     # ────── Search ──────
 
