@@ -1,400 +1,261 @@
-# Steam 状态监控
-
-适用于 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 的 Steam 状态监控插件。插件按群维护玩家列表，定时查询 Steam 状态，并以图片消息播报开始游戏、结束游戏、在线状态、成就与游戏时长排行。
-
-- 当前版本：`3.3.3`
-- 最低 AstrBot 版本：`4.24.2`
-
-## 功能
-
-- **分群状态监控**：每个群独立维护 SteamID 列表、启停状态和推送会话。
-- **状态变更播报**：检测玩家开始游戏、切换游戏和结束游戏，并生成包含头像、封面、游玩时长等信息的图片。
-- **智能轮询**：根据玩家最近活跃程度动态调整轮询间隔，也可配置固定间隔。
-- **批量查询**：合并 Steam 玩家状态请求，降低 API 调用频率。
-- **Steam 输入解析**：支持 17 位 SteamID64、好友码、个人资料链接和自定义 ID 链接。
-- **用户绑定与查询**：添加玩家时可绑定聊天平台用户，通过 `/steamwho` 或 `/在干嘛` 查询状态。
-- **成就推送**：轮询游戏成就，在玩家解锁新成就时生成图片通知；支持游戏过滤和成就黑名单。
-- **游戏时长排行**：查看本群或全部群的今日、最近 7 天、最近 30 天或自定义天数排行。
-- **每日排行推送**：在指定时间向已启用的群推送昨日排行，可选择分群统计或全局统计。
-- **联动推送**：同一个 SteamID 可向其他群同步状态通知，而无需重复轮询。
-- **管理页面**：通过 AstrBot Plugin Pages 注册 Steam 监控管理接口与页面资源。
-- **本地持久化与缓存**：保存群组、绑定、排行、通知会话和运行状态，并缓存头像、封面及成就图标。
-
-## 运行要求
-
-- AstrBot `>= 4.24.2`
-- Python 版本以当前 AstrBot 运行环境为准
-- 可访问 Steam Web API、Steam Store API 和 Steam 社区相关接口
-- 一个有效的 [Steam Web API Key](https://steamcommunity.com/dev/apikey)
-- 可选：[SteamGridDB API Key](https://www.steamgriddb.com/profile/preferences/api)，用于补充游戏封面
-
-Python 直接依赖记录在 `requirements.txt`：
-
-- `httpx[socks]`：Steam API 请求及 SOCKS 代理支持
-- `aiohttp`：异步下载成就图标
-- `Pillow`：图片生成和处理
-- `requests`：同步图片下载
-- `numpy`：图片自动边界检测
-
-插件不使用数据库，也不需要额外的数据库驱动或认证框架。AstrBot 本身由宿主环境提供，不在插件的 `requirements.txt` 中重复声明。
-
-## 安装
-
-### 通过 AstrBot 插件管理器
-
-在 AstrBot 管理面板中安装本插件。如果插件市场中的版本不是本仓库版本，可使用仓库地址：
-
-```text
-https://github.com/Maoer233/astrbot_plugin_steam_status_monitor
-```
-
-安装后重启 AstrBot，或在插件管理页面重新加载插件。
-
-### 手动安装
-
-在 AstrBot 的插件目录中克隆仓库：
-
-```bash
-git clone https://github.com/Maoer233/astrbot_plugin_steam_status_monitor.git
-```
-
-如宿主未自动安装插件依赖，请在插件目录执行：
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-然后重启 AstrBot 或重新加载插件。
-
-> 不建议脱离 AstrBot 单独运行 `main.py`。根目录的 `main.py` 是 AstrBot 兼容入口，实际插件实现位于 `src/plugin/steam_status_monitor.py`。
-
-## 配置
-
-推荐在 AstrBot 插件配置页面修改配置。`steam_api_key` 是正常工作的必要配置；其他选项均有默认值。
-
-### API 与网络
-
-| 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `steam_api_key` | 空 | Steam Web API Key，必填。 |
-| `sgdb_api_key` | 空 | SteamGridDB API Key；留空时优先使用 Steam 官方封面。 |
-| `proxy` | 空 | HTTP 或 SOCKS 代理，例如 `http://127.0.0.1:7890`。 |
-| `retry_times` | `3` | Steam API 请求失败后的重试次数。 |
-
-### 监控与轮询
-
-| 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `steam_ids` | 空列表 | 初始监控的 SteamID64 列表；也可通过指令按群添加。 |
-| `notify_group_id` | 空 | 兼容配置项；通常由群内指令自动记录推送会话。 |
-| `fixed_poll_interval` | `0` | 固定轮询间隔，单位秒；`0` 表示使用智能轮询。 |
-| `smart_poll_intervals` | `1,3,5,10,20,30` | 智能轮询间隔，单位分钟，依次对应游戏中、12 分钟内、12 分钟至 3 小时、3 至 24 小时、24 至 48 小时、超过 48 小时。 |
-| `online_poll_interval` | `5` | 在线但未游戏时的轮询间隔，单位分钟。 |
-| `max_group_size` | `50` | 单群最多监控的 SteamID 数量。 |
-| `quit_delay` | `120` | 检测到退出游戏后的确认延迟，单位秒，用于减少网络波动导致的误报。 |
-
-### 排行、成就与游戏过滤
-
-| 配置项 | 默认值 | 说明 |
-| --- | --- | --- |
-| `rank_push_hour` | `8` | 每日排行榜推送小时，范围 `0`–`23`。 |
-| `rank_push_minute` | `0` | 每日排行榜推送分钟，范围 `0`–`59`。 |
-| `achievement_poll_interval` | `120` | 游戏中成就轮询间隔，单位秒。 |
-| `achievement_blacklist` | 空 | 不推送的成就 API 名称，多个值用英文逗号分隔。 |
-| `game_filter_mode` | `全部游戏` | 可选 `全部游戏`、`黑名单` 或 `白名单`。过滤同时作用于状态播报和成就推送。 |
-| `game_filter_ids` | 空 | Steam AppID 列表，多个值用英文逗号分隔。 |
-
-配置示例：
-
-```json
-{
-  "steam_api_key": "你的 Steam Web API Key",
-  "sgdb_api_key": "",
-  "proxy": "",
-  "fixed_poll_interval": 0,
-  "smart_poll_intervals": "1,3,5,10,20,30",
-  "max_group_size": 50,
-  "rank_push_hour": 8,
-  "rank_push_minute": 0,
-  "achievement_poll_interval": 120,
-  "game_filter_mode": "全部游戏",
-  "game_filter_ids": ""
-}
-```
-
-不要将真实 API Key 提交到公开仓库。
-
-## 使用方法
-
-指令前缀由 AstrBot 决定，以下示例使用默认的 `/`。涉及修改、启停或清理的指令需要管理员权限。
-
-### 快速开始
-
-1. 在插件配置中填写 `steam_api_key`。
-2. 在目标群添加玩家：
-
-   ```text
-   /steam addid 76561198000000000
-   ```
-
-3. 添加成功后，本群监控会自动启动；也可手动执行：
-
-   ```text
-   /steam on
-   ```
-
-4. 查看当前状态：
-
-   ```text
-   /steam list
-   ```
-
-### 玩家与绑定
-
-```text
-/steam addid 76561198000000000
-/steam addid 12345678
-/steam addid https://steamcommunity.com/id/example
-/steam addid 76561198000000000 @用户 备注名
-/steam delid 76561198000000000
-/steamwho @用户
-/在干嘛 @用户
-```
-
-多个 ID 可用中文或英文逗号分隔。`/steam delid` 还可追加群号，由管理员跨群删除玩家。
-
-### 状态、排行与成就
-
-```text
-/steam list
-/steam alllist
-/steam alllist text
-/steam rank
-/steam rank week
-/steam rank month
-/steam rank 14
-/steam allrank 7
-/steam achievement_on
-/steam achievement_off
-```
-
-排行榜以凌晨 `04:00` 作为每日统计边界。
-
-### 每日排行推送
-
-```text
-/steam rank_on
-/steam rank_on all
-/steam rank_on list
-/steam rank_on test
-/steam rank_on del
-/steam rank_on del 群号
-```
-
-- `/steam rank_on`：为当前群开启分群排行推送。
-- `/steam rank_on all`：为当前群开启全局排行推送。
-- `/steam rank_on test`：立即尝试推送昨日排行榜。
-
-### 联动推送
-
-在需要接收同步通知的群中执行：
-
-```text
-/steam push_group 76561198000000000
-/steam delpush_group 76561198000000000
-```
-
-### 配置与维护
-
-```text
-/steam config
-/steam set fixed_poll_interval 600
-/steam off
-/steam rs
-/steam清除缓存
-/steam clear_groupids 群号
-/steam clear_allids
-/steam help
-```
-
-- `/steam config` 会隐藏 API Key。
-- `/steam rs`、`/steam clear_groupids` 和 `/steam clear_allids` 会清理状态或监控数据，请谨慎使用。
-- `/steam openbox SteamID` 用于查看 Steam API 原始信息，可能产生较长输出。
-- `test_*_render` 系列指令仅用于管理员排查图片渲染问题。
-
-## 数据存储与隐私
-
-插件通过 AstrBot 提供的数据目录保存运行数据，不依赖外部数据库。持久化内容包括：
-
-- 各群监控的 SteamID 和启停状态
-- 聊天平台用户与 SteamID 的绑定关系及备注名
-- 通知会话、联动推送群和每日排行推送配置
-- 玩家状态、游戏会话、游玩记录与成就快照
-- 头像、头像框、游戏封面和成就图标缓存
-
-这些数据通常以 JSON 和图片文件形式保存在 AstrBot 的插件数据目录中。API Key 由 AstrBot 插件配置管理。部署和备份时应限制数据目录访问权限，并避免公开配置文件。
-
-插件会访问以下外部服务：
-
-- Steam Web API
-- Steam Store API
-- Steam 社区与静态资源域名
-- SteamGridDB（仅配置 API Key 或需要补充封面时）
-
-Steam 资料或游戏详情不可见时，请检查目标玩家的 Steam 隐私设置。
-
-## 项目结构
-
-```text
-.
-├── main.py                     # AstrBot 兼容入口
-├── src/
-│   ├── application/services/   # 成就、列表与查询服务
-│   ├── domain/ranking/         # 排行推送范围等领域逻辑
-│   ├── infrastructure/         # Steam 客户端与本地持久化
-│   ├── plugin/                 # 插件主体和指令
-│   ├── presentation/           # 图片渲染与管理页面接口
-│   └── shared/                 # 路径和通用工具
-├── assets/                     # 字体、图片和文案资源
-├── pages/steam-monitor/        # AstrBot Plugin Pages 前端资源
-├── tests/                      # 单元与集成测试
-├── _conf_schema.json           # AstrBot 配置定义
-├── metadata.yaml               # 插件元数据
-└── requirements.txt            # Python 运行时依赖
-```
-
-## 功能与文件地图
-
-以下位置以当前源码为准，用于定位功能实现、数据边界和维护入口。
-
-### 插件入口与核心编排
-
-| 文件 | 类或关键方法 | 职责 |
-| --- | --- | --- |
-| `main.py` | `SteamStatusMonitorV3` | AstrBot 兼容入口，仅导出插件类。 |
-| `src/plugin/steam_status_monitor.py` | `SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star)` | 插件生命周期、聊天指令、全局轮询、状态比较、通知、排行与成就编排。 |
-| `src/plugin/steam_status_monitor.py` | `global_poll_and_log_loop()` | 合并各群玩家并批量轮询 Steam 状态，同时调度每日排行。 |
-| `src/plugin/steam_status_monitor.py` | `check_status_change()` | 识别开始游戏、切换游戏和结束游戏，并触发记录及通知。 |
-| `src/plugin/steam_status_monitor.py` | `_daily_rank_push()` | 按配置向目标群推送昨日分群或全局排行。 |
-| `src/plugin/steam_status_monitor.py` | `terminate()` | 停止后台任务并强制保存运行数据。 |
-
-### 应用服务与领域逻辑
-
-| 文件 | 类或函数 | 职责 |
-| --- | --- | --- |
-| `src/application/services/achievement_monitor.py` | `AchievementMonitor` | 查询成就、比较快照、应用游戏过滤与成就黑名单，并渲染成就通知。 |
-| `src/application/services/openbox.py` | `SteamOpenboxService` | 为 `/steam openbox` 查询并整理玩家 API 字段。 |
-| `src/application/services/steam_list.py` | `SteamListService` | 汇总本群或全部群玩家状态，供列表指令渲染。 |
-| `src/domain/ranking/push_scopes.py` | `build_rank_push_scopes()` | 规范化每日排行目标群，区分分群数据与全局数据并对群号去重。 |
-
-### Steam 接口与本地持久化
-
-| 文件 | 类或关键方法 | 职责 |
-| --- | --- | --- |
-| `src/infrastructure/clients/steam.py` | `SteamClientMixin` | 调用 Steam Web API 和 Store API，批量查询玩家状态，解析 SteamID64、好友码、资料链接及自定义 ID，并获取游戏名称和封面。 |
-| `src/infrastructure/persistence/plugin_data.py` | `PersistenceMixin` | 在 `data/steam_status_monitor/` 下加载和保存 JSON 数据，同时维护字体缓存。 |
-
-主要持久化文件如下：
-
-| 文件模式 | 内容 |
-| --- | --- |
-| `steam_groups.json` | 各群监控的 SteamID 列表。 |
-| `bind_data.json` | 聊天平台用户、SteamID 和备注名的绑定关系。 |
-| `notify_sessions.json` | 各群的 AstrBot 通知会话。 |
-| `push_groups.json` | SteamID 对应的联动推送群。 |
-| `rank_push_groups.json` | 每日排行目标群及分群或全局统计模式。 |
-| `play_records.json` | 按日期、玩家和游戏汇总的游玩分钟数，保存时清理超过 30 天的数据。 |
-| `session_records.json` | 单次游戏会话，供甘特图和热力图使用，保存时清理超过 90 天的数据。 |
-| `group_<群号>_states.json` | 分群玩家最后状态。 |
-| `group_<群号>_start_play_times.json` | 分群玩家各游戏的开始时间。 |
-| `group_<群号>_last_quit_times.json` | 分群玩家最后退出时间。 |
-| `group_<群号>_pending_logs.json` | 分群待处理日志。 |
-| `group_<群号>_pending_quit.json` | 分群延迟确认的退出状态。 |
-| `group_<群号>_recent_games.json` | 分群最近游戏记录。 |
-
-`/data/steam_status_monitor/` 已加入 `.gitignore`。部署、迁移或备份时仍应单独保护该目录，因为其中可能包含群号、用户绑定、SteamID、通知会话和活动记录。
-
-### 图片渲染
-
-| 文件 | 职责 |
-| --- | --- |
-| `src/presentation/renderers/game_start.py` | 开始游戏通知图片，以及头像、头像框和竖版封面处理。 |
-| `src/presentation/renderers/game_end.py` | 结束游戏通知图片。 |
-| `src/presentation/renderers/rank.py` | 游戏时长排行榜图片。 |
-| `src/presentation/renderers/steam_list.py` | 玩家状态列表图片。 |
-| `assets/` | 字体、默认图片和文案资源。 |
-
-### 管理页面
-
-| 文件 | 类或函数 | 职责 |
-| --- | --- | --- |
-| `src/presentation/web/admin_api.py` | `WebAdminAPI` | 向 AstrBot Plugin Pages 注册 Dashboard、排行榜图片、甘特图、热力图、群组、绑定、推送、配置、指令权限、玩家、封面和连通性测试接口。 |
-| `src/presentation/web/response_cache.py` | `AsyncTTLCache` | 为统计响应提供 TTL 缓存、同键并发合并、取消保护和按名称失效。 |
-| `src/presentation/web/statistics.py` | `build_dashboard_stats()`、`build_groups()`、`build_player_search_index()`、`build_heatmap_data()` | 在工作线程中构建 Dashboard、群组、玩家搜索和热力图数据，减少事件循环阻塞。 |
-| `pages/steam-monitor/index.html` | — | Plugin Pages 页面结构。 |
-| `pages/steam-monitor/app.js` | — | 页面交互、数据请求和视图更新。 |
-| `pages/steam-monitor/style.css` | — | 页面样式。 |
-
-`WebAdminAPI` 注册的接口覆盖以下能力：
-
-- Dashboard 统计与排行榜图片；
-- 游玩甘特图、全局热力图和单玩家热力图；
-- 群组、群玩家和批量导入管理；
-- 用户绑定的新增、更新和删除；
-- 每日排行时间、目标群和统计范围设置；
-- 插件配置读取与更新，读取时隐藏 API Key；
-- 插件指令权限查询与更新；
-- 玩家搜索、头像、详情和游戏封面；
-- Steam API、Steam Store、SteamGridDB、封面和指定 SteamID 的连通性测试。
-
-所有管理接口均通过 AstrBot 的 `context.register_web_api()` 注册到 `steam_status_monitor_V3` 插件命名空间，不额外启动独立 Web 服务。
-
-### 测试覆盖
-
-| 文件 | 覆盖范围 |
-| --- | --- |
-| `tests/unit/test_modular_structure.py` | 根入口轻量化、分层文件存在性和插件 Mixin 继承关系。 |
-| `tests/unit/test_web_performance.py` | Web 统计缓存复用、失效、同键并发合并和统计结果兼容性。 |
-| `tests/test_rank_push.py` | 每日排行按群或全局取数、目标群去重。 |
-
-`tests/integration/` 当前仅保留目录结构，尚无集成测试文件。
-
-## 开发与测试
-
-克隆仓库并安装依赖：
-
-```bash
-git clone git@github.com:Maoer233/astrbot_plugin_steam_status_monitor.git
-cd astrbot_plugin_steam_status_monitor
-python -m pip install -r requirements.txt
-```
-
-运行测试：
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-编译检查：
-
-```bash
-python -m compileall main.py src tests
-```
-
-完整运行测试需要 AstrBot 环境；不依赖 AstrBot 的单元测试可直接执行。
-
-## 贡献指南
-
-1. Fork 本仓库并从最新默认分支创建功能分支。
-2. 修改前确认功能应位于 `application`、`domain`、`infrastructure`、`plugin`、`presentation` 或 `shared` 中的哪一层。
-3. 保持根目录 `main.py` 作为轻量兼容入口，不要把业务逻辑重新堆回入口文件。
-4. 新增配置时同步更新 `_conf_schema.json`、默认值读取逻辑和本文档。
-5. 新增第三方库时同步更新 `requirements.txt`，不要添加未直接使用的依赖。
-6. 为行为变更补充测试，并运行单元测试和编译检查。
-7. 提交 Pull Request 时说明改动内容、原因、兼容性影响和验证结果。
-
-请勿在 Issue、日志、截图或提交中泄露 Steam API Key、SteamGridDB API Key、群号、用户绑定或其他私有数据。
-
-## 许可证
-
-本项目使用仓库中 `LICENSE` 文件所声明的许可证。
+# Steam 状态监控插件V3 ![MIT](https://img.shields.io/badge/LICENSE-MIT-blue?style=flat-square) ![Python](https://img.shields.io/badge/Python-3.7+-blue?style=flat-square) ![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.24.2-purple?style=flat-square) [![Stars](https://img.shields.io/github/stars/Maoer233/astrbot_plugin_steam_status_monitor?style=flat-square)](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor) [![Last Commit](https://img.shields.io/github/last-commit/Maoer233/astrbot_plugin_steam_status_monitor?style=flat-square)](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square)](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor/pulls)
+
+## 访问统计
+![访问统计](https://count.getloli.com/get/@astrbot_ssm?theme=rule34)
+
+本插件是专为AstrBot设计的插件，用于定时轮询 Steam Web API，监控指定玩家的在线/离线/游戏状态变更，并在状态变化时推送通知。支持多 SteamID 监控，自动记录游玩日志，支持群聊分组，数据持久化，支持丰富指令。
+
+## 功能特性
+- 支持定时轮询多个 SteamID 的状态，分群管理，每个群聊可独立配置监控玩家
+- 检测玩家上线、下线、开始/切换/退出游戏等状态变更，自动推送游戏启动/关闭提醒
+- 成就变动自动推送提醒
+- **头像框渲染**：开始游戏/结束游戏/list/rank 均支持 Steam 头像框，本地优先缓存 7 天
+- **游戏时长排行榜**：支持  / ，按数字天数查询，凌晨 4:00 天分界
+- 游戏时长排行榜：支持  本群排行和  所有群排行，可按数字天数查询
+- 智能轮询 + 固定轮询双模式可切换，默认为1-30分钟查询一次状态，取决于steam的上次在线时间
+- 持久化记录玩家游玩日志，重启bot后状态不会丢失
+- **批量查询优化**：采用 Steam 官方批量接口（单次最多 100 个 ID），大幅降低 API 调用次数，从根本上避免触发 Steam 限流（HTTP 429 / x-eresult: 84）
+- **多种 ID 输入格式**：`addid` 现支持 SteamID64、个人资料链接、自定义 vanity URL、`s.team` 短链、8 位好友码等多种格式
+- **通知开关精细化**：可独立控制游戏结束通知、成就推送、以及图片/文本推送方式
+- **网络代理支持**：可配置 http / https / socks5 代理，改善网络环境下的数据获取稳定性
+- **字体自动管理**：自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，渲染更稳定
+- **性能优化**：节流写盘、单点异常隔离、批量预拉取，避免拖慢 AstrBot 主进程与 WebUI
+- **原生逐指令权限**：每条指令使用 AstrBot 框架的 `admin/member` 权限，不再维护插件内部权限等级
+- **AstrBot 内置管理页**：仪表盘、群聊、绑定、每日推送和权限管理直接集成在 AstrBot WebUI，无需额外端口
+- **权限配置同步**：内置管理页的“指令权限”直接读写 AstrBot 框架配置，并同步当前运行时权限
+
+## 默认轮询间隔说明（智能轮询模式）
+| 玩家最近在线时间      | 轮询间隔 |
+|----------------------|---------|
+| 游戏中               | 1分钟   |
+| 12分钟内             | 3分钟   |
+| 12分钟~3小时         | 5分钟   |
+| 3小时~24小时         | 10分钟  |
+| 24~48小时            | 20分钟  |
+| 超过48小时           | 30分钟  |
+
+## 快速上手
+1. 在AstrBot网页后台的配置中配置 Steam_Web_API_Key：[点击获取](https://steamcommunity.com/dev/apikey)
+2. 在AstrBot网页后台的配置中配置 SGDB_API_KEY（用于获取封面图，可选）：[点击获取](https://www.steamgriddb.com/profile/preferences/api)
+3. 在需要进行提醒的群聊输入指令添加要监控的玩家（以下格式均支持）：
+   - `/steam addid 7656119xxxxxxxxx`（SteamID64）
+   - `/steam addid https://steamcommunity.com/profiles/7656119xxxxxxxxx`（个人资料链接）
+   - `/steam addid https://steamcommunity.com/id/customname`（自定义 vanity URL）
+   - `/steam addid https://s.team/p/7656119xxxxxxxxx`（s.team 短链）
+   - `/steam addid 123456789`（8 位好友码）
+4. 启动轮询：
+   `/steam on`  启动本群 Steam 状态监控，后续状态变更会自动推送。
+5. 如需使用管理页面，在 AstrBot WebUI 的插件详情中打开“Steam 状态监控”页面。
+
+## 配置项说明
+| 配置项 | 说明 | 默认值 |
+|-------|------|-------|
+| `steam_api_key` | Steam Web API Key | — |
+| `sgdb_api_key` | SteamGridDB API Key（用于封面图） | — |
+| `fixed_poll_interval` | 固定轮询间隔（秒），为 0 时使用智能轮询 | 0 |
+| `smart_poll_intervals` | 智能轮询各状态间隔（分钟，逗号分隔） | `1,3,5,10,20,30` |
+| `retry_times` | Steam API 请求重试次数 | 3 |
+| `max_group_size` | 单群最大监控人数 | 20 |
+| `detailed_poll_log` | 详细轮询日志开关 | true |
+| `enable_achievement_poll` | 成就轮询推送开关 | true |
+| `enable_game_end_notify` | 游戏结束通知开关 | true |
+| `notify_send_image` | 通知发送图片开关 | true |
+| `notify_send_text` | 通知发送文本开关 | true |
+| `enable_proxy` | 启用网络代理 | false |
+| `proxy_url` | 代理链接（如 `http://127.0.0.1:7890`） | 空 |
+
+> 带「修改后重启AstrBot生效」标注的配置项需重启后生效。
+
+## 注意事项
+- 获取速度与是否成功获取 Steam 数据取决于网络环境。建议通过加速或代理（现已内置代理配置项）来保证稳定的查询状态。
+- 如果出现未知的轮询错误可以使用 `/steam clear_allids` 来清除所有群聊的轮询 id。
+- 修改插件参数后，如果出现重复通知的情况，请不要重载插件，而是重启 AstrBot。
+- 如果出现未知的无法提醒，但轮询显示正常的情况，请使用 `/steam on/off` 进行修复。
+- 监控人数较多时，建议适当调高 `max_group_size` 并保持智能轮询，以兼顾时效与 Steam 限流。
+
+## 演示截图
+![开始游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/str.png)
+![结束游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/stop.png)
+![成就推送示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/achievement.png)
+![WebUI 管理后台](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/webui.png)
+![List 玩家列表](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/list.png)
+
+
+## 指令列表
+- `/steam on` 启动本群Steam状态监控
+- `/steam off` 停止本群Steam状态监控
+- `/steam list` 列出本群所有玩家当前状态
+- `/steam alllist [img|text]` 列出所有群聊玩家状态（默认图片，`text` 纯文本输出）
+- `/steam config` 查看当前插件配置
+- `/steam set [参数] [值]` 设置配置参数（如 `/steam set poll_interval_sec 30`）
+- `/steam addid [SteamID/链接/好友码] [@用户] [备注名]` 添加玩家并可选 **@用户** 绑定（通过 @ 群成员完成QQ绑定，支持多种格式）
+- `/steam delid [SteamID/好友码/链接]` 从本群监控列表删除SteamID
+- `/steam push_group [SteamID]` 添加id到联动推送的副群（轮询一次通知多个群聊）
+- `/steam delpush_group [SteamID]` 删除id联动推送的副群
+- `/steam openbox [SteamID/好友码/链接]` 查看指定SteamID的全部详细信息
+- `/steamwho @用户` / `/在干嘛 @用户`  即时查询 @绑定玩家的 Steam 状态
+- `/steam rank [天数]` 查看本群游戏时长排行榜（默认今日，可指定天数）
+- `/steam allrank [天数]` 查看所有群游戏时长排行榜（默认今日，可指定天数）
+- `/steam rank_on [all|list|test|del]` 管理每日排行榜推送（默认每群独立排行；all=显式使用共享全局排行，list=查看状态，test=即刻推送，del [群号]=删除指定群推送）
+- `/steam rs` 清除所有状态并初始化
+- `/steam achievement_on` 开启本群Steam成就推送
+- `/steam achievement_off` 关闭本群Steam成就推送
+- `/steam test_achievement_render [steamid] [gameid] [数量]` 测试成就图片渲染
+- `/steam test_game_start_render [steamid] [gameid]` 测试开始游戏图片渲染
+- `/steam清除缓存` 清除所有头像、封面图等图片缓存
+- `/steam help` 显示所有指令帮助
+
+## 依赖
+- Python 3.7+
+- httpx
+- Pillow
+- AstrBot >= 4.24.2
+
+### 依赖安装方法
+如果显示缺少依赖，你可以尝试下载以下工具来进行修复
+pip install httpx pillow
+
+可以添加QQ：1912584909 或加交流群：881855879 来反馈功能和建议 闲聊也欢迎喵~
+
+## 🔗 关联项目
+📢 **Steam Monitor 独立版**：[@NeP](https://github.com/nep-0) 用 Go 重写的零依赖版本，无需 AstrBot，单文件运行，Web 管理界面，开箱即用。
+→ [github.com/nep-0/steam-monitor](https://github.com/nep-0/steam-monitor)
+
+## ⭐ Stars
+
+> 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
+
+## 更新记录
+- V3.3.3（2026/07/30）
+  - **功能新增**：新增网络波动通知开关（enable_network_fluctuation_notify），可单独关闭网络波动文本提醒
+  - **功能新增**：开始游戏渲染图片右下角添加版本号水印（淡色小字）
+
+- V3.3.2（2026/07/29）
+  - **Bug 修复**：成就渲染 total_height 为浮点数导致 TypeError；修复为强制 int 转换
+
+- V3.3.1（2026/07/28）
+  - **Bug 修复**：WebUI 群聊管理添加玩家时，好友码和链接被拒绝；改用 resolve_steam_input 统一解析
+
+- V3.3.0（2026/07/28）
+  - **Bug 修复**：免费游戏（如 Apex Legends）开始游戏通知中游玩时长显示"缺省"，修复 GetOwnedGames API 缺少 include_played_free_games 参数
+  - **文档优化**：优化 README 绑定机制说明，明确 @用户 绑定方式，修正命令前缀描述
+
+- V3.2.7（2026/07/24）
+  - **群聊管理聚合**：群详情表格增加绑定(@)/备注列，添加SteamID时支持同时绑定QQ
+  - **批量导入**：新增"批量导入"按钮，支持空格分隔格式（SteamID/链接 @用户 备注），每行一条
+
+- V3.2.6（2026/07/24）
+  - **Bug 修复**：甘特图数据源重复叠加导致出现幽灵时间段（session_records 和 play_records 同时存在时重复渲染）
+
+- V3.2.5（2026/07/24）
+  - **通知开关优化**：新增 `enable_game_start_notify` 配置项，关闭后不发送开始游戏通知但仍记录时长
+  - **addid 自动启用监控**：`/steam addid` 后自动启动监控，无需额外 `/steam on`
+  - **WebUI 自动投递**：WebUI 添加的群首次收到消息时自动补全通知目标
+
+- V3.2.4（2026/07/24）
+  - **内置 WebUI**：外置 aiohttp 管理站迁移为 AstrBot Plugin Pages，复用 Dashboard 登录鉴权，不再监听独立端口
+  - **分群每日榜单**：默认按每个目标群的监控成员分别聚合、渲染和推送，单群无记录或失败不影响其他群
+  - **推送范围语义**：管理页明确区分"接收群聊"和"榜单内容范围"，全局榜单仅在显式选择时启用
+
+- V3.2.3（2026/07/23）
+  - **权限系统迁移 (by LitChi-bit)**：回退 AstrBot 原生逐指令 `admin/member` 权限，移除插件内部 `permission_level`
+  - **WebUI 权限管理 (by LitChi-bit)**：新增"指令权限"逐条配置，直接同步 AstrBot 框架持久化配置与运行时权限
+  - **权限提示优化**：框架权限不足提示改为 WebUI 操作引导
+
+- V3.2.1（2026/07/16）
+  - **WebUI 管理后台（Beta）**：基于 aiohttp 的嵌入式管理页面，支持仪表盘、甘特图、热力图、群聊管理、绑定管理、每日推送设置
+  - **仪表盘**：展示监控统计、玩家排行榜、热门游戏饼图、在线玩家卡片（状态色标识、封面提色）
+  - **甘特图**：展示游戏时间窗口，支持今天/昨天/7天/30天切换
+  - **热力图**：团队贡献日历（GitHub 风格）和个人详情页，含游戏占比分析
+  - **群聊管理**：增删群聊、增删 SteamID、状态展示
+  - **连接测试**：一键测试 Steam API / Steam Store / SGDB 连通性
+  - **Gantt 数据源优化**：优先使用 session_records 真实时间戳，回退按 1:1 分钟映射
+  - **新增依赖**：`aiohttp>=3.9.0`（Web 服务器）
+
+- V3.1.16（2026/07/15）
+  - **Bug 修复**：修复旧版 start_play_times 数据格式不兼容导致轮询崩溃（int → dict 自动迁移）
+
+- V3.1.15（2026/07/13）
+  - **功能改进**：alllist 支持 img/text 双模式输出，卡片叠加状态色渐变，修复 personastate 状态识别（区分在线/忙碌/离开/打盹），头像框默认缓存 30 天
+
+- V3.1.14（2026/07/13）
+  - **功能改进**：统一权限系统，移除 AstrBot 框架层 ADMIN 权限装饰器，所有指令改用插件内部 permission_level 控制
+
+- V3.1.13（2026/07/09）
+  - **Bug 修复**：定时排行榜推送在主轮询无玩家到点时被跳过，导致推送失效
+
+- V3.1.12（2026/07/08）
+  - **QQ-SteamID 绑定系统**：addid 支持 @用户 [备注名]，绑定即监控
+  - **自定义备注名**：所有推送通知、list、rank、alllist、/在干嘛 图片优先显示备注
+  - **新增指令**：/steamwho @用户 / /在干嘛 @用户 即时查询单人 Steam 状态
+  - **delid/openbox 支持多格式**：好友码、链接均可
+
+- V3.1.11（2026/07/07）
+  - **封面降级优化**：竖版封面缺失时叠加横版 header_image，永久缓存
+  - **排行榜视觉优化**：进度条改为 Top1 满格基准，显示百分比对比，总时长金色
+  - **游戏过滤**：黑白名单模式（全部/白名单/黑名单），按 gameid 过滤
+
+- V3.1.10（2026/07/06）
+  - **Bug 修复**：修复 WebUI 保存配置时 smart_poll_intervals 类型校验失败（list vs string），init 阶段强制归一化为逗号分隔字符串
+  - **代理增强**：SOCKS5 代理自动安装 socksio 依赖（pip install httpx[socks]），安装失败则打印清晰指引
+  - **代理增强**：fetch_player_status / fetch_player_statuses_batch 异常处理加固，try 包裹 async with httpx.AsyncClient，防止 context manager 异常穿透到主轮询
+  - **依赖更新**：requirements.txt httpx → httpx[socks]
+
+- V3.1.9（2026/07/06）
+  - **Bug 修复**：Steam API 返回非 dict 错误响应（如 x-eresult: 84）时不再崩溃，改为优雅降级并输出诊断日志
+  - **Bug 修复**：addid 分隔符从 [,.\s] 改为仅中英文逗号，避免 URL 中的 . 被错误截断
+  - **Bug 修复**：ResolveVanityURL 同样加 isinstance 守卫，防止异常响应导致崩溃
+  - **指令优化**：README 更新 rank_on 统一用法，移除已废弃的 rank_off
+
+- V3.1.8（2026/07/05）
+  - **指令增强**：/steam delid 支持跨群删除（私聊传群号），退群也能清理监控
+
+- V3.1.7（2026/07/05）
+  - **Bug 修复**：重启插件后不再重复播报开始/结束游戏通知（初始化静默建立状态基线）
+  - **Bug 修复**：移除持久化加载时错误的 gameid 清除逻辑，消除重启误判
+
+- V3.1.6（2026/07/05）
+  - **性能优化**：主轮询跨群合并批量查询，N个群从N次API调用降为1次（自动去重）
+
+- V3.1.5（2026/07/05）
+  - **Bug 修复**：定时排行榜推送 (rank_on / rank_on all) 目标群为空导致无推送
+  - **新增配置**：排行榜推送时间可自定义（rank_push_hour / rank_push_minute，默认 8:30）
+  - **指令优化**：/steam rank_on 整合 list（查看状态）/ test（即刻推送）/ del（删除推送）
+
+- V3.1.4（2026/07/05）
+  - **性能优化**：steam_list / steam_alllist / steam_on 初始化全部改用批量查询接口，大幅减少 API 调用次数
+
+- V3.1.2（2026/07/04）
+  - **Bug 修复**：排行榜 (rank/allrank) 封面获取日期键与数据聚合对齐，修复封面不显示
+  - **Bug 修复**：排行榜 (rank/allrank) 新增 Steam 头像框渲染
+  - **Bug 修复**：玩家切换游戏时，上一款游戏游玩时长不再丢失
+
+- V3.1.1（2026/07/04）
+  - **新增头像框显示**：开始游戏/结束游戏/list/rank 图片均支持显示 Steam 头像框
+  - **缓存配置化**：头像/头像框/封面缓存时间可在 WebUI 配置，默认头像1天/头像框7天/封面永不
+  - **alllist图片渲染**： steam alllist 改为图片渲染
+  - **权限分级**：新增 permission_level 配置（1=管理员限定 2=查询指令放开 3=开关+添加ID放开）
+
+
+- V3.1.0（2026/07/04）
+  - **排行榜功能**：新增游戏时长排行榜，支持 `steam rank` 本群排行和 `steam allrank` 所有群排行
+  - 参数由 week/month 改为任意数字天数（如 `steam rank 15`），默认返回当天
+  - 每天凌晨 4:00 为天分界点，定时播报默认早上 8:30 推送昨日排行榜
+  - `steam rank_on` / `steam rank_off` 开启/关闭每群排行榜自动推送
+  - 修复重启插件后已通知过的退出记录重复推送的问题
+
+- V3.0.0（2026/07/03）重大更新
+  - **性能与稳定性大幅优化**：采用 Steam 官方批量查询接口（单次最多 100 个 ID），大幅降低 API 调用次数，从根本上避免触发 Steam 限流（HTTP 429 / x-eresult: 84）及 IP 被封禁；批量失败时自动降级为单查，保证可用性
+  - **轮询架构重构**：重写全局轮询循环，按动态到点查询 + 异常隔离（`return_exceptions=True`），修复在线玩家不再轮询、离线玩家轮询间隔越来越长的问题
+  - **WebUI 卡顿修复**：引入持久化数据脏标志 + 节流写盘（默认 300 秒一次），避免高频写盘拖慢 AstrBot 主进程与 WebUI
+  - **退出推送修复**：新增延迟退出检查与去重机制（`_pending_quit_tasks`），修复同一玩家同一游戏在短时间内重复触发退出通知的问题；优化推送会话管理，修复 `未设置推送会话，无法发送消息` 错误
+  - **多种 ID 输入格式**：`addid` 现支持 SteamID64、个人资料链接、自定义 vanity URL（自动调用 ResolveVanityURL 解析）、`s.team` 短链、8 位好友码
+  - **通知开关精细化**：新增 `enable_game_end_notify`（可单独关闭游戏结束通知）、`notify_send_image` / `notify_send_text`（图片/文本推送可独立控制）
+  - **配置项开放**：`max_group_size`（单群最大监控人数）由硬编码改为可配置项，方便大群 / 粉丝群使用
+  - **网络代理支持**：新增 `enable_proxy` / `proxy_url` 配置项，支持 http / https / socks5 代理（来自社区 PR）
+  - **字体自动管理**：启动时自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，缓存到数据目录，渲染更稳定
+  - **成就系统优化**：新增 `enable_achievement_poll` 开关，获取成就失败的游戏自动加入黑名单跳过轮询
+  - **游戏名中文化**：优先通过 Steam 商店 API 获取游戏中文名，无则回退英文名
+- V2.2.0
+  添加了缺失的封面的图片显示
+  添加了新功能，可以将已经轮询中账号，联动推送到多个副群（适用于多个粉丝群的情况）
