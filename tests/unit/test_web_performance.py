@@ -100,6 +100,41 @@ class StatisticsTests(unittest.TestCase):
         self.assertEqual(result["heatmap_data"]["2026-08-21"], 60)
         self.assertEqual(result["players"][0]["total_minutes"], 150)
         self.assertEqual(result["players"][0]["name"], "Bound One")
+        contributor = result["daily_contributors"]["2026-08-21"][0]
+        self.assertEqual(contributor["sid"], "sid-1")
+        self.assertEqual(contributor["games"][0]["name"], "CS2")
+        self.assertEqual(result["groups"], [{"id": "group-1", "player_count": 2}])
+
+    def test_heatmap_filters_players_by_group(self):
+        self.plugin.group_steam_ids["group-2"] = ["sid-2"]
+        self.plugin.play_records["2026-08-21"]["sid-2"] = {
+            "570": {"name": "Dota 2", "minutes": 45}
+        }
+
+        result = build_heatmap_data(
+            self.plugin, 3, datetime(2026, 8, 21, 12), "group-2"
+        )
+
+        self.assertEqual(result["selected_group"], "group-2")
+        self.assertEqual(result["heatmap_data"]["2026-08-21"], 45)
+        self.assertEqual(
+            [item["sid"] for item in result["daily_contributors"]["2026-08-21"]],
+            ["sid-2"],
+        )
+
+    def test_heatmap_does_not_double_count_same_player_day(self):
+        self.plugin.session_records["sid-1"].append({
+            "date": "2026-08-21",
+            "duration_min": 30,
+            "gameid": "730",
+            "game_name": "CS2",
+        })
+
+        result = build_heatmap_data(
+            self.plugin, 3, datetime(2026, 8, 21, 12)
+        )
+
+        self.assertEqual(result["heatmap_data"]["2026-08-21"], 30)
 
 
 if __name__ == "__main__":

@@ -188,38 +188,32 @@ async function loadGantt(days,offset){
 }
 
 // ====== Heatmap ======
+let heatmapState={period:90,group:"",selectedDate:""};
+function formatHeatmapDuration(minutes){minutes=Number(minutes)||0;if(minutes<60)return`${minutes} 分钟`;const hours=Math.floor(minutes/60);const rest=minutes%60;return rest?`${hours} 小时 ${rest} 分钟`:`${hours} 小时`}
+function heatmapDateLabel(date){const d=new Date(`${date}T00:00:00`);return`${d.getMonth()+1}月${d.getDate()}日`}
 async function renderHeatmap(params){
   if(params&&params.player){await renderPlayerHeatmap(params.player);return}
-  const data=await API.get("/api/heatmap/data?period=90");
-  const c=document.getElementById("content");
-  c.innerHTML=`<h2 class="page-title">团队贡献日历</h2>
-    <div class="card mb-20"><div class="flex-between mb-12"><div class="card-title">近90天团队活跃度</div>
-      <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted)"><span>少</span>
-      <span style="width:10px;height:10px;border-radius:2px;background:transparent;border:1px solid var(--border-color)"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:rgb(2,46,18)"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:#006d32"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:#26a641"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:#39d353"></span>
-      <span>多</span></div></div>
-      <div id="heatmap-cal" class="chart-box-lg"></div></div>
-    <div class="card"><div class="card-title">玩家列表</div><div id="heatmap-players" class="flex flex-wrap gap-12"></div></div>`;
-  if(typeof echarts!=="undefined"&&data.heatmap_data){
-    const hd=data.heatmap_data;const dates=Object.keys(hd).sort();const cd=dates.map(d=>[d,hd[d]]);const maxV=Math.max(...Object.values(hd),60);
-    const hm=initChart("heatmap-cal");if(hm)hm.setOption({...steamTheme(),tooltip:{formatter:p=>{const hrs=(p.data[1]/60).toFixed(1);return`${p.data[0]}<br/><b>${p.data[1]}</b>分钟(${hrs}h)`}},
-      visualMap:{min:0,max:maxV,orient:"horizontal",left:"center",bottom:0,inRange:{color:["rgb(17,22,28)","rgb(2,46,18)","#006d32","#26a641","#39d353","#6ae07a"]},textStyle:{color:"#aeb9c2"}},
-      calendar:{range:dates.length?[dates[0],dates[dates.length-1]]:"2026-07",cellSize:[20,20],dayLabel:{color:"#aeb9c2"},monthLabel:{color:"#aeb9c2"},itemStyle:{borderColor:"#0a0e12",borderWidth:3,borderRadius:2}},
-      series:[{type:"heatmap",coordinateSystem:"calendar",data:cd}]});
-  }
-  const pd=document.getElementById("heatmap-players");
-  if(!data.players||!data.players.length){pd.innerHTML='<div class="empty-state"><span class="mdi mdi-calendar-blank"></span><p>暂无记录</p></div>';return}
-  pd.innerHTML=data.players.map(p=>`<div class="player-card-mini" data-sid="${escapeAttr(p.sid)}" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})">
-    <div class="player-avatar"><span class="mdi mdi-loading mdi-spin" style="font-size:16px;color:var(--text-muted)"></span></div>
-    <div><div style="font-size:14px;font-weight:500;color:var(--text-bright)">${escapeHtml(p.name)}</div><div style="font-size:12px;color:var(--text-secondary)">${(p.total_minutes/60).toFixed(1)}h</div></div></div>`).join("");
-  Promise.all(data.players.map(p=>loadAvatar(p.sid).then(av=>{const card=document.querySelector(`.player-card-mini[data-sid="${CSS.escape(String(p.sid))}"]`);if(!card)return;const a=card.querySelector(".player-avatar");if(a&&av)a.innerHTML=`<img src="${safeImageUrl(av)}">`})));
-  document.querySelectorAll(".player-card-mini").forEach(card=>{const sid=card.dataset.sid;
-    card.addEventListener("mouseenter",async e=>await showTooltip(e,sid));
-    card.addEventListener("mouseleave",()=>{const t=document.getElementById("hplayer-tooltip");if(t)t.style.display="none"});
-    card.addEventListener("mousemove",e=>{const t=document.getElementById("hplayer-tooltip");if(t&&t.style.display!=="none"){t.style.left=(e.clientX+16)+"px";t.style.top=(e.clientY+16)+"px"}})});
+  if(params&&params.period)heatmapState.period=Number(params.period)||90;
+  if(params&&Object.prototype.hasOwnProperty.call(params,"group"))heatmapState.group=String(params.group||"");
+  const query=new URLSearchParams({period:String(heatmapState.period)});if(heatmapState.group)query.set("group_id",heatmapState.group);
+  const data=await API.get(`/api/heatmap/data?${query.toString()}`);
+  const c=document.getElementById("content");const groups=data.groups||[];
+  c.innerHTML=`<section class="heatmap-page">
+    <div class="heatmap-hero"><div><div class="heatmap-eyebrow">STEAM MONITOR</div><h2 class="page-title">团队贡献热力图</h2><p>查看群组每日游戏活跃度，点击日期可展开主要贡献玩家。</p></div>
+      <div class="heatmap-controls"><label>数据范围<select id="heatmap-period"><option value="30">近 30 天</option><option value="90">近 90 天</option><option value="180">近 180 天</option><option value="366">近一年</option></select></label><label>群组<select id="heatmap-group"><option value="">全部群组</option>${groups.map(g=>`<option value="${escapeAttr(g.id)}">群 ${escapeHtml(g.id)} · ${g.player_count} 人</option>`).join("")}</select></label></div></div>
+    <div class="heatmap-summary"><div><span>累计活跃</span><strong>${formatHeatmapDuration(Object.values(data.heatmap_data||{}).reduce((a,b)=>a+b,0))}</strong></div><div><span>活跃玩家</span><strong>${(data.players||[]).length}</strong></div><div><span>活跃日期</span><strong>${Object.values(data.heatmap_data||{}).filter(v=>v>0).length}</strong></div></div>
+    <div class="heatmap-layout"><div class="card heatmap-calendar-card"><div class="heatmap-card-head"><div><div class="card-title">每日活跃日历</div><p>颜色越亮代表当日累计游玩时长越高</p></div><div class="heatmap-legend"><span>少</span><i></i><i></i><i></i><i></i><i></i><span>多</span></div></div><div id="heatmap-cal" class="heatmap-calendar"></div></div>
+      <aside class="card heatmap-detail"><div id="heatmap-detail"></div></aside></div>
+    <div class="card heatmap-ranking"><div class="heatmap-card-head"><div><div class="card-title">周期贡献排行</div><p>当前范围内累计游玩时长</p></div></div><div id="heatmap-players" class="heatmap-player-grid"></div></div>
+  </section>`;
+  const periodSelect=document.getElementById("heatmap-period"),groupSelect=document.getElementById("heatmap-group");periodSelect.value=String(heatmapState.period);groupSelect.value=data.selected_group||"";
+  periodSelect.addEventListener("change",()=>renderHeatmap({period:periodSelect.value,group:groupSelect.value}));groupSelect.addEventListener("change",()=>renderHeatmap({period:periodSelect.value,group:groupSelect.value}));
+  const hd=data.heatmap_data||{},dates=Object.keys(hd).sort(),activeDates=dates.filter(d=>hd[d]>0);if(!heatmapState.selectedDate||!Object.prototype.hasOwnProperty.call(hd,heatmapState.selectedDate))heatmapState.selectedDate=activeDates[activeDates.length-1]||dates[dates.length-1]||"";
+  const showDay=date=>{heatmapState.selectedDate=date;document.querySelectorAll(".heatmap-day-contributor").forEach(el=>el.remove());const detail=document.getElementById("heatmap-detail"),players=(data.daily_contributors||{})[date]||[],total=hd[date]||0;detail.innerHTML=`<div class="heatmap-detail-date"><span>${date?heatmapDateLabel(date):"选择日期"}</span><small>${date||"点击日历中的方块"}</small></div><div class="heatmap-detail-total"><span>当日累计</span><strong>${formatHeatmapDuration(total)}</strong></div><div class="heatmap-contributors">${players.length?players.map((p,i)=>{const top=(p.games||[])[0];const pct=total?Math.round(p.total_minutes/total*100):0;return`<button class="heatmap-contributor" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})"><span class="heatmap-rank">${i+1}</span><span class="heatmap-contributor-avatar" data-day-sid="${escapeAttr(p.sid)}"><span class="mdi mdi-account"></span></span><span class="heatmap-contributor-main"><b>${escapeHtml(p.name)}</b><small>${top?escapeHtml(top.name):"游戏记录"} · ${pct}%</small><i><em style="width:${pct}%"></em></i></span><strong>${formatHeatmapDuration(p.total_minutes)}</strong></button>`}).join(""):'<div class="heatmap-empty"><span class="mdi mdi-calendar-blank"></span><p>当日暂无游玩记录</p></div>'}</div>`;Promise.all(players.map(p=>loadAvatar(p.sid).then(av=>{const el=document.querySelector(`[data-day-sid="${CSS.escape(String(p.sid))}"]`);if(el&&av)el.innerHTML=`<img src="${safeImageUrl(av)}">`})))};
+  if(typeof echarts!=="undefined"&&dates.length){const cd=dates.map(d=>[d,hd[d]]),maxV=Math.max(...Object.values(hd),60),hm=initChart("heatmap-cal");if(hm){hm.setOption({...steamTheme(),tooltip:{formatter:p=>`${p.data[0]}<br/><b>${formatHeatmapDuration(p.data[1])}</b><br/><span style="color:#8f98a0">点击查看贡献玩家</span>`},visualMap:{show:false,min:0,max:maxV,inRange:{color:["#18202a","#163a30","#1f6d4a","#31a864","#66d98b"]}},calendar:{top:42,left:44,right:18,bottom:18,range:[dates[0],dates[dates.length-1]],cellSize:[18,18],splitLine:{show:false},dayLabel:{color:"#7f8b96",nameMap:["日","一","二","三","四","五","六"]},monthLabel:{color:"#b8c2cc",fontWeight:600},yearLabel:{show:false},itemStyle:{borderColor:"#0f1720",borderWidth:3,borderRadius:4}},series:[{type:"heatmap",coordinateSystem:"calendar",data:cd,emphasis:{itemStyle:{borderColor:"#fff",borderWidth:2,shadowBlur:12,shadowColor:"rgba(102,217,139,.45)"}}}]});hm.on("click",p=>showDay(p.data[0]))}}
+  showDay(heatmapState.selectedDate);
+  const pd=document.getElementById("heatmap-players"),players=data.players||[];pd.innerHTML=players.length?players.map((p,i)=>`<button class="heatmap-player-card" data-sid="${escapeAttr(p.sid)}" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})"><span class="heatmap-player-position">${String(i+1).padStart(2,"0")}</span><span class="player-avatar"><span class="mdi mdi-account"></span></span><span><b>${escapeHtml(p.name)}</b><small>${escapeHtml(p.sid)}</small></span><strong>${formatHeatmapDuration(p.total_minutes)}</strong></button>`).join(""):'<div class="empty-state"><span class="mdi mdi-calendar-blank"></span><p>当前范围暂无记录</p></div>';
+  Promise.all(players.map(p=>loadAvatar(p.sid).then(av=>{const card=document.querySelector(`.heatmap-player-card[data-sid="${CSS.escape(String(p.sid))}"]`);if(card&&av)card.querySelector(".player-avatar").innerHTML=`<img src="${safeImageUrl(av)}">`})));
 }
 async function loadAvatar(sid){try{const r=await API.get(`/api/players/avatar/${sid}`);return r.avatar_url||""}catch(e){return""}}
 async function showTooltip(e,sid){

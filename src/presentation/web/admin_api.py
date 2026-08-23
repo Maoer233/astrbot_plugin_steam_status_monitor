@@ -501,11 +501,17 @@ class WebAdminAPI:
         except (ValueError, TypeError):
             period = 30
         period = max(1, min(period, 366))
+        group_id = str(request.query.get("group_id", "")).strip()
+        groups = getattr(self.plugin, "group_steam_ids", {}) or {}
+        if group_id and group_id not in groups:
+            return error_response("群组不存在", status=404)
         now = datetime.now()
         return await self._cached_response(
-            ("heatmap", period, now.strftime("%Y-%m-%d-%H")),
+            ("heatmap", period, group_id or "all", now.strftime("%Y-%m-%d-%H")),
             30,
-            lambda: build_heatmap_data(self.plugin, period, now),
+            lambda: build_heatmap_data(
+                self.plugin, period, now, group_id or None
+            ),
         )
 
     async def _api_heatmap_player(self, request):

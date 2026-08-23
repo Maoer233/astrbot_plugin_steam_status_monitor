@@ -118,7 +118,70 @@ def build_player_search_index(plugin):
     ]
 
 
-def build_heatmap_data(plugin, period, now):
+def _heatmap_group_sids(plugin, group_id):
+    groups = getattr(plugin, "group_steam_ids", {}) or {}
+    if group_id:
+        return {str(sid) for sid in groups.get(group_id, [])}
+    return {str(sid) for steam_ids in groups.values() for sid in steam_ids}
+
+
+def _build_heatmap_contributions(plugin, start_key, end_key, allowed_sids):
+    """按玩家和日期聚合时长，同日优先采用精确会话以避免重复计数。"""
+
+    contributions = {}
+    session_days = set()
+    session_records = getattr(plugin, "session_records", {}) or {}
+    for raw_sid, sessions in list(session_records.items()):
+        sid = str(raw_sid)
+        if sid not in allowed_sids:
+            continue
+        for session in list(sessions):
+            date_key = session.get("date", "")
+            if not start_key <= date_key <= end_key:
+                continue
+            minutes = max(0, int(session.get("duration_min", 0) or 0))
+            if minutes <= 0:
+                continue
+            player_day = contributions.setdefault(date_key, {}).setdefault(
+                sid, {"minutes": 0, "games": {}}
+            )
+            player_day["minutes"] += minutes
+            game_id = str(session.get("gameid", ""))
+            game_name = session.get("game_name", game_id or "未知游戏")
+            game = player_day["games"].setdefault(
+                game_id, {"gameid": game_id, "name": game_name, "minutes": 0}
+            )
+            game["minutes"] += minutes
+            session_days.add((date_key, sid))
+
+    play_records = getattr(plugin, "play_records", {}) or {}
+    for date_key, day_records in list(play_records.items()):
+        if not start_key <= date_key <= end_key:
+            continue
+        for raw_sid, games in list(day_records.items()):
+            sid = str(raw_sid)
+            if sid not in allowed_sids or (date_key, sid) in session_days:
+                continue
+            player_day = contributions.setdefault(date_key, {}).setdefault(
+                sid, {"minutes": 0, "games": {}}
+            )
+            for raw_game_id, game_info in list(games.items()):
+                if not isinstance(game_info, dict):
+                    continue
+                minutes = max(0, int(game_info.get("minutes", 0) or 0))
+                if minutes <= 0:
+                    continue
+                game_id = str(raw_game_id)
+                game_name = game_info.get("name", game_id)
+                player_day["minutes"] += minutes
+                game = player_day["games"].setdefault(
+                    game_id, {"gameid": game_id, "name": game_name, "minutes": 0}
+                )
+                game["minutes"] += minutes
+    return contributions
+
+
+def build_heatmap_data(plugin, period, now, group_id=None):
     end_date = now.replace(hour=4, minute=0, second=0, microsecond=0)
     if end_date <= now:
         end_date += timedelta(days=1)
@@ -126,38 +189,40 @@ def build_heatmap_data(plugin, period, now):
     start_key = start_date.strftime("%Y-%m-%d")
     end_key = end_date.strftime("%Y-%m-%d")
 
-    heatmap_daily = {}
+    groups = getattr(plugin, "group_steam_ids", {}) or {}
+    allowed_sids = _heatmap_group_sids(plugin, group_id)
+    contributions = _build_heatmap_contributions(
+        plugin, start_key, end_key, allowed_sids
+    )
+    display_names = _build_display_names(plugin)
     player_minutes = {}
-    session_records = getattr(plugin, "session_records", {}) or {}
-    for sid, sessions in list(session_records.items()):
-        total = 0
-        for session in list(sessions):
-            date_key = session.get("date", "")
-            if start_key <= date_key <= end_key:
-                minutes = session.get("duration_min", 0)
-                heatmap_daily[date_key] = heatmap_daily.get(date_key, 0) + minutes
-                total += minutes
-        if total > 0:
-            player_minutes[str(sid)] = total
+    heatmap_daily = {}
+    daily_contributors = {}
 
-    play_records = getattr(plugin, "play_records", {}) or {}
     day = start_date
     while day <= end_date:
         date_key = day.strftime("%Y-%m-%d")
-        day_records = play_records.get(date_key, {})
-        for sid, games in list(day_records.items()):
-            minutes = sum(
-                game_info.get("minutes", 0) if isinstance(game_info, dict) else 0
-                for game_info in list(games.values())
-            )
-            if minutes > 0:
-                heatmap_daily[date_key] = heatmap_daily.get(date_key, 0) + minutes
-                sid = str(sid)
-                player_minutes[sid] = player_minutes.get(sid, 0) + minutes
-        heatmap_daily.setdefault(date_key, 0)
+        day_players = []
+        for sid, contribution in contributions.get(date_key, {}).items():
+            minutes = contribution["minutes"]
+            if minutes <= 0:
+                continue
+            player_minutes[sid] = player_minutes.get(sid, 0) + minutes
+            day_players.append({
+                "sid": sid,
+                "name": display_names.get(sid, sid),
+                "total_minutes": minutes,
+                "games": sorted(
+                    contribution["games"].values(),
+                    key=lambda item: -item["minutes"],
+                ),
+            })
+        day_players.sort(key=lambda item: -item["total_minutes"])
+        total_minutes = sum(player["total_minutes"] for player in day_players)
+        heatmap_daily[date_key] = total_minutes
+        daily_contributors[date_key] = day_players
         day += timedelta(days=1)
 
-    display_names = _build_display_names(plugin)
     players = sorted(
         [
             {
@@ -169,4 +234,14 @@ def build_heatmap_data(plugin, period, now):
         ],
         key=lambda item: -item["total_minutes"],
     )
-    return {"heatmap_data": heatmap_daily, "players": players}
+    group_options = [
+        {"id": str(group), "player_count": len({str(sid) for sid in steam_ids})}
+        for group, steam_ids in groups.items()
+    ]
+    return {
+        "heatmap_data": heatmap_daily,
+        "daily_contributors": daily_contributors,
+        "players": players,
+        "groups": group_options,
+        "selected_group": group_id or "",
+    }
