@@ -1102,11 +1102,9 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         platform_id = event.get_platform_id()
         platform = self.context.get_platform_inst(platform_id)
         platform_type = str(platform.meta().name)
+        if platform_type not in {"qq_official", "qq_official_webhook"}:
+            raise QQOfficialPanelError("请从 QQ 官方机器人平台会话执行该指令")
         use_web_config = bool(self.config.get("qq_official_enabled", False))
-        if not use_web_config and platform_type not in {"qq_official", "qq_official_webhook"}:
-            raise QQOfficialPanelError(
-                "请从 QQ 官方机器人平台会话执行该指令，或先启用后台 QQ 官方机器人配置"
-            )
         appid = str(
             self.config.get("qq_official_appid", "")
             if use_web_config
