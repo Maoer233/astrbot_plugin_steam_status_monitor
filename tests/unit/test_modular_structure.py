@@ -61,6 +61,25 @@ class ModularStructureTests(unittest.TestCase):
             bases,
         )
 
+    def test_cross_group_commands_require_admin_permission(self):
+        """读取全部群数据的指令必须显式限制为管理员权限。"""
+
+        implementation_path = PROJECT_ROOT / "src/plugin/steam_status_monitor.py"
+        tree = ast.parse(implementation_path.read_text(encoding="utf-8"))
+        functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        for function_name in ("steam_allrank", "steam_alllist"):
+            decorators = [
+                ast.unparse(item) for item in functions[function_name].decorator_list
+            ]
+            self.assertIn(
+                "filter.permission_type(filter.PermissionType.ADMIN)", decorators
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

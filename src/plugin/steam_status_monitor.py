@@ -1005,7 +1005,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         async for result in self._render_and_send_rank(event, group_id, days, label, is_all=False):
             yield result
 
-    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam allrank")
     async def steam_allrank(self, event: AstrMessageEvent, period: str = ""):
         '''查看所有群玩家游戏时长排行榜（默认今日，可选 week/month）'''
@@ -1997,7 +1997,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             logger.warning(f"获取在线人数失败: {e} (gameid={gameid})")
         return None
 
-    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam alllist")
     async def steam_alllist(self, event: AstrMessageEvent, mode: str = "img"):
         '''所有群聊玩家状态（默认图片，steam alllist text 输出文本）'''
