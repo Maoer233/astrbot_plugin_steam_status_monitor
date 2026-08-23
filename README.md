@@ -45,7 +45,7 @@ Python 直接依赖记录在 `requirements.txt`：
 在 AstrBot 管理面板中安装本插件。如果插件市场中的版本不是本仓库版本，可使用仓库地址：
 
 ```text
-https://github.com/OLRainM/astrbot_plugin_steam_status_monitor
+https://github.com/Maoer233/astrbot_plugin_steam_status_monitor
 ```
 
 安装后重启 AstrBot，或在插件管理页面重新加载插件。
@@ -55,7 +55,7 @@ https://github.com/OLRainM/astrbot_plugin_steam_status_monitor
 在 AstrBot 的插件目录中克隆仓库：
 
 ```bash
-git clone https://github.com/OLRainM/astrbot_plugin_steam_status_monitor.git
+git clone https://github.com/Maoer233/astrbot_plugin_steam_status_monitor.git
 ```
 
 如宿主未自动安装插件依赖，请在插件目录执行：
@@ -364,7 +364,7 @@ Steam 资料或游戏详情不可见时，请检查目标玩家的 Steam 隐私�
 克隆仓库并安装依赖：
 
 ```bash
-git clone git@github.com:OLRainM/astrbot_plugin_steam_status_monitor.git
+git clone git@github.com:Maoer233/astrbot_plugin_steam_status_monitor.git
 cd astrbot_plugin_steam_status_monitor
 python -m pip install -r requirements.txt
 ```
