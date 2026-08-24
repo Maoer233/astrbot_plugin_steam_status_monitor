@@ -116,17 +116,18 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
                     fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=proxy)
             if fp:
                 avatar_frame_paths[sid] = fp
-    # 渲染图片
-    # 获取封面
+    # 渲染图片（新版 steam 风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取）
+    steam_style = self.config.get('enable_steam_style', True)
     covers = {}
-    for u in user_list:
-        gid = u.get('gameid', '')
-        if gid:
-            from .game_start_render import get_cover_path
-            cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=proxy)
-            if cp:
-                covers[u['sid']] = cp
-    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
+    if not steam_style:
+        for u in user_list:
+            gid = u.get('gameid', '')
+            if gid:
+                from .game_start_render import get_cover_path
+                cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=proxy)
+                if cp:
+                    covers[u['sid']] = cp
+    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
     if img_bytes:
         with io.BytesIO(img_bytes) as buf:
             import tempfile

@@ -1094,6 +1094,8 @@ class WebAdminAPI:
                 p.config[key] = bool(value)
             elif key == "enable_achievement_poll":
                 p.config[key] = bool(value)
+            elif key == "enable_steam_style":
+                p.config[key] = bool(value)
             elif key == "notify_send_image":
                 p.config[key] = bool(value)
             elif key == "notify_send_text":

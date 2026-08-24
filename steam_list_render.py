@@ -1,26 +1,67 @@
 import os
 import io
-import math
-import httpx
-from PIL import Image, ImageDraw, ImageFont
-from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
 import asyncio
 import logging
+import httpx
+from PIL import Image, ImageDraw, ImageFont
 
 logger = logging.getLogger(__name__)
 
-STEAM_BG_TOP = (44, 62, 80)
-STEAM_BG_BOTTOM = (24, 32, 44)
-CARD_BG = (38, 44, 56, 230)
-CARD_RADIUS = 12
-COVER_LIST_W, COVER_LIST_H = 50, 75
-AVATAR_SIZE = 72
-AVATAR_RADIUS = 12
-CARD_HEIGHT = 110
-CARD_MARGIN = 18
-CARD_GAP = 12
-FONT_PATH_BOLD = "msyhbd.ttc"
-FONT_PATH = "msyh.ttc"
+# ============ 样式参考 nonebot-plugin-steam-info 的 draw_friends_status ============
+WIDTH = 400
+PARENT_AVATAR_SIZE = 72
+MEMBER_AVATAR_SIZE = 50
+MEMBER_AVATAR_X = 22          # 行内头像左上角 x
+MEMBER_AVATAR_Y = 8           # 行内头像左上角 y
+ROW_HEIGHT = 64
+ROW_STEP = MEMBER_AVATAR_SIZE + 16  # 66，行与行之间留 2px 间隙
+SECTION_HEADER_H = 64
+SECTION_BOTTOM_PAD = 16
+
+BG_COLOR = (30, 32, 36)                # 1e2024
+SEARCH_BAR_BG = (67, 73, 83)           # 434953
+SEARCH_TEXT_COLOR = (183, 204, 213)    # b7ccd5
+SECTION_TITLE_COLOR = (197, 214, 212)  # c5d6d4
+COUNT_COLOR = (103, 102, 92)           # 67665c
+DIVIDER_COLOR = (51, 52, 57)           # 333439
+PARENT_NAME_COLOR = (109, 207, 246)    # 6dcff6
+PARENT_STATUS_COLOR = (76, 145, 172)   # 4c91ac
+
+# 分组标题后人数计数的 x 坐标（与 nonebot-plugin-steam-info 硬编码一致），其余分组按标题宽度计算
+SECTION_COUNT_X = {'在线好友': 115, '离线': 72}
+
+# (名字色, 状态文字色)，与 nonebot-plugin-steam-info personastate_colors 对应
+STATUS_COLORS = {
+    'playing': ((227, 255, 194), (142, 190, 86)),   # e3ffc2 / 8ebe56
+    'online':  ((109, 206, 245), (76, 145, 172)),   # 6dcef5 / 4c91ac
+    'busy':    ((109, 206, 245), (76, 145, 172)),
+    'snooze':  ((109, 206, 245), (76, 145, 172)),
+    'away':    ((69, 119, 142), (54, 89, 105)),     # 45778e / 365969
+    'offline': ((150, 150, 151), (101, 101, 101)),  # 969697 / 656565
+    'error':   ((215, 110, 110), (180, 90, 90)),
+}
+
+RES_DIR = os.path.join(os.path.dirname(__file__), 'res')
+FONTS_DIR = os.path.join(os.path.dirname(__file__), 'fonts')
+
+
+def _res(name):
+    path = os.path.join(RES_DIR, name)
+    return path if os.path.exists(path) else None
+
+
+def _load_image(path, size=None):
+    if not path:
+        return None
+    try:
+        img = Image.open(path).convert('RGBA')
+        if size:
+            img = img.resize(size, Image.BICUBIC)
+        return img
+    except Exception as e:
+        logger.warning(f"[steam_list_render] 加载资源失败 {path}: {e}")
+        return None
+
 
 async def fetch_avatar(avatar_url, data_dir, sid, proxy=None):
     if not avatar_url:
@@ -44,6 +85,7 @@ async def fetch_avatar(avatar_url, data_dir, sid, proxy=None):
         pass
     return None
 
+
 def get_status_color(status):
     if status == 'playing':
         return (80, 220, 120)  # 绿色
@@ -59,6 +101,7 @@ def get_status_color(status):
         return (255, 255, 255)  # 白色
     else:
         return (180, 80, 80)
+
 
 def get_name_color(status):
     if status == 'playing':
@@ -76,6 +119,7 @@ def get_name_color(status):
     else:
         return (255, 120, 120)
 
+
 def get_status_text(status):
     if status == 'playing':
         return "正在游戏"
@@ -92,9 +136,267 @@ def get_status_text(status):
     else:
         return "异常"
 
+
+def get_font_path(font_name):
+    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    font_path = os.path.join(fonts_dir, font_name)
+    if os.path.exists(font_path):
+        return font_path
+    font_path2 = os.path.join(os.path.dirname(__file__), font_name)
+    if os.path.exists(font_path2):
+        return font_path2
+    return font_name
+
+
+_font_cache = {}
+
+def load_font(size, weight='regular', font_path=None):
+    """加载字体：优先 MiSans（与 nonebot-plugin-steam-info 一致），缺失时回退 NotoSansHans / 传入 font_path / 系统字体"""
+    key = (size, weight, font_path)
+    if key in _font_cache:
+        return _font_cache[key]
+    if weight == 'bold':
+        candidates = ['MiSans-Bold.ttf', 'NotoSansHans-Medium.otf', 'msyhbd.ttc']
+    elif weight == 'light':
+        candidates = ['MiSans-Light.ttf', 'NotoSansHans-Regular.otf', 'msyh.ttc']
+    else:
+        candidates = ['MiSans-Regular.ttf', 'NotoSansHans-Regular.otf', 'msyh.ttc']
+    if font_path:
+        candidates.append(font_path)
+    font = ImageFont.load_default()
+    for name in candidates:
+        p = os.path.join(FONTS_DIR, name)
+        if os.path.exists(p):
+            name = p
+        try:
+            font = ImageFont.truetype(name, size)
+            break
+        except Exception:
+            continue
+    _font_cache[key] = font
+    return font
+
+
+def _fit_text(draw, text, font, max_w):
+    """文本超出 max_w 时截断并追加省略号"""
+    if max_w <= 0:
+        return ''
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    ell = '…'
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if draw.textlength(text[:mid] + ell, font=font) <= max_w:
+            lo = mid
+        else:
+            hi = mid - 1
+    return text[:lo] + ell
+
+
+def draw_parent_status(parent_name, sub_text, fonts):
+    """顶部横幅：bot 头像 + 名称 + 状态（参照 nonebot-plugin-steam-info draw_parent_status）"""
+    canvas = _load_image(_res('parent_status.png'), (WIDTH, 120))
+    if canvas is None:
+        canvas = Image.new('RGBA', (WIDTH, 120), (39, 79, 96, 255))
+    avatar = _load_image(_res('unknown_avatar.jpg'), (PARENT_AVATAR_SIZE, PARENT_AVATAR_SIZE))
+    if avatar is not None:
+        avatar_y = 120 - 16 - PARENT_AVATAR_SIZE
+        canvas.paste(avatar, (16, avatar_y), avatar)
+    draw = ImageDraw.Draw(canvas)
+    text_x = 16 + PARENT_AVATAR_SIZE + 16
+    name = _fit_text(draw, str(parent_name), fonts['parent_name'], WIDTH - text_x - 12)
+    draw.text((text_x, 44), name, font=fonts['parent_name'], fill=PARENT_NAME_COLOR)
+    sub = _fit_text(draw, str(sub_text), fonts['parent_sub'], WIDTH - text_x - 12)
+    draw.text((text_x, 68), sub, font=fonts['parent_sub'], fill=PARENT_STATUS_COLOR)
+    return canvas
+
+
+def draw_friends_search(fonts):
+    """“好友”搜索条（参照 nonebot-plugin-steam-info draw_friends_search）"""
+    canvas = Image.new('RGB', (WIDTH, 50), SEARCH_BAR_BG)
+    icon = _load_image(_res('friends_search.png'))
+    if icon is not None:
+        canvas.paste(icon, (WIDTH - icon.width, 0), icon)
+    draw = ImageDraw.Draw(canvas)
+    draw.text((24, 10), '好友', SEARCH_TEXT_COLOR, font=fonts['search'])
+    return canvas
+
+
+def draw_friend_status(user, avatar, fonts, avatar_frame_paths=None):
+    """渲染单行玩家状态（参照 nonebot-plugin-steam-info draw_friend_status，64px 高）"""
+    avatar = avatar.convert('RGBA').resize((MEMBER_AVATAR_SIZE, MEMBER_AVATAR_SIZE), Image.BICUBIC)
+    canvas = Image.new('RGB', (WIDTH, ROW_HEIGHT), BG_COLOR)
+    draw = ImageDraw.Draw(canvas)
+
+    name_color, status_color = STATUS_COLORS.get(user.get('status'), STATUS_COLORS['error'])
+    # 不渲染 SteamID：名字缺失或等于 SteamID 时显示“未知玩家”
+    raw_name = str(user.get('name') or '')
+    display_name = raw_name if raw_name and raw_name != str(user.get('sid')) else '未知玩家'
+
+    # 右侧附加信息：时长（不渲染群名 / SteamID / 下次轮询时间）
+    right2_parts = []
+    if user.get('status') == 'playing' and user.get('play_str'):
+        right2_parts.append(str(user['play_str']))
+    right2 = ' | '.join(right2_parts)
+
+    # 第一行：玩家名（忙碌/打盹追加图标）
+    icon_reserve = 30 if user.get('status') in ('busy', 'snooze') else 0
+    name_x = MEMBER_AVATAR_X + MEMBER_AVATAR_SIZE + 18
+    max_name_w = WIDTH - name_x - 12 - icon_reserve
+    name_text = _fit_text(draw, display_name, fonts['name'], max_name_w)
+    draw.text((name_x, 12), name_text, font=fonts['name'], fill=name_color)
+    name_w = int(draw.textlength(name_text, font=fonts['name']))
+    icon = None
+    if user.get('status') == 'busy':
+        icon = _load_image(_res('busy.png'))
+    elif user.get('status') == 'snooze':
+        icon = _load_image(_res('zzz_online.png'))
+    if icon is not None:
+        # busy 图标 +4、打盹图标 +8（与 nonebot-plugin-steam-info draw_friend_status 一致）
+        icon_x = MEMBER_AVATAR_X + MEMBER_AVATAR_SIZE + 16 + name_w + (4 if user.get('status') == 'busy' else 8)
+        canvas.paste(icon, (icon_x, 18), icon)
+
+    # 第二行：状态 / 游戏名
+    status = user.get('status')
+    if status == 'playing':
+        status_text = str(user.get('game') or '未知游戏')
+    elif status == 'offline':
+        status_text = str(user.get('play_str') or '离线')
+    elif status == 'error':
+        status_text = str(user.get('play_str') or '获取失败')
+    else:
+        status_text = {'online': '在线', 'away': '离开', 'snooze': '打盹', 'busy': '忙碌'}.get(status, '在线')
+    status_x = MEMBER_AVATAR_X + MEMBER_AVATAR_SIZE + 16
+    if right2:
+        right_w = int(draw.textlength(right2, font=fonts['extra']))
+        draw.text((WIDTH - right_w - 12, 36), right2, font=fonts['extra'], fill=COUNT_COLOR)
+        status_text = _fit_text(draw, status_text, fonts['status'], WIDTH - status_x - right_w - 12 - 12)
+    draw.text((status_x, 36), status_text, font=fonts['status'], fill=status_color)
+
+    # 头像 + 头像框
+    canvas.paste(avatar, (MEMBER_AVATAR_X, MEMBER_AVATAR_Y), avatar)
+    if avatar_frame_paths and str(user.get('sid')) in avatar_frame_paths:
+        try:
+            frame = Image.open(avatar_frame_paths[str(user['sid'])]).convert('RGBA')
+            frame_size = MEMBER_AVATAR_SIZE + 8
+            frame = frame.resize((frame_size, frame_size), Image.BICUBIC)
+            fx = MEMBER_AVATAR_X - (frame_size - MEMBER_AVATAR_SIZE) // 2
+            fy = MEMBER_AVATAR_Y - (frame_size - MEMBER_AVATAR_SIZE) // 2
+            canvas.paste(frame, (fx, fy), frame)
+        except Exception as e:
+            logger.warning(f"[steam_list_render] 头像框渲染失败: {e}")
+    return canvas
+
+
+def draw_section(title, rows, fonts, show_count=False):
+    """渲染一个分组：标题（+人数）+ N 行玩家（参照 nonebot draw_*_friends_status）"""
+    canvas = Image.new('RGB', (WIDTH, SECTION_HEADER_H + ROW_STEP * len(rows) + SECTION_BOTTOM_PAD), BG_COLOR)
+    draw = ImageDraw.Draw(canvas)
+    draw.text((22, 22), title, font=fonts['title'], fill=SECTION_TITLE_COLOR)
+    if show_count:
+        x = SECTION_COUNT_X.get(title, 22 + int(draw.textlength(title, font=fonts['title'])) + 8)
+        draw.text((x, 25), f"({len(rows)})", font=fonts['count'], fill=COUNT_COLOR)
+    for i, row in enumerate(rows):
+        canvas.paste(row, (0, SECTION_HEADER_H + ROW_STEP * i))
+    return canvas
+
+
+async def _render_steam_style(data_dir, user_list, font_path=None, proxy=None,
+                              avatar_frame_paths=None, covers=None,
+                              parent_name=None, parent_sub=None):
+    """渲染 Steam 玩家状态列表图片（steam风格）
+
+    user_list 元素字段：sid/name/status/avatar_url/game/gameid/play_str/lastlogoff。
+    不渲染群名、玩家 SteamID 与下次轮询时间，不展示游戏封面（covers 参数保留兼容）。
+    """
+    fonts = {
+        'name':        load_font(20, 'bold', font_path),
+        'title':       load_font(22, 'regular', font_path),
+        'search':      load_font(20, 'regular', font_path),
+        'status':      load_font(18, 'regular', font_path),
+        'count':       load_font(18, 'regular', font_path),
+        'parent_name': load_font(20, 'bold', font_path),
+        'parent_sub':  load_font(18, 'light', font_path),
+        'extra':       load_font(14, 'light', font_path),
+    }
+    logger.info(f"[Font] render_steam_list_image 传入字体路径: {font_path}，实际使用 MiSans（插件内置）")
+
+    user_list = user_list or []
+    # 分组（参照 nonebot-plugin-steam-info draw_friends_status 的 section 划分）
+    gaming = [u for u in user_list if u.get('status') == 'playing']
+    online = [u for u in user_list if u.get('status') in ('online', 'busy', 'snooze', 'away')]
+    # 按 nonebot-plugin-steam-info 的 1, 2, 4, 5, 6, 3 顺序：在线 > 忙碌 > 打盹 > 离开
+    online.sort(key=lambda u: {'online': 0, 'busy': 1, 'snooze': 2, 'away': 3}.get(u.get('status'), 9))
+    offline = [u for u in user_list if u.get('status') == 'offline']
+    error = [u for u in user_list if u.get('status') not in ('playing', 'online', 'busy', 'snooze', 'away', 'offline')]
+
+    # 头像批量下载（沿用本地缓存），失败时使用默认头像
+    tasks = [fetch_avatar(u.get('avatar_url'), data_dir, str(u.get('sid', '')), proxy=proxy) for u in user_list]
+    avatars = await asyncio.gather(*tasks)
+    default_avatar = _load_image(_res('unknown_avatar.jpg'))
+    av_map = {
+        str(u.get('sid')): (av or default_avatar) if (av or default_avatar) is not None else Image.new('RGBA', (1, 1))
+        for u, av in zip(user_list, avatars)
+    }
+
+    def make_rows(group):
+        return [draw_friend_status(u, av_map[str(u.get('sid'))], fonts, avatar_frame_paths) for u in group]
+
+    # nonebot-plugin-steam-info 的“家长状态”条：bot 身份 + 监控信息）
+    if parent_name is None:
+        parent_name = 'Steam 状态监控'
+    if parent_sub is None:
+        parent_sub = f"监控中 · {len(user_list)} 位玩家"
+    banner = draw_parent_status(parent_name, parent_sub, fonts)
+    search_bar = draw_friends_search(fonts)
+
+    sections = []
+    if gaming:
+        sections.append(draw_section('游戏中', make_rows(gaming), fonts))
+    if online:
+        sections.append(draw_section('在线好友', make_rows(online), fonts, show_count=True))
+    if offline:
+        sections.append(draw_section('离线', make_rows(offline), fonts, show_count=True))
+    if error:
+        sections.append(draw_section('异常', make_rows(error), fonts, show_count=True))
+
+    # 拼合图片（参照 nonebot-plugin-steam-info draw_friends_status）
+    height = banner.height + search_bar.height + sum(s.height for s in sections)
+    canvas = Image.new('RGB', (WIDTH, height), BG_COLOR)
+    canvas.paste(banner.convert('RGB'), (0, 0))
+    canvas.paste(search_bar, (0, banner.height))
+    y = banner.height + search_bar.height
+    for i, section in enumerate(sections):
+        canvas.paste(section, (0, y))
+        y += section.height
+        if i != len(sections) - 1:
+            ImageDraw.Draw(canvas).rectangle([0, y - 1, WIDTH, y], fill=DIVIDER_COLOR)
+
+    buf = io.BytesIO()
+    canvas.save(buf, format='PNG')
+    return buf.getvalue()
+
+
+# ============ 旧版卡片风格（enable_steam_style 关闭时使用） ============
+
+STEAM_BG_TOP = (44, 62, 80)
+STEAM_BG_BOTTOM = (24, 32, 44)
+CARD_BG = (38, 44, 56, 230)
+CARD_RADIUS = 12
+COVER_LIST_W, COVER_LIST_H = 50, 75
+AVATAR_SIZE = 72
+AVATAR_RADIUS = 12
+CARD_HEIGHT = 110
+CARD_MARGIN = 18
+CARD_GAP = 12
+FONT_PATH_BOLD = "msyhbd.ttc"
+FONT_PATH = "msyh.ttc"
+
 # 状态色渐变参数
 GRADIENT_ALPHA_START = 77  # 30% of 255
 GRADIENT_STOP_FRAC = 0.70  # 70% 处完全透明
+
 
 def make_status_gradient(card_w, card_h, status_color, status):
     """生成卡片状态色左到右渐变 α 叠加层；离线不叠加；圆角裁剪匹配 CARD_RADIUS"""
@@ -119,17 +421,9 @@ def make_status_gradient(card_w, card_h, status_color, status):
     return overlay
 
 
-def get_font_path(font_name):
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
-    font_path = os.path.join(fonts_dir, font_name)
-    if os.path.exists(font_path):
-        return font_path
-    font_path2 = os.path.join(os.path.dirname(__file__), font_name)
-    if os.path.exists(font_path2):
-        return font_path2
-    return font_name
-
-async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None, avatar_frame_paths=None, covers=None):
+async def _render_card_style(data_dir, user_list, font_path=None, proxy=None,
+                             avatar_frame_paths=None, covers=None):
+    """旧版卡片风格渲染（原 render_steam_list_image 实现）"""
     # 字体
     if font_path is None:
         font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansHans-Regular.otf')
@@ -260,3 +554,23 @@ async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=Non
     buf = io.BytesIO()
     img.save(buf, format='PNG')
     return buf.getvalue()
+
+
+async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None,
+                                  avatar_frame_paths=None, covers=None,
+                                  parent_name=None, parent_sub=None, steam_style=True):
+    """渲染 Steam 玩家状态列表图片。
+
+    steam_style=True（默认，对应配置项 enable_steam_style）：使用 steam 风格；
+    steam_style=False：使用旧版卡片风格（含封面/群号/SteamID/下次轮询显示）。
+    """
+    if steam_style:
+        return await _render_steam_style(
+            data_dir, user_list, font_path=font_path, proxy=proxy,
+            avatar_frame_paths=avatar_frame_paths, covers=covers,
+            parent_name=parent_name, parent_sub=parent_sub,
+        )
+    return await _render_card_style(
+        data_dir, user_list, font_path=font_path, proxy=proxy,
+        avatar_frame_paths=avatar_frame_paths, covers=covers,
+    )

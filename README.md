@@ -58,6 +58,7 @@
 | `max_group_size` | 单群最大监控人数 | 20 |
 | `detailed_poll_log` | 详细轮询日志开关 | true |
 | `enable_achievement_poll` | 成就轮询推送开关 | true |
+| `enable_steam_style` | Steam列表渲染风格开关（开启=steam风格；关闭=原卡片风格） | true |
 | `enable_game_end_notify` | 游戏结束通知开关 | true |
 | `notify_send_image` | 通知发送图片开关 | true |
 | `notify_send_text` | 通知发送文本开关 | true |
