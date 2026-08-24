@@ -30,7 +30,7 @@ class NotificationRoutingTests(unittest.TestCase):
         self.get_notify_sessions = load_get_notify_sessions()
 
     def test_cross_linked_primary_groups_are_not_sent_twice(self):
-        sid = "76561199147891480"
+        sid = "test-steam-id"
         plugin = type("Plugin", (), {})()
         plugin.notify_sessions = {"group-a": "session-a", "group-b": "session-b"}
         plugin.group_steam_ids = {"group-a": [sid], "group-b": [sid]}
@@ -44,7 +44,7 @@ class NotificationRoutingTests(unittest.TestCase):
         )
 
     def test_linked_group_without_direct_monitoring_still_receives_notification(self):
-        sid = "76561199147891480"
+        sid = "test-steam-id"
         plugin = type("Plugin", (), {})()
         plugin.notify_sessions = {"group-a": "session-a", "group-b": "session-b"}
         plugin.group_steam_ids = {"group-a": [sid], "group-b": []}
