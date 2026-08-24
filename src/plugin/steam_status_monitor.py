@@ -1348,7 +1348,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         # 渲染列表卡片（新版steam风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取）
         from ..presentation.renderers.steam_list import render_steam_list_image
         font_path = self.get_font_path('NotoSansHans-Regular.otf')
-        steam_style = self.config.get('enable_steam_style', True)
+        steam_style = self.config.get('enable_steam_style', False)
         covers = {}
         if not steam_style and gameid:
             from ..presentation.renderers.game_start import get_cover_path
@@ -2261,7 +2261,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                     avatar_frame_paths[sid] = fp
         font_path = self.get_font_path('NotoSansHans-Regular.otf')
         # 新版steam风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取
-        steam_style = self.config.get('enable_steam_style', True)
+        steam_style = self.config.get('enable_steam_style', False)
         covers = {}
         if not steam_style:
             for u in user_list:

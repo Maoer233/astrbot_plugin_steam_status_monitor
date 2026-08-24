@@ -117,7 +117,7 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
             if fp:
                 avatar_frame_paths[sid] = fp
     # 渲染图片（新版 steam 风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取）
-    steam_style = self.config.get('enable_steam_style', True)
+    steam_style = self.config.get('enable_steam_style', False)
     covers = {}
     if not steam_style:
         for u in user_list:

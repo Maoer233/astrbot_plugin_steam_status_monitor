@@ -548,11 +548,11 @@ async def _render_card_style(data_dir, user_list, font_path=None, proxy=None,
 
 async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None,
                                   avatar_frame_paths=None, covers=None,
-                                  parent_name=None, parent_sub=None, steam_style=True):
+                                  parent_name=None, parent_sub=None, steam_style=False):
     """渲染 Steam 玩家状态列表图片。
 
-    steam_style=True（默认，对应配置项 enable_steam_style）：使用 steam 风格；
-    steam_style=False：使用旧版卡片风格（含封面/群号/SteamID/下次轮询显示）。
+    steam_style=True：使用新版 steam 好友列表风格（对应配置项 enable_steam_style 开启）；
+    steam_style=False（默认）：使用 V3.3.3 原卡片风格（含封面/群号/SteamID/下次轮询显示）。
     """
     if steam_style:
         return await _render_steam_style(
