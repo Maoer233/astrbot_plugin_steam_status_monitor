@@ -174,6 +174,13 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V3.4.0（2026/08/24）
+  - **重大重构**：插件主体拆分为 src/ 分层结构（application/domain/infrastructure/presentation/shared），根入口 main.py 保持兼容；新增 QQ 官方机器人适配与后台指令面板（qq_official_* / qq_menu_*）；WebUI 管理接口性能优化（TTL 缓存/同键并发合并/缓存失效）
+  - **Bug 修复**：修复初始化时跨群同一 SteamID 状态基线不一致；成就 API 地址改为可配置端点（steam_api_base）
+  - **功能新增**：新增 Steam 官方 library_capsule_2x 高清竖版封面获取（SGDB 兜底）；初始化轮询改为批量查询 + status_override，减少重复 API 调用
+  - **功能新增**：/steam list、/steam alllist、/steamwho 新增 Steam 好友列表风格渲染（enable_steam_style，默认关闭保持 V3.3.3 原卡片风格）
+  - **功能优化**：重启后跳过插件停止期间遗留变化的陈旧播报（基于 states.json 写入时间判断，阈值 60 分钟）；logo 归位插件根目录
+
 - V3.3.3（2026/07/30）
   - **功能新增**：新增网络波动通知开关（enable_network_fluctuation_notify），可单独关闭网络波动文本提醒
   - **功能新增**：开始游戏渲染图片右下角添加版本号水印（淡色小字）
