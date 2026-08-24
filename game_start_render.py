@@ -4,6 +4,7 @@ import time
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 import random
+from .steam_cover import get_steam_library_cover_url
 
 BG_COLOR_TOP = (49, 80, 66)
 BG_COLOR_BOTTOM = (28, 35, 44)
@@ -198,30 +199,54 @@ async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=N
             print(f"[get_sgdb_vertical_cover] SGDB API异常: {e}")
             return None
 
-async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
+async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None):
     from PIL import Image as PILImage
     import httpx
     cover_dir = os.path.join(data_dir, "covers_v")
     os.makedirs(cover_dir, exist_ok=True)
-    path = os.path.join(cover_dir, f"{gameid}.jpg")
+    steam_path = os.path.join(cover_dir, f"{gameid}_library_capsule_2x.jpg")
+    fallback_path = os.path.join(cover_dir, f"{gameid}.jpg")
     # 只在本地不存在时才云端获取
     cover_refresh = _cache_config.get("cover_vertical", 0)
-    if cover_refresh == 0 and os.path.exists(path):
-        return path
-    elif cover_refresh > 0 and os.path.exists(path):
-        if time.time() - os.path.getmtime(path) < cover_refresh:
-            return path
-    # 只尝试 SGDB 竖版封面
-    url = await get_sgdb_vertical_cover(game_name, sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
+
+    def is_cache_valid(path):
+        if force_update or not os.path.exists(path):
+            return False
+        return cover_refresh == 0 or time.time() - os.path.getmtime(path) < cover_refresh
+
+    if api_key and is_cache_valid(steam_path):
+        return steam_path
+
+    steam_appid = appid or gameid
+    if api_key:
+        url = await get_steam_library_cover_url(steam_appid, api_key, proxy=proxy)
+        if url:
+            try:
+                async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+                    resp = await client.get(url)
+                if resp.status_code == 200:
+                    with open(steam_path, "wb") as f:
+                        f.write(resp.content)
+                    print(f"[get_cover_path] Steam library_capsule_2x 下载成功: {gameid} -> {steam_path}")
+                    return steam_path
+            except Exception as e:
+                print(f"[get_cover_path] Steam library_capsule_2x 下载异常: {e} url={url}")
+
+    if is_cache_valid(fallback_path):
+        return fallback_path
+
+    url = await get_sgdb_vertical_cover(game_name, sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=steam_appid, proxy=proxy)
     if url:
         try:
-            resp = httpx.get(url, timeout=10, proxy=proxy)
+            async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+                resp = await client.get(url)
             if resp.status_code == 200:
-                with open(path, "wb") as f:
+                with open(fallback_path, "wb") as f:
                     f.write(resp.content)
-                return path
+                print(f"[get_cover_path] SteamGridDB 下载成功: {gameid} -> {fallback_path}")
+                return fallback_path
         except Exception as e:
-            print(f"[get_cover_path] SGDB下载异常: {e} url={url}")
+            print(f"[get_cover_path] SteamGridDB 下载异常: {e} url={url}")
     # 新增：SGDB未收录或下载失败时，使用missingcover.jpg
     print(f"[get_cover_path] SGDB未收录或下载失败: {gameid} {game_name}，使用默认封面")
     missing_cover = os.path.join(os.path.dirname(__file__), "missingcover.jpg")
@@ -535,7 +560,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
 async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, game_name, api_key=None, superpower=None, online_count=None, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, version=None):
     print(f"[render_game_start] superpower参数: {superpower}")
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
-    cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy)
+    cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key)
     # 获取横版封面（竖版缺失时叠加用）
     horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy)
     playtime_hours = None

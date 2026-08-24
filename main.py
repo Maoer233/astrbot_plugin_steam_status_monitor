@@ -586,14 +586,23 @@ class SteamStatusMonitorV3(Star):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
         await asyncio.sleep(10)
         all_logs = []
-        seen_sids = set()  # 防止同一sid在多个群中被重复推送
+        # Steam 状态查询按 SID 去重，但状态基线必须按群分别建立。
+        unique_sids = list(dict.fromkeys(
+            sid
+            for steam_ids in self.group_steam_ids.values()
+            for sid in steam_ids
+        ))
+        status_map = await self.fetch_player_statuses_batch(unique_sids)
         for group_id in self.group_steam_ids:
             steam_ids = self.group_steam_ids[group_id]
             group_lines = []
             for sid in steam_ids:
-                if sid in seen_sids: continue
-                seen_sids.add(sid)
-                msg = await self.check_status_change(group_id, single_sid=sid, skip_push=True)
+                msg = await self.check_status_change(
+                    group_id,
+                    single_sid=sid,
+                    status_override=status_map.get(sid),
+                    skip_push=True,
+                )
                 if msg:
                     group_lines.append(msg)
             if group_lines:
@@ -2040,7 +2049,7 @@ class SteamStatusMonitorV3(Star):
             img_bytes = await render_game_end(
                 self.data_dir, steamid, player_name, avatar_url, gameid, zh_game_name,
                 end_time_str, tip_text, duration_h, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, appid=gameid
-            , proxy=self.proxy)
+            , proxy=self.proxy, api_key=self.API_KEY)
             msg = f"👋 {player_name} 不玩 {zh_game_name} 了\n游玩时间 {duration_h:.1f}小时"
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -2288,7 +2297,7 @@ class SteamStatusMonitorV3(Star):
                     end_time_str, tip_text, duration_h,
                     sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
                     sgdb_game_name=en_game_name, appid=noti.get("gameid"),
-                    proxy=self.proxy)
+                    proxy=self.proxy, api_key=self.API_KEY)
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(img_bytes)
