@@ -197,12 +197,24 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
         await asyncio.sleep(10)
         all_logs = []
+        # Steam 状态查询按 SID 去重，但状态基线必须按群分别建立。
+        unique_sids = list(dict.fromkeys(
+            sid
+            for steam_ids in self.group_steam_ids.values()
+            for sid in steam_ids
+        ))
+        status_map = await self.fetch_player_statuses_batch(unique_sids)
         for group_id in self.group_steam_ids:
             steam_ids = self.group_steam_ids[group_id]
             group_lines = []
             for sid in steam_ids:
                 # 状态基线按群保存；即使同一玩家属于多个群，也必须逐群初始化。
-                msg = await self.check_status_change(group_id, single_sid=sid, skip_push=True)
+                msg = await self.check_status_change(
+                    group_id,
+                    single_sid=sid,
+                    status_override=status_map.get(sid),
+                    skip_push=True,
+                )
                 if msg:
                     group_lines.append(msg)
             if group_lines:
@@ -1333,16 +1345,16 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             frame_url = await get_avatar_frame_url(sid, proxy=self.proxy)
             if frame_url: fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
         if fp: avatar_frame_paths[sid] = fp
-        # 获取封面
+        # 渲染列表卡片（新版steam风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取）
+        from ..presentation.renderers.steam_list import render_steam_list_image
+        font_path = self.get_font_path('NotoSansHans-Regular.otf')
+        steam_style = self.config.get('enable_steam_style', True)
         covers = {}
-        if gameid:
+        if not steam_style and gameid:
             from ..presentation.renderers.game_start import get_cover_path
             cp = await get_cover_path(self.data_dir, gameid, game or zh_game_name, proxy=self.proxy)
             if cp: covers[sid] = cp
-        # 渲染列表卡片
-        from ..presentation.renderers.steam_list import render_steam_list_image
-        font_path = self.get_font_path('NotoSansHans-Regular.otf')
-        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
         if img_bytes:
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -1504,7 +1516,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             img_bytes = await render_game_end(
                 self.data_dir, steamid, player_name, avatar_url, gameid, zh_game_name,
                 end_time_str, tip_text, duration_h, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, appid=gameid
-            , proxy=self.proxy)
+            , proxy=self.proxy, api_key=self.API_KEY)
             msg = f"👋 {player_name} 不玩 {zh_game_name} 了\n游玩时间 {duration_h:.1f}小时"
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -1752,7 +1764,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                     end_time_str, tip_text, duration_h,
                     sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
                     sgdb_game_name=en_game_name, appid=noti.get("gameid"),
-                    proxy=self.proxy)
+                    proxy=self.proxy, api_key=self.API_KEY)
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(img_bytes)
@@ -2248,16 +2260,18 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                 if fp:
                     avatar_frame_paths[sid] = fp
         font_path = self.get_font_path('NotoSansHans-Regular.otf')
-        # 获取封面
+        # 新版steam风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取
+        steam_style = self.config.get('enable_steam_style', True)
         covers = {}
-        for u in user_list:
-            gid = u.get('gameid', '')
-            if gid:
-                from ..presentation.renderers.game_start import get_cover_path
-                cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=self.proxy)
-                if cp:
-                    covers[u['sid']] = cp
-        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers)
+        if not steam_style:
+            for u in user_list:
+                gid = u.get('gameid', '')
+                if gid:
+                    from ..presentation.renderers.game_start import get_cover_path
+                    cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=self.proxy)
+                    if cp:
+                        covers[u['sid']] = cp
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
         if img_bytes:
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
