@@ -33,6 +33,12 @@ from ..infrastructure.clients.qqofficial_panel import QQOfficialPanelClient, QQO
 from ..infrastructure.clients.steam import SteamClientMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 
+# 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
+# 正常运行时 states.json 约每 5 分钟落盘一次（最慢轮询间隔 30 分钟 + 保存节流 5 分钟），
+# 60 分钟阈值足以安全区分"插件停止过"与"正常运行"。
+_STALE_STATE_THRESHOLD = 3600
+
+
 class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
 
     def __init__(self, context: Context, config=None):
@@ -42,7 +48,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "3.3.3"
+        self._plugin_version = "3.4.0"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -164,6 +170,9 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         self._data_dirty = False          # 有变更待保存
         self._last_save_time = time.time() # 上次保存时间戳
         self._save_interval = 300          # 节流间隔（秒），300秒=5分钟
+        # --- 插件启动时间戳 + 启动初始化期间的"陈旧群"标记（init 完成后清空） ---
+        self._startup_time = time.time()
+        self._startup_stale_groups = {}
         # 保存任务引用，便于 terminate 时取消，防止重载/禁用后残留多实例并发
         self._poll_loop_task = asyncio.create_task(self.global_poll_and_log_loop())
         self._init_poll_task = asyncio.create_task(self.init_poll_time_once())
@@ -193,34 +202,61 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         self.web_api.register_routes(context)
         logger.info("[WebAdmin] 管理页面已注册到 AstrBot 内置 WebUI")
 
+    def _is_group_state_stale(self, group_id, threshold=_STALE_STATE_THRESHOLD):
+        """判断该群状态缓存是否为插件停止期间遗留的旧数据。
+
+        依据：states.json 最后写入时间早于本次插件启动，且距今超过阈值（默认 60 分钟）。
+        正常运行时 states.json 约每 5 分钟落盘一次（mtime 持续刷新）；插件停止后 mtime
+        停在停止时刻。重启后首次初始化期间用它识别"停止期间累积的历史变化"，跳过播报。
+        """
+        try:
+            path = self._get_group_data_path(group_id, "states")
+            if not os.path.exists(path):
+                return False  # 无缓存文件，无从判断，视为正常
+            mtime = os.path.getmtime(path)
+            return mtime < self._startup_time and (time.time() - mtime) > threshold
+        except Exception as e:
+            logger.warning(f"[陈旧状态] 判断 states 新鲜度失败: {e} (group_id={group_id})")
+            return False
+
     async def init_poll_time_once(self):
         '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
         await asyncio.sleep(10)
         all_logs = []
-        # Steam 状态查询按 SID 去重，但状态基线必须按群分别建立。
-        unique_sids = list(dict.fromkeys(
-            sid
-            for steam_ids in self.group_steam_ids.values()
-            for sid in steam_ids
-        ))
-        status_map = await self.fetch_player_statuses_batch(unique_sids)
-        for group_id in self.group_steam_ids:
-            steam_ids = self.group_steam_ids[group_id]
-            group_lines = []
-            for sid in steam_ids:
-                # 状态基线按群保存；即使同一玩家属于多个群，也必须逐群初始化。
-                msg = await self.check_status_change(
-                    group_id,
-                    single_sid=sid,
-                    status_override=status_map.get(sid),
-                    skip_push=True,
-                )
-                if msg:
-                    group_lines.append(msg)
-            if group_lines:
-                all_logs.append(f"群{group_id}：\n" + "\n".join(group_lines))
-        if all_logs:
-            logger.info("====== Steam状态监控初始化日志 ======\n" + "\n".join(all_logs) + "\n=====================================================")
+        # 一次性标记"插件停止期间遗留的陈旧群"：init 过程中 check_status_change 末尾会刷新
+        # states.json 的 mtime，若不预先缓存，同一次 init 内后续 sid 会因 mtime 已刷新而漏判。
+        # init 完成后（含异常）清空，后续正常轮询不再跳过播报。
+        self._startup_stale_groups = {
+            gid: self._is_group_state_stale(gid)
+            for gid in self.group_steam_ids
+        }
+        try:
+            # Steam 状态查询按 SID 去重，但状态基线必须按群分别建立。
+            unique_sids = list(dict.fromkeys(
+                sid
+                for steam_ids in self.group_steam_ids.values()
+                for sid in steam_ids
+            ))
+            status_map = await self.fetch_player_statuses_batch(unique_sids)
+            for group_id in self.group_steam_ids:
+                steam_ids = self.group_steam_ids[group_id]
+                group_lines = []
+                for sid in steam_ids:
+                    # 状态基线按群保存；即使同一玩家属于多个群，也必须逐群初始化。
+                    msg = await self.check_status_change(
+                        group_id,
+                        single_sid=sid,
+                        status_override=status_map.get(sid),
+                        skip_push=True,
+                    )
+                    if msg:
+                        group_lines.append(msg)
+                if group_lines:
+                    all_logs.append(f"群{group_id}：\n" + "\n".join(group_lines))
+            if all_logs:
+                logger.info("====== Steam状态监控初始化日志 ======\n" + "\n".join(all_logs) + "\n=====================================================")
+        finally:
+            self._startup_stale_groups.clear()
 
     async def global_poll_and_log_loop(self):
         '''全局定时并发查询所有群Steam状态，按动态间隔判断是否需要查询，40秒统一输出日志'''
@@ -1905,6 +1941,9 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         '''轮询检测玩家状态变更并推送通知（分群，支持单个sid）
         返回精简日志字符串，不直接打印日志'''
         now = int(time.time())
+        # 插件重启后首次初始化期间：若该群状态文件是"停止期间遗留的旧数据"，本次检测到的变化
+        # 属于历史变化（如玩家在插件关闭期间切了游戏），跳过播报，避免补播过时信息。
+        state_stale = self._startup_stale_groups.get(group_id, False)
         steam_ids = [single_sid] if single_sid else self.group_steam_ids.get(group_id, [])
         last_states = self.group_last_states.setdefault(group_id, {})
         start_play_times = self.group_start_play_times.setdefault(group_id, {})
@@ -1949,7 +1988,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                                 break
                             await asyncio.sleep(1)
                 self.achievement_monitor.clear_game_achievements(group_id, sid, prev_gameid)
-                if not self._should_skip_game(prev_gameid):
+                if not self._should_skip_game(prev_gameid) and not state_stale:
                     pending_quit.setdefault(sid, {})[prev_gameid] = {
                         "quit_time": now,
                         "name": name,
@@ -1981,7 +2020,8 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                         task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
                         self._pending_quit_tasks[task_key] = task
                 else:
-                    logger.info(f"[游戏过滤] {name} 退出游戏 {zh_prev_game_name}({prev_gameid}) 被跳过（黑白名单过滤）")
+                    reason = "黑白名单过滤" if self._should_skip_game(prev_gameid) else "插件停止期间的遗留变化"
+                    logger.info(f"[退出跳过] {name} 退出游戏 {zh_prev_game_name}({prev_gameid}) 被跳过（{reason}）")
                 last_quit_times.setdefault(sid, {})[prev_gameid] = now
                 last_states[sid] = status
                 if current_gameid in [None, "", "0"]:
@@ -2028,7 +2068,7 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                     continue
                 start_play_times.setdefault(sid, {})[current_gameid] = now
                 # 收集通知，由末尾统一合并发送（不在循环内逐条推送）
-                if not skip_push and self.config.get('enable_game_start_notify', True):
+                if not skip_push and not state_stale and self.config.get('enable_game_start_notify', True):
                     notifications.append({
                         "type": "start",
                         "name": name,
