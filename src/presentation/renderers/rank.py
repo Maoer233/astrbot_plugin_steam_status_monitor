@@ -9,7 +9,8 @@ import httpx
 import logging
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
-from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
+from .game_start import get_avatar_frame_url, get_avatar_frame_path
+from ...shared.paths import FONTS_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ def _get_font(font_path, size):
         return ImageFont.truetype(font_path, size)
     except Exception:
         try:
-            return ImageFont.truetype(os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansHans-Regular.otf'), size)
+            return ImageFont.truetype(os.path.join(str(FONTS_DIR), 'NotoSansHans-Regular.otf'), size)
         except Exception:
             return ImageFont.load_default()
 
@@ -176,7 +177,7 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
         PNG 图片 bytes
     """
     if font_path is None:
-        font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansHans-Regular.otf')
+        font_path = os.path.join(str(FONTS_DIR), 'NotoSansHans-Regular.otf')
 
     font_title = _get_bold_font(font_path, 28)       # 标题加粗放大
     font_subtitle = _get_font(font_path, 14)

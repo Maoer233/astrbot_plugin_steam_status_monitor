@@ -29,7 +29,7 @@ async function navigateTo(page,params){const t=document.getElementById("hplayer-
   document.querySelectorAll(".nav-item").forEach(i=>i.classList.toggle("active",i.dataset.page===page));
   const c=document.getElementById("content");
   c.innerHTML='<div class="page-loading"><span class="mdi mdi-loading mdi-spin"></span><p>加载中...</p></div>';
-  try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,push:renderPush,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
+  try{const pages={dashboard:renderDashboard,gantt:renderGantt,heatmap:()=>renderHeatmap(params),groups:renderGroups,push:renderPush,qqofficial:renderQQOfficial,settings:renderSettings,test:renderTest};await(pages[page]||renderDashboard)()}
   catch(e){c.innerHTML=`<div class="empty-state"><span class="mdi mdi-alert-circle"></span><p>加载失败: ${escapeHtml(e.message)}</p><button class="btn btn-primary mt-8" onclick="navigateTo(${jsArg(page)})">重试</button></div>`}
 }
 
@@ -188,38 +188,32 @@ async function loadGantt(days,offset){
 }
 
 // ====== Heatmap ======
+let heatmapState={period:90,group:"",selectedDate:""};
+function formatHeatmapDuration(minutes){minutes=Number(minutes)||0;if(minutes<60)return`${minutes} 分钟`;const hours=Math.floor(minutes/60);const rest=minutes%60;return rest?`${hours} 小时 ${rest} 分钟`:`${hours} 小时`}
+function heatmapDateLabel(date){const d=new Date(`${date}T00:00:00`);return`${d.getMonth()+1}月${d.getDate()}日`}
 async function renderHeatmap(params){
   if(params&&params.player){await renderPlayerHeatmap(params.player);return}
-  const data=await API.get("/api/heatmap/data?period=90");
-  const c=document.getElementById("content");
-  c.innerHTML=`<h2 class="page-title">团队贡献日历</h2>
-    <div class="card mb-20"><div class="flex-between mb-12"><div class="card-title">近90天团队活跃度</div>
-      <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-muted)"><span>少</span>
-      <span style="width:10px;height:10px;border-radius:2px;background:transparent;border:1px solid var(--border-color)"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:rgb(2,46,18)"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:#006d32"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:#26a641"></span>
-      <span style="width:10px;height:10px;border-radius:2px;background:#39d353"></span>
-      <span>多</span></div></div>
-      <div id="heatmap-cal" class="chart-box-lg"></div></div>
-    <div class="card"><div class="card-title">玩家列表</div><div id="heatmap-players" class="flex flex-wrap gap-12"></div></div>`;
-  if(typeof echarts!=="undefined"&&data.heatmap_data){
-    const hd=data.heatmap_data;const dates=Object.keys(hd).sort();const cd=dates.map(d=>[d,hd[d]]);const maxV=Math.max(...Object.values(hd),60);
-    const hm=initChart("heatmap-cal");if(hm)hm.setOption({...steamTheme(),tooltip:{formatter:p=>{const hrs=(p.data[1]/60).toFixed(1);return`${p.data[0]}<br/><b>${p.data[1]}</b>分钟(${hrs}h)`}},
-      visualMap:{min:0,max:maxV,orient:"horizontal",left:"center",bottom:0,inRange:{color:["rgb(17,22,28)","rgb(2,46,18)","#006d32","#26a641","#39d353","#6ae07a"]},textStyle:{color:"#aeb9c2"}},
-      calendar:{range:dates.length?[dates[0],dates[dates.length-1]]:"2026-07",cellSize:[20,20],dayLabel:{color:"#aeb9c2"},monthLabel:{color:"#aeb9c2"},itemStyle:{borderColor:"#0a0e12",borderWidth:3,borderRadius:2}},
-      series:[{type:"heatmap",coordinateSystem:"calendar",data:cd}]});
-  }
-  const pd=document.getElementById("heatmap-players");
-  if(!data.players||!data.players.length){pd.innerHTML='<div class="empty-state"><span class="mdi mdi-calendar-blank"></span><p>暂无记录</p></div>';return}
-  pd.innerHTML=data.players.map(p=>`<div class="player-card-mini" data-sid="${escapeAttr(p.sid)}" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})">
-    <div class="player-avatar"><span class="mdi mdi-loading mdi-spin" style="font-size:16px;color:var(--text-muted)"></span></div>
-    <div><div style="font-size:14px;font-weight:500;color:var(--text-bright)">${escapeHtml(p.name)}</div><div style="font-size:12px;color:var(--text-secondary)">${(p.total_minutes/60).toFixed(1)}h</div></div></div>`).join("");
-  Promise.all(data.players.map(p=>loadAvatar(p.sid).then(av=>{const card=document.querySelector(`.player-card-mini[data-sid="${CSS.escape(String(p.sid))}"]`);if(!card)return;const a=card.querySelector(".player-avatar");if(a&&av)a.innerHTML=`<img src="${safeImageUrl(av)}">`})));
-  document.querySelectorAll(".player-card-mini").forEach(card=>{const sid=card.dataset.sid;
-    card.addEventListener("mouseenter",async e=>await showTooltip(e,sid));
-    card.addEventListener("mouseleave",()=>{const t=document.getElementById("hplayer-tooltip");if(t)t.style.display="none"});
-    card.addEventListener("mousemove",e=>{const t=document.getElementById("hplayer-tooltip");if(t&&t.style.display!=="none"){t.style.left=(e.clientX+16)+"px";t.style.top=(e.clientY+16)+"px"}})});
+  if(params&&params.period)heatmapState.period=Number(params.period)||90;
+  if(params&&Object.prototype.hasOwnProperty.call(params,"group"))heatmapState.group=String(params.group||"");
+  const query=new URLSearchParams({period:String(heatmapState.period)});if(heatmapState.group)query.set("group_id",heatmapState.group);
+  const data=await API.get(`/api/heatmap/data?${query.toString()}`);
+  const c=document.getElementById("content");const groups=data.groups||[];
+  c.innerHTML=`<section class="heatmap-page">
+    <div class="heatmap-hero"><div><div class="heatmap-eyebrow">STEAM MONITOR</div><h2 class="page-title">团队贡献热力图</h2><p>查看群组每日游戏活跃度，点击日期可展开主要贡献玩家。</p></div>
+      <div class="heatmap-controls"><label>数据范围<select id="heatmap-period"><option value="30">近 30 天</option><option value="90">近 90 天</option><option value="180">近 180 天</option><option value="366">近一年</option></select></label><label>群组<select id="heatmap-group"><option value="">全部群组</option>${groups.map(g=>`<option value="${escapeAttr(g.id)}">群 ${escapeHtml(g.id)} · ${g.player_count} 人</option>`).join("")}</select></label></div></div>
+    <div class="heatmap-summary"><div><span>累计活跃</span><strong>${formatHeatmapDuration(Object.values(data.heatmap_data||{}).reduce((a,b)=>a+b,0))}</strong></div><div><span>活跃玩家</span><strong>${(data.players||[]).length}</strong></div><div><span>活跃日期</span><strong>${Object.values(data.heatmap_data||{}).filter(v=>v>0).length}</strong></div></div>
+    <div class="heatmap-layout"><div class="card heatmap-calendar-card"><div class="heatmap-card-head"><div><div class="card-title">每日活跃日历</div><p>圆环越明亮代表当日累计游玩时长越高，点击日期查看贡献玩家</p></div><div class="heatmap-legend"><span>少</span><i></i><i></i><i></i><i></i><i></i><span>多</span></div></div><div id="heatmap-cal" class="heatmap-calendar"></div></div>
+      <aside class="card heatmap-detail"><div id="heatmap-detail"></div></aside></div>
+    <div class="card heatmap-ranking"><div class="heatmap-card-head"><div><div class="card-title">周期贡献排行</div><p>当前范围内累计游玩时长</p></div></div><div id="heatmap-players" class="heatmap-player-grid"></div></div>
+  </section>`;
+  const periodSelect=document.getElementById("heatmap-period"),groupSelect=document.getElementById("heatmap-group");periodSelect.value=String(heatmapState.period);groupSelect.value=data.selected_group||"";
+  periodSelect.addEventListener("change",()=>renderHeatmap({period:periodSelect.value,group:groupSelect.value}));groupSelect.addEventListener("change",()=>renderHeatmap({period:periodSelect.value,group:groupSelect.value}));
+  const hd=data.heatmap_data||{},dates=Object.keys(hd).sort(),activeDates=dates.filter(d=>hd[d]>0);if(!heatmapState.selectedDate||!Object.prototype.hasOwnProperty.call(hd,heatmapState.selectedDate))heatmapState.selectedDate=activeDates[activeDates.length-1]||dates[dates.length-1]||"";
+  const showDay=date=>{heatmapState.selectedDate=date;document.querySelectorAll(".heatmap-day-contributor").forEach(el=>el.remove());const detail=document.getElementById("heatmap-detail"),players=(data.daily_contributors||{})[date]||[],total=hd[date]||0;detail.innerHTML=`<div class="heatmap-detail-date"><span>${date?heatmapDateLabel(date):"选择日期"}</span><small>${date||"点击日历中的方块"}</small></div><div class="heatmap-detail-total"><span>当日累计</span><strong>${formatHeatmapDuration(total)}</strong></div><div class="heatmap-contributors">${players.length?players.map((p,i)=>{const top=(p.games||[])[0];const pct=total?Math.round(p.total_minutes/total*100):0;return`<button class="heatmap-contributor" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})"><span class="heatmap-rank">${i+1}</span><span class="heatmap-contributor-avatar" data-day-sid="${escapeAttr(p.sid)}"><span class="mdi mdi-account"></span></span><span class="heatmap-contributor-main"><b>${escapeHtml(p.name)}</b><small>${top?escapeHtml(top.name):"游戏记录"} · ${pct}%</small><i><em style="width:${pct}%"></em></i></span><strong>${formatHeatmapDuration(p.total_minutes)}</strong></button>`}).join(""):'<div class="heatmap-empty"><span class="mdi mdi-calendar-blank"></span><p>当日暂无游玩记录</p></div>'}</div>`;Promise.all(players.map(p=>loadAvatar(p.sid).then(av=>{const el=document.querySelector(`[data-day-sid="${CSS.escape(String(p.sid))}"]`);if(el&&av)el.innerHTML=`<img src="${safeImageUrl(av)}">`})))};
+  if(dates.length){const calendar=document.getElementById("heatmap-cal"),maxV=Math.max(...Object.values(hd),60),start=new Date(`${dates[0]}T00:00:00`),end=new Date(`${dates[dates.length-1]}T00:00:00`),today=new Date().toLocaleDateString("en-CA"),months=[];for(let cursor=new Date(start.getFullYear(),start.getMonth(),1);cursor<=end;cursor.setMonth(cursor.getMonth()+1))months.push([cursor.getFullYear(),cursor.getMonth()+1]);calendar.innerHTML=months.map(([year,month])=>{const monthKey=`${year}-${String(month).padStart(2,"0")}`,days=new Date(year,month,0).getDate(),cells=[];for(let day=1;day<=days;day++){const date=`${monthKey}-${String(day).padStart(2,"0")}`;if(date<dates[0]||date>dates[dates.length-1])continue;const minutes=Number(hd[date]||0),level=minutes<=0?0:Math.max(1,Math.min(5,Math.ceil(minutes/maxV*5))),selected=date===heatmapState.selectedDate?" is-selected":"",todayBadge=date===today?'<span class="heatmap-today">今天</span>':"";cells.push(`<button class="heatmap-day-circle level-${level}${selected}" data-date="${date}" type="button" title="${date} · ${formatHeatmapDuration(minutes)}"><strong>${day}</strong><span>${minutes?`+${minutes<60?`${minutes}m`:`${(minutes/60).toFixed(1)}h`}`:"0h"}</span>${todayBadge}</button>`)}return`<section class="heatmap-month"><h3>${year} 年 ${month} 月</h3><div class="heatmap-circle-grid">${cells.join("")}</div></section>`}).join("");calendar.querySelectorAll(".heatmap-day-circle").forEach(el=>el.addEventListener("click",()=>{calendar.querySelectorAll(".heatmap-day-circle").forEach(day=>day.classList.remove("is-selected"));el.classList.add("is-selected");showDay(el.dataset.date)}))}
+  showDay(heatmapState.selectedDate);
+  const pd=document.getElementById("heatmap-players"),players=data.players||[];pd.innerHTML=players.length?players.map((p,i)=>`<button class="heatmap-player-card" data-sid="${escapeAttr(p.sid)}" onclick="navigateTo('heatmap',{player:${jsArg(p.sid)}})"><span class="heatmap-player-position">${String(i+1).padStart(2,"0")}</span><span class="player-avatar"><span class="mdi mdi-account"></span></span><span><b>${escapeHtml(p.name)}</b><small>${escapeHtml(p.sid)}</small></span><strong>${formatHeatmapDuration(p.total_minutes)}</strong></button>`).join(""):'<div class="empty-state"><span class="mdi mdi-calendar-blank"></span><p>当前范围暂无记录</p></div>';
+  Promise.all(players.map(p=>loadAvatar(p.sid).then(av=>{const card=document.querySelector(`.heatmap-player-card[data-sid="${CSS.escape(String(p.sid))}"]`);if(card&&av)card.querySelector(".player-avatar").innerHTML=`<img src="${safeImageUrl(av)}">`})));
 }
 async function loadAvatar(sid){try{const r=await API.get(`/api/players/avatar/${sid}`);return r.avatar_url||""}catch(e){return""}}
 async function showTooltip(e,sid){
@@ -372,6 +366,47 @@ function safeImageUrl(value){
 const SL={steam_api_key:"Steam Web API密钥",sgdb_api_key:"SteamGridDB API密钥",fixed_poll_interval:"固定轮询间隔(秒)",smart_poll_intervals:"智能轮询间隔(分)",retry_times:"API重试次数",max_group_size:"单群最大监控人数",detailed_poll_log:"详细轮询日志",enable_achievement_poll:"成就轮询推送",enable_steam_style:"列表新版渲染风格",enable_game_start_notify:"游戏开始通知",enable_game_end_notify:"游戏结束通知",notify_send_image:"通知发送图片",notify_send_text:"通知发送文本",enable_proxy:"启用代理",proxy_url:"代理链接",cache_avatar_hours:"头像缓存(小时)",cache_avatar_frame_hours:"头像框缓存(小时)",game_filter_mode:"游戏过滤模式",game_filter_ids:"过滤游戏ID",rank_push_hour:"推送-时",rank_push_minute:"推送-分"};
 const SO=["steam_api_key","sgdb_api_key","fixed_poll_interval","smart_poll_intervals","retry_times","max_group_size","enable_game_start_notify","enable_game_end_notify","enable_network_fluctuation_notify","enable_achievement_poll","enable_steam_style","notify_send_text","notify_send_image","detailed_poll_log","game_filter_mode","game_filter_ids","rank_push_hour","rank_push_minute","enable_proxy","proxy_url","cache_avatar_hours","cache_avatar_frame_hours"];
 const BK=["detailed_poll_log","enable_achievement_poll","enable_steam_style","enable_game_start_notify","enable_game_end_notify","enable_network_fluctuation_notify","notify_send_image","notify_send_text"];
+
+async function renderQQOfficial(){
+  const data=await API.get("/api/qq-official/settings");const c=document.getElementById("content");
+  c.innerHTML=`<h2 class="page-title">QQ 官方机器人</h2>
+    <div class="card qq-config-card">
+      <div class="flex-between mb-20"><div><div class="card-title">基础接入配置</div><p class="form-help">配置仅保存在当前插件中；密钥读取时自动脱敏。修改后建议重载插件。</p></div><label class="toggle"><input type="checkbox" id="qq-official-enabled" ${data.qq_official_enabled?"checked":""}><span class="slider"></span></label></div>
+      <div class="settings-grid">
+        <div class="form-group"><label class="form-label" for="qq-appid">机器人 AppID</label><input id="qq-appid" class="form-input" inputmode="numeric" maxlength="20" value="${escapeAttr(data.qq_official_appid||"")}" placeholder="QQ 开放平台 AppID"><p class="form-help">5 至 20 位数字。</p></div>
+        <div class="form-group"><label class="form-label" for="qq-secret">机器人密钥</label><div class="secret-input"><input id="qq-secret" class="form-input" type="password" maxlength="256" value="${escapeAttr(data.qq_official_secret||"")}" placeholder="QQ 开放平台机器人密钥"><button class="btn btn-sm" type="button" onclick="toggleQQSecret()">显示/隐藏</button></div><p class="form-help">保留脱敏值不会覆盖现有密钥。</p></div>
+        <div class="form-group settings-span"><label class="form-label" for="qq-callback">回调地址</label><input id="qq-callback" class="form-input" type="url" value="${escapeAttr(data.qq_official_callback_url||"")}" placeholder="https://example.com/qq/webhook"><p class="form-help">仅 Webhook 接入需要，必须是完整 HTTP/HTTPS 地址。</p></div>
+        <div class="form-group"><label class="form-label" for="qq-format">消息格式</label><select id="qq-format" class="form-input"><option value="plain" ${data.qq_official_message_format==="plain"?"selected":""}>纯文本（plain）</option><option value="markdown" ${data.qq_official_message_format==="markdown"?"selected":""}>Markdown</option></select></div>
+      </div>
+    </div>
+    <div class="card qq-config-card">
+      <div class="card-title mb-20">指令面板</div>
+      <div class="settings-grid">
+        <div class="form-group"><label class="flex gap-8 qq-toggle-row"><label class="toggle"><input type="checkbox" id="qq-menu-enabled" ${data.qq_menu_enabled?"checked":""}><span class="slider"></span></label><span>启用 QQ 指令面板</span></label></div>
+        <div class="form-group"><label class="form-label" for="qq-menu-scope">使用场景</label><select id="qq-menu-scope" class="form-input"><option value="group" ${data.qq_menu_scope==="group"?"selected":""}>群聊（group）</option><option value="c2c" ${data.qq_menu_scope==="c2c"?"selected":""}>单聊（c2c）</option></select></div>
+        <div class="form-group settings-span"><label class="form-label" for="qq-openids">目标群 OpenID</label><textarea id="qq-openids" class="form-input" rows="4" placeholder="每行一个群 OpenID，也可使用逗号分隔">${escapeHtml((data.qq_menu_group_openids||[]).join("\n"))}</textarea><p class="form-help">普通 QQ 群号无效；也可留空后在目标官方群中执行 /steam qq菜单同步 自动获取。</p></div>
+        <div class="form-group settings-span"><div class="flex-between mb-8"><label class="form-label">群指令菜单项</label><button class="btn btn-sm" type="button" onclick="addQQMenuCommand()">添加指令</button></div><div id="qq-menu-commands" class="qq-menu-commands">${(data.qq_menu_commands||[]).map((item,index)=>qqMenuCommandRow(item,index)).join("")}</div><p class="form-help">仅控制菜单显示内容，不会自动实现新指令。可用上下按钮调整顺序，保存后执行 /steam qq菜单同步。</p></div>
+      </div>
+      <div class="settings-actions"><button class="btn btn-primary" type="button" onclick="saveQQOfficial()">保存配置</button><button class="btn btn-danger" type="button" onclick="resetQQOfficial()">恢复默认</button></div>
+    </div>`;
+}
+function qqMenuCommandRow(item,index){return `<div class="qq-menu-command" data-index="${index}"><input class="form-input qq-menu-command-name" maxlength="100" value="${escapeAttr(item.command||"")}" placeholder="/steam help"><input class="form-input qq-menu-command-desc" maxlength="100" value="${escapeAttr(item.description||"")}" placeholder="菜单中显示的说明"><div class="qq-menu-command-actions"><button class="btn btn-sm" type="button" title="上移" onclick="moveQQMenuCommand(this,-1)">↑</button><button class="btn btn-sm" type="button" title="下移" onclick="moveQQMenuCommand(this,1)">↓</button><button class="btn btn-sm btn-danger" type="button" onclick="removeQQMenuCommand(this)">删除</button></div></div>`}
+window.addQQMenuCommand=()=>{const list=document.getElementById("qq-menu-commands");if(list.children.length>=20){toast("菜单指令最多 20 项","error");return}list.insertAdjacentHTML("beforeend",qqMenuCommandRow({},list.children.length))};
+window.removeQQMenuCommand=button=>button.closest(".qq-menu-command").remove();
+window.moveQQMenuCommand=(button,direction)=>{const row=button.closest(".qq-menu-command");const target=direction<0?row.previousElementSibling:row.nextElementSibling;if(target)row.parentNode.insertBefore(direction<0?row:target,direction<0?target:row)};
+function collectQQMenuCommands(){return [...document.querySelectorAll(".qq-menu-command")].map(row=>({command:row.querySelector(".qq-menu-command-name").value.trim(),description:row.querySelector(".qq-menu-command-desc").value.trim()})).filter(item=>item.command||item.description)}
+window.toggleQQSecret=()=>{const input=document.getElementById("qq-secret");input.type=input.type==="password"?"text":"password"};
+window.saveQQOfficial=async()=>{
+  const appid=document.getElementById("qq-appid").value.trim();
+  const callback=document.getElementById("qq-callback").value.trim();
+  if(appid&&!/^\d{5,20}$/.test(appid)){toast("AppID 必须为 5 至 20 位数字","error");return}
+  if(callback&&!/^https?:\/\//i.test(callback)){toast("回调地址必须以 http:// 或 https:// 开头","error");return}
+  const menuCommands=collectQQMenuCommands();
+  if(menuCommands.some(item=>!item.command.startsWith("/")||!item.description)){toast("每个菜单项都需要以 / 开头的指令和说明","error");return}
+  const payload={qq_official_enabled:document.getElementById("qq-official-enabled").checked,qq_official_appid:appid,qq_official_secret:document.getElementById("qq-secret").value.trim(),qq_official_callback_url:callback,qq_official_message_format:document.getElementById("qq-format").value,qq_menu_enabled:document.getElementById("qq-menu-enabled").checked,qq_menu_scope:document.getElementById("qq-menu-scope").value,qq_menu_group_openids:document.getElementById("qq-openids").value,qq_menu_commands:menuCommands};
+  try{const result=await API.post("/api/qq-official/settings",payload);if(result.ok){toast("QQ 官方机器人配置已保存");await renderQQOfficial()}else toast(result.error||"保存失败","error")}catch(error){toast(error.message||"保存失败","error")}
+};
+window.resetQQOfficial=async()=>{if(!await pageConfirm("确认恢复 QQ 官方机器人默认配置？AppID、密钥和面板 ID 将被清空。"))return;try{const result=await API.post("/api/qq-official/settings/reset",{});if(result.ok){toast("已恢复默认配置");await renderQQOfficial()}else toast(result.error||"重置失败","error")}catch(error){toast(error.message||"重置失败","error")}};
 const IK=["fixed_poll_interval","retry_times","max_group_size","cache_avatar_hours","cache_avatar_frame_hours","rank_push_hour","rank_push_minute"];
 const SK=["smart_poll_intervals","proxy_url","game_filter_ids"];const SEK=["steam_api_key","sgdb_api_key"];
 async function renderSettings(){

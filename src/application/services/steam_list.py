@@ -1,8 +1,8 @@
 import time
 import io
 from typing import Optional
-from .steam_list_render import render_steam_list_image
-from .game_start_render import get_avatar_frame_url, get_avatar_frame_path
+from ...presentation.renderers.steam_list import render_steam_list_image
+from ...presentation.renderers.game_start import get_avatar_frame_url, get_avatar_frame_path
 
 async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
     '''列出所有玩家当前状态（图片美化版，分群支持）'''
@@ -123,7 +123,7 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
         for u in user_list:
             gid = u.get('gameid', '')
             if gid:
-                from .game_start_render import get_cover_path
+                from ...presentation.renderers.game_start import get_cover_path
                 cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=proxy)
                 if cp:
                     covers[u['sid']] = cp

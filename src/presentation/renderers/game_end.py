@@ -5,8 +5,9 @@ import time
 import asyncio
 import httpx
 from PIL import Image, ImageDraw, ImageFont
-from .game_start_render import get_avatar_frame_url, get_avatar_frame_path, _cache_config, get_horizontal_cover_path
+from .game_start import get_avatar_frame_url, get_avatar_frame_path, _cache_config, get_horizontal_cover_path
 from .steam_cover import get_steam_library_cover_url
+from ...shared.paths import FONTS_DIR, IMAGES_DIR
 
 # 更深的蓝紫色到黑色渐变
 BG_COLOR_TOP = (24, 18, 48)   # 顶部深蓝紫
@@ -15,8 +16,8 @@ AVATAR_SIZE = 80
 COVER_W, COVER_H = 80, 120
 IMG_W, IMG_H = 512, 192
 
-# 星星素材路径（假定与本文件同目录）
-STAR_BG_PATH = os.path.join(os.path.dirname(__file__), "随机散布的小星星767x809xp.png")
+# 星星素材位于统一图片资源目录
+STAR_BG_PATH = str(IMAGES_DIR / "随机散布的小星星767x809xp.png")
 
 
 async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
@@ -156,7 +157,7 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
             print(f"[get_cover_path] SteamGridDB 下载异常: {e} url={url}")
     # 新增：SGDB未收录或下载失败时，使用missingcover.jpg
     print(f"[get_cover_path] SGDB未收录或下载失败: {gameid} {game_name}，使用默认封面")
-    missing_cover = os.path.join(os.path.dirname(__file__), "missingcover.jpg")
+    missing_cover = str(IMAGES_DIR / "missingcover.jpg")
     if os.path.exists(missing_cover):
         return missing_cover
     return None
@@ -222,7 +223,7 @@ def draw_duration_bar(draw, x, y, width, height, duration_h):
                 draw.text((center_x, center_y), text, font=font, fill=color, stroke_width=2, stroke_fill=(0,0,0,180))
 
 def get_font_path(font_name):
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_path = os.path.join(fonts_dir, font_name)
     if (os.path.exists(font_path)):
         return font_path
@@ -252,7 +253,7 @@ def text_wrap(text, font, max_width):
 
 def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None, horizontal_cover_path=None):
     # 字体
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
     font_medium = os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
     if not os.path.exists(font_regular):

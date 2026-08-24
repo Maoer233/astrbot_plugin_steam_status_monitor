@@ -1,2 +1,14 @@
-httpx[socks]
-aiohttp>=3.9.0
+# HTTP 客户端：Steam、SteamGridDB、封面和头像请求；[socks] 提供 SOCKS4/5 代理支持
+httpx[socks]>=0.26,<1
+
+# 异步下载成就图标
+aiohttp>=3.9,<4
+
+# 图片生成、裁剪与渲染
+Pillow>=9.5,<13
+
+# 同步图片下载（crop_image_auto）
+requests>=2.28,<3
+
+# 图片自动边界检测（crop_image_auto）
+numpy>=1.21,<3

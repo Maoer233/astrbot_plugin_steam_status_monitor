@@ -1,6 +1,6 @@
 import unittest
 
-from rank_push import build_rank_push_scopes
+from src.domain.ranking.push_scopes import build_rank_push_scopes
 
 
 class RankPushScopeTests(unittest.TestCase):

@@ -7,6 +7,11 @@ import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 from typing import Set, Optional, Dict, Any
 
+from ...shared.paths import FONTS_DIR
+from ...shared.logging import logger
+from ...shared.network import aiohttp_connector, httpx_client_kwargs
+
+
 class AchievementMonitor:
     def __init__(self, data_dir: str, steam_api_base: str = "https://api.steampowered.com", proxy: str = None):
         self.data_dir = data_dir
@@ -78,7 +83,7 @@ class AchievementMonitor:
             }
             for attempt in range(3):
                 try:
-                    async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
+                    async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                         response = await client.get(url, params=params)
                         if response.status_code == 200:
                             data = response.json()
@@ -127,7 +132,7 @@ class AchievementMonitor:
         for try_lang in lang_list:
             url = f"{self.steam_api_base}/ISteamUserStats/GetSchemaForGame/v2/?appid={appid}&key={api_key}&l={try_lang}"
             try:
-                async with httpx.AsyncClient(timeout=15, proxy=self.proxy) as client:
+                async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                     # 成就元数据
                     resp = await client.get(url)
                     if resp.status_code == 400:
@@ -298,7 +303,7 @@ class AchievementMonitor:
         max_text_width = width - padding_h * 2 - icon_size - icon_margin_right - 18
 
         # 字体路径
-        fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+        fonts_dir = str(FONTS_DIR)
         # 优先使用传入 font_path
         font_regular = font_path or os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
         font_medium = font_regular.replace('Regular', 'Medium') if 'Regular' in font_regular else os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
@@ -428,7 +433,8 @@ class AchievementMonitor:
 
         y = padding_v + header_h + padding_v
 
-        async with aiohttp.ClientSession() as session:
+        connector = aiohttp_connector()
+        async with aiohttp.ClientSession(connector=connector) as session:
             idx = 0
             for apiname in new_achievements:
                 detail = achievement_details.get(apiname)

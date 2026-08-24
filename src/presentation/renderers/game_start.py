@@ -6,6 +6,10 @@ from PIL import Image, ImageDraw, ImageFont
 import random
 from .steam_cover import get_steam_library_cover_url
 
+from ...shared.paths import FONTS_DIR, IMAGES_DIR
+from ...shared.logging import logger
+from ...shared.network import httpx_client_kwargs
+
 BG_COLOR_TOP = (49, 80, 66)
 BG_COLOR_BOTTOM = (28, 35, 44)
 AVATAR_SIZE = 80
@@ -52,7 +56,7 @@ async def get_avatar_frame_url(steamid, proxy=None):
             return cached_url
     try:
         url = f"https://steamcommunity.com/profiles/{steamid}/?l=english"
-        async with httpx.AsyncClient(timeout=10, proxy=proxy, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True, **httpx_client_kwargs(proxy)) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
                 div_match = re.search(r'<div class="profile_avatar_frame">(.*?)</div>', resp.text, re.DOTALL)
@@ -105,7 +109,7 @@ async def get_avatar_frame_path(data_dir, steamid, url=None, proxy=None):
     elif refresh_interval == 0 and os.path.exists(path):
         return path
     try:
-        async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+        async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
             resp = await client.get(url)
             if resp.status_code == 200:
                 with open(path, "wb") as f:
@@ -123,7 +127,7 @@ async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=N
     headers = {"Authorization": f"Bearer {sgdb_api_key}"}
     search_name = sgdb_game_name if sgdb_game_name else game_name
     search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{urllib.parse.quote(search_name)}"
-    async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+    async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
         try:
             resp = await client.get(search_url, headers=headers)
             data = resp.json()
@@ -249,7 +253,7 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
             print(f"[get_cover_path] SteamGridDB 下载异常: {e} url={url}")
     # 新增：SGDB未收录或下载失败时，使用missingcover.jpg
     print(f"[get_cover_path] SGDB未收录或下载失败: {gameid} {game_name}，使用默认封面")
-    missing_cover = os.path.join(os.path.dirname(__file__), "missingcover.jpg")
+    missing_cover = str(IMAGES_DIR / "missingcover.jpg")
     if os.path.exists(missing_cover):
         return missing_cover
     return None
@@ -342,7 +346,7 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
     )
     for attempt in range(retry_times):
         try:
-            async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
+            async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
                 resp = await client.get(url)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -362,7 +366,7 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
     return 0.0
 
 def get_font_path(font_name):
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_path = os.path.join(fonts_dir, font_name)
     if os.path.exists(font_path):
         return font_path
@@ -373,7 +377,7 @@ def get_font_path(font_name):
 
 def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None, version=None):
     # 字体
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
+    fonts_dir = str(FONTS_DIR)
     font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
     font_medium = os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
     if not os.path.exists(font_regular):

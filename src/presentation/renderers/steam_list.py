@@ -1,9 +1,11 @@
 import os
 import io
+import math
 import asyncio
 import logging
 import httpx
 from PIL import Image, ImageDraw, ImageFont
+from ...shared.paths import FONTS_DIR, IMAGES_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +43,7 @@ STATUS_COLORS = {
     'error':   ((215, 110, 110), (180, 90, 90)),
 }
 
-RES_DIR = os.path.join(os.path.dirname(__file__), 'res')
-FONTS_DIR = os.path.join(os.path.dirname(__file__), 'fonts')
+RES_DIR = str(IMAGES_DIR)
 
 
 def _res(name):
@@ -135,17 +136,6 @@ def get_status_text(status):
         return "离线"
     else:
         return "异常"
-
-
-def get_font_path(font_name):
-    fonts_dir = os.path.join(os.path.dirname(__file__), 'fonts')
-    font_path = os.path.join(fonts_dir, font_name)
-    if os.path.exists(font_path):
-        return font_path
-    font_path2 = os.path.join(os.path.dirname(__file__), font_name)
-    if os.path.exists(font_path2):
-        return font_path2
-    return font_name
 
 
 _font_cache = {}
@@ -426,7 +416,7 @@ async def _render_card_style(data_dir, user_list, font_path=None, proxy=None,
     """旧版卡片风格渲染（原 render_steam_list_image 实现）"""
     # 字体
     if font_path is None:
-        font_path = os.path.join(os.path.dirname(__file__), 'fonts', 'NotoSansHans-Regular.otf')
+        font_path = os.path.join(str(FONTS_DIR), 'NotoSansHans-Regular.otf')
     logger.info(f"[Font] render_steam_list_image 使用字体路径: {font_path}")
     try:
         font_title = ImageFont.truetype(font_path, 28)

@@ -5,3 +5,4 @@ venv/
 .git-rewrite/
 *.lnk
 test_line.txt
+/data/steam_status_monitor/
