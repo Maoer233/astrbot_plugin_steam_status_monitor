@@ -314,3 +314,11 @@ pip install httpx pillow
 - V2.2.0
   添加了缺失的封面的图片显示
   添加了新功能，可以将已经轮询中账号，联动推送到多个副群（适用于多个粉丝群的情况）
+
+## 贡献者
+
+感谢以下社区贡献者（V3.4.0）：
+
+- [@OLRainM](https://github.com/OLRainM)：模块化重构、QQ 官方机器人适配、WebUI 管理接口性能优化
+- [@e-legy](https://github.com/e-legy)：跨群状态基线修复、Steam 官方高清竖版封面获取
+- [@guairenwei](https://github.com/guairenwei)：Steam 好友列表风格渲染
