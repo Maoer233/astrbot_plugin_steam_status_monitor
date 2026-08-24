@@ -1757,13 +1757,24 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             logger.error(f"[排行榜] 记录游玩时长异常: {e}")
 
     def _get_notify_sessions(self, group_id, sid):
-        """获取需要通知的所有 session（主群 + 联动群），去重返回"""
+        """获取本次状态检测需要通知的 session，避免主群与联动群交叉重复投递。"""
         sessions = []
-        ns = getattr(self, 'notify_sessions', {}).get(group_id, None)
-        if ns and ns not in sessions:
-            sessions.append(ns)
+        notify_sessions = getattr(self, 'notify_sessions', {})
+        primary_session = notify_sessions.get(group_id)
+        if primary_session:
+            sessions.append(primary_session)
+
+        # 同一玩家可能同时属于多个主群。每个主群都会独立执行状态检测，因此这里
+        # 只补充该玩家未被直接监控的联动群；否则 A 主群发送 A+B、B 主群再发送
+        # B+A，会让两个群各收到两次完全相同的通知。
+        monitored_groups = {
+            gid for gid, steam_ids in getattr(self, 'group_steam_ids', {}).items()
+            if sid in steam_ids
+        }
         for push_gid in self.push_groups.get(sid, []):
-            push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
+            if push_gid != group_id and push_gid in monitored_groups:
+                continue
+            push_session = notify_sessions.get(push_gid)
             if push_session and push_session not in sessions:
                 sessions.append(push_session)
         return sessions
