@@ -139,7 +139,7 @@ def _build_heatmap_contributions(plugin, start_key, end_key, allowed_sids):
             date_key = session.get("date", "")
             if not start_key <= date_key <= end_key:
                 continue
-            minutes = max(0, int(session.get("duration_min", 0) or 0))
+            minutes = max(0.0, float(session.get("duration_min", 0) or 0))
             if minutes <= 0:
                 continue
             player_day = contributions.setdefault(date_key, {}).setdefault(

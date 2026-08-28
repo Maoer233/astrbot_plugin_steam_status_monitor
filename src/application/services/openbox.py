@@ -1,104 +1,78 @@
-import time
-import httpx
-from astrbot.api.message_components import Plain, Image
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
-async def handle_openbox(self, event, steamid: str):
-    '''查询并格式化展示指定SteamID的全部API返回信息（中文字段名，头像图片附加，位置ID合并，状态字段直观显示）'''
-    url = (
-        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/"
-        f"?key={self.API_KEY}&steamids={steamid}"
-    )
-    field_map = {
-        "steamid": "SteamID",
-        "personaname": "昵称",
-        "profileurl": "个人资料链接",
-        "avatar": "头像",
-        "personastate": "在线状态",
-        "lastlogoff": "上次离线时间",
-        "gameid": "当前游戏ID",
-        "gameextrainfo": "当前游戏名",
-        "communityvisibilitystate": "社区可见性",
-        "profilestate": "资料状态",
-        "timecreated": "账号创建时间",
-        "realname": "真实姓名",
-        "primaryclanid": "主要群组ID",
-        "personastateflags": "状态标志",
-        "commentpermission": "评论权限"
-    }
-    personastate_map = {
-        0: "离线",
-        1: "在线",
-        2: "忙碌",
-        3: "离开",
-        4: "打盹",
-        5: "想交易",
-        6: "想游戏"
-    }
-    communityvisibilitystate_map = {
-        1: "私密",
-        3: "公开"
-    }
-    profilestate_map = {
-        0: "未激活",
-        1: "激活"
-    }
-    commentpermission_map = {
-        0: "禁止评论",
-        1: "允许好友评论",
-        2: "所有人可评论"
-    }
+
+@dataclass(frozen=True)
+class OpenBoxResult:
+    text: str
+    avatar_url: Optional[str] = None
+
+
+_FIELD_NAMES = {
+    "steamid": "SteamID64",
+    "communityvisibilitystate": "资料可见性",
+    "profilestate": "资料状态",
+    "personaname": "昵称",
+    "profileurl": "个人主页",
+    "avatar": "头像(小)",
+    "avatarmedium": "头像(中)",
+    "avatarfull": "头像(大)",
+    "avatarhash": "头像Hash",
+    "personastate": "在线状态",
+    "realname": "真实姓名",
+    "primaryclanid": "主群组ID",
+    "timecreated": "账号创建时间",
+    "personastateflags": "在线状态Flags",
+    "gameextrainfo": "正在玩的游戏",
+    "gameid": "游戏AppID",
+    "loccountrycode": "国家/地区",
+    "locstatecode": "州/省代码",
+    "loccityid": "城市ID",
+    "lastlogoff": "上次离线时间",
+    "commentpermission": "留言权限",
+}
+
+_PERSONA_STATES = {
+    0: "离线",
+    1: "在线",
+    2: "忙碌",
+    3: "离开",
+    4: "打盹",
+    5: "想交易",
+    6: "想玩游戏",
+}
+
+
+def _format_player(player: Dict[str, Any]) -> OpenBoxResult:
+    lines: List[str] = []
+    for key, value in player.items():
+        display_name = _FIELD_NAMES.get(key, key)
+        if key == "personastate":
+            value = _PERSONA_STATES.get(value, f"未知({value})")
+        lines.append(f"{display_name}: {value}")
+    return OpenBoxResult("\n".join(lines), player.get("avatarfull"))
+
+
+async def query_openbox(steam_client, steamid: str) -> Optional[OpenBoxResult]:
+    """查询并格式化玩家摘要，不依赖 AstrBot 消息类型。"""
+    player = await steam_client.fetch_player_summary(steamid)
+    return _format_player(player) if player else None
+
+
+async def handle_openbox(steam_client, event, steamid: str):
+    """AstrBot 兼容适配器；核心查询结果保持框架无关。"""
+    from astrbot.api.message_components import Image, Plain
+
     try:
-        proxy = getattr(self, 'proxy', None)
-        async with httpx.AsyncClient(timeout=15, proxy=proxy) as client:
-            resp = await client.get(url)
-            if resp.status_code != 200:
-                yield event.plain_result(f"API请求失败: HTTP {resp.status_code}")
-                return
-            data = resp.json()
-            players = data.get('response', {}).get('players', [])
-            if not players:
-                yield event.plain_result("未查到该SteamID信息")
-                return
-            player = players[0]
-            avatar_url = player.get("avatarfull") or player.get("avatar")
-            loc_country = player.get("loccountrycode")
-            loc_state = player.get("locstatecode")
-            loc_city = player.get("loccityid")
-            lines = []
-            now = int(time.time())
-            for k, v in player.items():
-                if k in ("avatarmedium", "avatarfull", "loccountrycode", "locstatecode", "loccityid"):
-                    continue
-                if k == "avatar":
-                    continue
-                zh_key = field_map.get(k, k)
-                if k == "personastate":
-                    state_str = personastate_map.get(v, str(v))
-                    if v == 0:
-                        lastlogoff = player.get("lastlogoff")
-                        if lastlogoff:
-                            hours_ago = (now - int(lastlogoff)) / 3600
-                            state_str += f"-上次在线-{hours_ago:.1f}小时前"
-                    v = state_str
-                elif k == "communityvisibilitystate":
-                    v = communityvisibilitystate_map.get(v, str(v))
-                elif k == "profilestate":
-                    v = profilestate_map.get(v, str(v))
-                elif k == "commentpermission":
-                    v = commentpermission_map.get(v, str(v))
-                elif k == "personastateflags":
-                    v = str(v)
-                elif k in ("lastlogoff", "timecreated") and isinstance(v, int):
-                    from datetime import datetime
-                    v = datetime.fromtimestamp(v).strftime("%Y-%m-%d %H:%M:%S")
-                lines.append(f"{zh_key}: {v}")
-            if loc_country or loc_state or loc_city:
-                loc_str = "-".join(str(x) for x in [loc_country, loc_state, loc_city] if x)
-                lines.append(f"位置ID: {loc_str}")
-            msg_chain = []
-            if avatar_url:
-                msg_chain.append(Image.fromURL(avatar_url, width=64, height=64))
-            msg_chain.append(Plain("SteamID详细信息：\n" + "\n".join(lines)))
-            yield event.chain_result(msg_chain)
-    except Exception as e:
-        yield event.plain_result(f"请求异常: {e}")
+        result = await query_openbox(steam_client, steamid)
+    except Exception as exc:
+        yield event.plain_result(f"Steam API 请求失败: {exc}")
+        return
+    if result is None:
+        yield event.plain_result("未查到该SteamID的信息")
+        return
+
+    chain = [Plain(result.text)]
+    if result.avatar_url:
+        chain.append(Image.fromURL(result.avatar_url))
+    yield event.chain_result(chain)

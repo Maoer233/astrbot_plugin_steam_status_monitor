@@ -21,7 +21,7 @@ CARD_BG = (38, 44, 56)       # 实色卡片底（不透明）
 CARD_RADIUS = 12
 CARD_MARGIN = 18
 CARD_GAP = 12
-CARD_HEIGHT = 190            # 增高以容纳4行游戏表格
+CARD_HEIGHT = 190            # 基础卡片高度
 WIDTH = 680
 
 # 排名边框色
@@ -212,16 +212,16 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
     card_area_top = header_h + CARD_MARGIN
     total_min = sum(p["total_minutes"] for p in rank_data)
     max_total_minutes = rank_data[0]["total_minutes"] if rank_data else 0  # Top1总时长作为进度条100%基准
-    # 预计算每个玩家卡片高度（游戏<=1种则降低高度）
+    # 按完整游戏明细动态计算卡片高度，避免隐藏玩家的其他游戏。
     card_heights = []
     for p in rank_data:
-        gc = len(p.get("games", []))
-        if gc <= 1:
+        game_count = len(p.get("games", []))
+        if game_count <= 1:
             card_heights.append(155)
-        elif gc == 2:
+        elif game_count == 2:
             card_heights.append(170)
         else:
-            card_heights.append(CARD_HEIGHT)
+            card_heights.append(max(CARD_HEIGHT, TABLE_TOP + game_count * TABLE_ROW_H + 38))
     total_cards_h = sum(card_heights) + max(0, n - 1) * CARD_GAP
     height = card_area_top + total_cards_h + 30
     # 预计算每个卡片Y偏移
@@ -334,23 +334,12 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
             draw.rounded_rectangle((cover_x, cover_y, cover_x + COVER_W, cover_y + COVER_H), radius=6, fill=(40, 50, 65))
             draw.text((cover_x + 40, cover_y + 28), "No Cover", font=font_small, fill=(100, 110, 120))
 
-        # 游戏明细表格（最多4行：前3个游戏 + 其他合计）
+        # 游戏明细表格：完整显示该玩家在统计周期内的所有游戏。
         games = player["games"]
-        if len(games) <= 4:
-            shown = games
-            other_min = 0
-        else:
-            shown = games[:3]
-            other_min = sum(g["minutes"] for g in games[3:])
-
-        # 构建显示项（游戏名、时长、对应进度条颜色）
         display_items = []
-        for i, g in enumerate(shown):
+        for i, game in enumerate(games):
             color = SEGMENT_COLORS[i % len(SEGMENT_COLORS)]
-            display_items.append((g["name"], _format_hours(g["minutes"]), color))
-        if other_min > 0:
-            other_count = len(games) - 3
-            display_items.append((f"其他{other_count}款", _format_hours(other_min), SEGMENT_COLOR_OTHER))
+            display_items.append((game["name"], _format_hours(game["minutes"]), color))
 
         # 表格区域：左边界 = 头像右侧，右边界 = 封面左侧
         tbl_left = cx + TABLE_LEFT
@@ -372,12 +361,8 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
         bar_x = tbl_left
         bar_w = tbl_right - tbl_left
         bar_h = 7
-        bar_games = [g for g in shown]
-        if other_min > 0:
-            bar_games.append({"name": "其他", "minutes": other_min})
-        bar_colors = [SEGMENT_COLORS[i % len(SEGMENT_COLORS)] for i in range(len(shown))]
-        if other_min > 0:
-            bar_colors.append(SEGMENT_COLOR_OTHER)
+        bar_games = games
+        bar_colors = [SEGMENT_COLORS[i % len(SEGMENT_COLORS)] for i in range(len(games))]
         # 100%灰色背景条（作为满格基准）
         draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=bar_h//2, fill=(50, 55, 65, 255))
         # 实际填充进度条
