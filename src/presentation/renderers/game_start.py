@@ -391,55 +391,80 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     except:
         font_bold = font = font_small = ImageFont.load_default()
 
-    img_w = IMG_W
-    img_h = IMG_H
-    img = render_gradient_bg(img_w, img_h, BG_COLOR_TOP, BG_COLOR_BOTTOM).convert("RGBA")
-    draw = ImageDraw.Draw(img)
+    # 先测量在线人数，给右上角固定预留区域，避免与玩家名发生碰撞。
+    measure_img = Image.new("RGB", (1, 1))
+    measure_draw = ImageDraw.Draw(measure_img)
+    online_text = None
+    online_text_w = 0
+    if online_count is not None:
+        try:
+            font_online = ImageFont.truetype(font_regular, 14)
+        except:
+            font_online = ImageFont.load_default()
+        online_text = f"\u25CF玩家人数{online_count}"
+        online_bbox = measure_draw.textbbox((0, 0), online_text, font=font_online)
+        online_text_w = online_bbox[2] - online_bbox[0] + 18
 
-    # 1. 封面图贴左，等比例缩放高度，宽度自适应，左贴右留空，不裁剪
+    # 1. 先计算封面宽度，再根据玩家名动态扩展画布。
     cover_area_h = IMG_H
-    new_w = COVER_W  # 默认宽度，防止后续变量未定义
+    new_w = COVER_W
     if cover_path and os.path.exists(cover_path):
         try:
-            cover_src = Image.open(cover_path).convert("RGBA")
-            scale = cover_area_h / cover_src.height
-            new_w = int(cover_src.width * scale)
-            new_h = cover_area_h
-            cover_resized = cover_src.resize((new_w, new_h), Image.LANCZOS)
-            img.paste(cover_resized, (0, 0), cover_resized)
-            # 竖版封面缺失（missingcover）时，叠加横版header_image
-            if os.path.basename(cover_path) == "missingcover.jpg" and horizontal_cover_path and os.path.exists(horizontal_cover_path):
-                try:
-                    h_cover = Image.open(horizontal_cover_path).convert("RGBA")
-                    h_scale = new_w / h_cover.width
-                    h_new_w = new_w
-                    h_new_h = int(h_cover.height * h_scale)
-                    h_cover_resized = h_cover.resize((h_new_w, h_new_h), Image.LANCZOS)
-                    h_offset_y = (cover_area_h - h_new_h) // 2
-                    img.paste(h_cover_resized, (0, h_offset_y), h_cover_resized)
-                    print(f"[render_game_start_image] 横版封面叠加成功: {horizontal_cover_path} ({h_new_w}x{h_new_h})")
-                except Exception as e:
-                    print(f"[render_game_start_image] 横版封面叠加失败: {e}")
+            with Image.open(cover_path) as cover_src:
+                new_w = int(cover_src.width * (cover_area_h / cover_src.height))
         except Exception as e:
-            print(f"[render_game_start_image] 封面渲染失败: {e}")
-            new_w = COVER_W  # 渲染失败时使用默认宽度
+            print(f"[render_game_start_image] 封面尺寸获取失败: {e}")
 
-    # 2. 头像位置参数（不再渲染头像）
     avatar_size = AVATAR_SIZE
     avatar_margin = 24
     cover_right = int(new_w)
     avatar_x = cover_right + avatar_margin
-    # avatar_y 的赋值和渲染放到后面
-
-    # 3. 文本：头像右侧，整体垂直居中，左右留白，无背景
     text_x = avatar_x + avatar_size + avatar_margin
-    text_area_w = img_w - text_x - avatar_margin
+    name_font_size = 28
+    try:
+        player_font = ImageFont.truetype(font_medium, name_font_size)
+    except:
+        player_font = ImageFont.load_default()
+    name_bbox = measure_draw.textbbox((0, 0), player_name or "", font=player_font)
+    name_width = name_bbox[2] - name_bbox[0]
+    max_name_line_w = 360
+    name_line_w = min(max(name_width, 220), max_name_line_w)
+    img_w = max(IMG_W, text_x + name_line_w + online_text_w + avatar_margin)
+    img_h = IMG_H
+
+    img = render_gradient_bg(img_w, img_h, BG_COLOR_TOP, BG_COLOR_BOTTOM).convert("RGBA")
+    draw = ImageDraw.Draw(img)
+
+    # 2. 封面图贴左，等比例缩放高度，宽度自适应，左贴右留空，不裁剪。
+    if cover_path and os.path.exists(cover_path):
+        try:
+            cover_src = Image.open(cover_path).convert("RGBA")
+            scale = cover_area_h / cover_src.height
+            new_h = cover_area_h
+            cover_resized = cover_src.resize((new_w, new_h), Image.LANCZOS)
+            img.paste(cover_resized, (0, 0), cover_resized)
+            if os.path.basename(cover_path) == "missingcover.jpg" and horizontal_cover_path and os.path.exists(horizontal_cover_path):
+                try:
+                    h_cover = Image.open(horizontal_cover_path).convert("RGBA")
+                    h_scale = new_w / h_cover.width
+                    h_new_h = int(h_cover.height * h_scale)
+                    h_cover_resized = h_cover.resize((new_w, h_new_h), Image.LANCZOS)
+                    h_offset_y = (cover_area_h - h_new_h) // 2
+                    img.paste(h_cover_resized, (0, h_offset_y), h_cover_resized)
+                except Exception as e:
+                    print(f"[render_game_start_image] 横版封面叠加失败: {e}")
+        except Exception as e:
+            print(f"[render_game_start_image] 封面渲染失败: {e}")
+            new_w = COVER_W
+
+    # 3. 文本区域扣除在线人数预留宽度，长玩家名自动换行。
+    text_area_w = img_w - text_x - avatar_margin - online_text_w
+    player_lines = text_wrap(player_name or "", player_font, max_name_line_w)
     game_name_padded = pad_game_name(game_name, min_cn_len=10)
     game_name_lines = text_wrap(game_name_padded, font, text_area_w)
     line_height = 36
-    # 只为游戏时长多加一行
-    block_height = line_height * (2 + len(game_name_lines)) + 10 + font_small.size + 4
-    text_y = (img_h - block_height) // 2
+    block_height = line_height * (1 + len(player_lines) + len(game_name_lines)) + 10 + font_small.size + 4
+    text_y = max(8, (img_h - block_height) // 2)
 
     # 将头像Y坐标与玩家名对齐，并下移10像素
     avatar_y = text_y + 10
@@ -493,48 +518,25 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
         except Exception as e:
             print(f"[render_game_start_image] 头像/超能力渲染失败: {e}")
 
-    # 新增：右上角显示在线人数，提前计算宽度
-    online_text = None
-    online_text_w = 0
-    if online_count is not None:
-        try:
-            font_online = ImageFont.truetype(font_regular, 14)
-        except:
-            font_online = ImageFont.load_default()
-        online_text = f"\u25CF玩家人数{online_count}"
-        text_bbox = draw.textbbox((0, 0), online_text, font=font_online)
-        online_text_w = text_bbox[2] - text_bbox[0] + 10  # 加右侧边距
-
-    # 玩家名自适应字号，防止出界和与在线人数重叠
-    max_playername_w = IMG_W - (text_x + 8) - online_text_w - 24
-    player_font_size = 28
-    for size in range(28, 15, -2):
-        try:
-            font_bold_tmp = ImageFont.truetype(font_medium, size)
-        except:
-            font_bold_tmp = ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), player_name, font_bold_tmp)
-        if bbox[2] - bbox[0] <= max_playername_w:
-            player_font_size = size
-            break
-    try:
-        font_bold_final = ImageFont.truetype(font_medium, player_font_size)
-    except:
-        font_bold_final = ImageFont.load_default()
-    draw.text((text_x + 8, text_y), player_name, font=font_bold_final, fill=(255,255,255,255))
+    # 玩家名按可用宽度换行；在线人数使用右上角独立预留区域。
+    name_x = text_x + 8
+    for idx, line in enumerate(player_lines):
+        draw.text((name_x, text_y + idx * line_height), line, font=player_font, fill=(255,255,255,255))
 
     # “正在玩”
-    draw.text((text_x + 8, text_y + line_height), "正在玩", font=font, fill=(200,255,200,255))
+    status_y = text_y + len(player_lines) * line_height
+    draw.text((name_x, status_y), "正在玩", font=font, fill=(200,255,200,255))
     # 游戏名多行（亮绿色 129,173,81）
+    game_y = status_y + line_height
     for idx, line in enumerate(game_name_lines):
-        draw.text((text_x + 8, text_y + line_height*2 + idx*line_height), line, font=font, fill=(129,173,81,255))
+        draw.text((name_x, game_y + idx * line_height), line, font=font, fill=(129,173,81,255))
     # 游戏时长（紧跟在最后一行游戏名下方，无多余空行）
     if playtime_hours is not None:
         if playtime_unowned:
             playtime_str = "游戏时间 缺省"
         else:
             playtime_str = f"游戏时间 {playtime_hours} 小时"
-        y_time = text_y + line_height*2 + len(game_name_lines)*line_height + 4  # 仅加4像素间距
+        y_time = game_y + len(game_name_lines) * line_height + 4
         draw.text(
             (text_x + 8, y_time),
             playtime_str, font=font_small, fill=(120,180,255,255)
@@ -545,7 +547,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
 
     # 在线人数渲染（放在最后，确保不会被玩家名遮挡）
     if online_text:
-        draw.text((IMG_W - online_text_w, 10), online_text, font=font_online, fill=(120,180,255,180))
+        draw.text((img_w - online_text_w, 10), online_text, font=font_online, fill=(120,180,255,180))
 
     # 右下角版本号水印
     if version:
@@ -557,7 +559,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
         v_bbox = draw.textbbox((0, 0), v_text, font=font_version)
         v_w = v_bbox[2] - v_bbox[0]
         v_h = v_bbox[3] - v_bbox[1]
-        draw.text((IMG_W - v_w - 6, IMG_H - v_h - 4), v_text, font=font_version, fill=(33, 46, 49, 120))
+        draw.text((img_w - v_w - 6, img_h - v_h - 4), v_text, font=font_version, fill=(33, 46, 49, 120))
 
     return img.convert("RGB")
 
