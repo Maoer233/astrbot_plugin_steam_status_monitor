@@ -988,6 +988,12 @@ class WebAdminAPI:
                 p.config[key] = bool(value)
             elif key == "notify_send_text":
                 p.config[key] = bool(value)
+            elif key == "enable_proxy":
+                p.config[key] = bool(value)
+                p.proxy = p.config.get("proxy_url") if bool(value) and p.config.get("proxy_url") else None
+            elif key == "proxy_url":
+                p.config[key] = str(value)
+                p.proxy = str(value) if p.config.get("enable_proxy") and value else None
             elif key in {"steam_api_base", "steam_store_base", "sgdb_api_base"}:
                 base_url = str(value or "").strip().rstrip("/")
                 if base_url and not base_url.startswith(("http://", "https://")):
