@@ -674,9 +674,14 @@ class WebAdminAPI:
                 {"error": "invalid group_id or steamid"},
                 status_code=400,
             )
-        if self.admin.remove_player(gid, sid):
-            self._invalidate_statistics_cache()
-        return json_response({"ok": True})
+        result = self.admin.remove_player(gid, sid)
+        if not result.changed:
+            return json_response(
+                {"ok": False, "error": result.message},
+                status_code=404,
+            )
+        self._invalidate_statistics_cache()
+        return json_response({"ok": True, "message": result.message})
 
     async def _api_groups_add_group(self, request):
         """新增一个空群聊"""

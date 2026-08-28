@@ -16,18 +16,35 @@ class NotificationTrackingMixin:
 
     def _get_notify_sessions(self, group_id, sid):
         sessions = []
-        notify_sessions = getattr(self, "notify_sessions", {})
-        primary_session = notify_sessions.get(group_id)
+        normalized_group_id = str(group_id)
+        normalized_sid = str(sid)
+        notify_sessions = {
+            str(key): value
+            for key, value in (getattr(self, "notify_sessions", {}) or {}).items()
+        }
+        primary_session = notify_sessions.get(normalized_group_id)
         if primary_session:
             sessions.append(primary_session)
         monitored_groups = {
-            gid for gid, steam_ids in getattr(self, "group_steam_ids", {}).items()
-            if sid in steam_ids
+            str(gid)
+            for gid, steam_ids in getattr(self, "group_steam_ids", {}).items()
+            if normalized_sid in {str(value) for value in steam_ids}
         }
-        for push_gid in self.push_groups.get(sid, []):
-            if push_gid != group_id and push_gid in monitored_groups:
+        push_targets = (getattr(self, "push_groups", {}) or {}).get(normalized_sid)
+        if push_targets is None:
+            push_targets = next(
+                (
+                    targets
+                    for raw_sid, targets in (getattr(self, "push_groups", {}) or {}).items()
+                    if str(raw_sid) == normalized_sid
+                ),
+                [],
+            )
+        for push_gid in push_targets:
+            normalized_push_gid = str(push_gid)
+            if normalized_push_gid != normalized_group_id and normalized_push_gid in monitored_groups:
                 continue
-            push_session = notify_sessions.get(push_gid)
+            push_session = notify_sessions.get(normalized_push_gid)
             if push_session and push_session not in sessions:
                 sessions.append(push_session)
         return sessions

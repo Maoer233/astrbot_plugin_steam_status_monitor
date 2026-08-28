@@ -8,7 +8,7 @@ from ...shared.logging import logger
 
 
 class StatusChangeTrackingMixin:
-    """Status polling change detection and task orchestration.""""
+    """Status polling change detection and task orchestration."""
 
     async def check_status_change(self, group_id, single_sid=None, status_override=None, poll_level=None, skip_push=False):
         '''轮询检测玩家状态变更并推送通知（分群，支持单个sid）

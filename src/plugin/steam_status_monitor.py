@@ -384,6 +384,7 @@ class SteamStatusMonitorV3(
         pushed = []
         already = []
         already_pushed = []
+        pushed_primary_groups = {}
         limit = self.max_group_size
         for sid in steamid_list:
             if sid in steam_ids:
@@ -399,6 +400,7 @@ class SteamStatusMonitorV3(
             )
             if primary_group is not None:
                 targets = self.push_groups.setdefault(sid, [])
+                pushed_primary_groups[sid] = primary_group
                 if group_id in targets:
                     already_pushed.append(sid)
                 else:
@@ -427,14 +429,24 @@ class SteamStatusMonitorV3(
         if added:
             msg += f"已为本群添加SteamID: {', '.join(added)}\n"
         if pushed:
+            push_details = []
+            for sid in pushed:
+                primary_group = pushed_primary_groups.get(sid)
+                suffix = f"（主监控群：{primary_group}）" if primary_group else ""
+                push_details.append(f"{sid}{suffix}")
             msg += (
-                "以下SteamID已由其他群主监控，已自动将本群设为推送群: "
-                f"{', '.join(pushed)}\n"
+                "以下SteamID已被其他群监控，当前群不会重复监控，已自动设置为分发路由（push_group）："
+                f"{', '.join(push_details)}\n"
             )
         if already:
-            msg += f"以下SteamID已存在于本群监控组: {', '.join(already)}\n"
+            msg += f"以下SteamID已经在本群监控，无需重复添加：{', '.join(already)}\n"
         if already_pushed:
-            msg += f"以下SteamID已向本群推送: {', '.join(already_pushed)}\n"
+            push_details = []
+            for sid in already_pushed:
+                primary_group = pushed_primary_groups.get(sid)
+                suffix = f"（主监控群：{primary_group}）" if primary_group else ""
+                push_details.append(f"{sid}{suffix}")
+            msg += f"以下SteamID已经是本群的分发路由（push_group），无需重复添加：{', '.join(push_details)}\n"
         unhandled = len(steamid_list) - len(added) - len(pushed) - len(already) - len(already_pushed)
         if unhandled:
             msg += f"本群监控组人数已达上限（{limit}人），部分ID未添加。\n"
@@ -500,36 +512,34 @@ class SteamStatusMonitorV3(
         if not sid or not sid.isdigit() or len(sid) != 17:
             yield event.plain_result("无法解析为有效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 8位好友码")
             return
-        steam_ids = self.group_steam_ids.get(group_id, [])
-        if not steam_ids:
-            yield event.plain_result(f"群 {group_id} 没有监控任何SteamID")
+        from ..application.services.monitor_admin import MonitorAdminService
+
+        result = MonitorAdminService(self).remove_player(group_id, sid)
+        if not result.changed:
+            yield event.plain_result(
+                f"该SteamID不存在于群 {group_id} 的监控组或分发路由: {sid}"
+            )
             return
-        if sid not in steam_ids:
-            yield event.plain_result(f"该SteamID不存在于群 {group_id} 的监控组")
-            return
-        steam_ids.remove(sid)
-        self.group_steam_ids[group_id] = steam_ids
-        self._save_group_steam_ids()
-        # 同步清理绑定数据
-        removed_bind = []
-        bind_data = getattr(self, '_bind_data', None)
-        if bind_data:
-            for qq, info in list(bind_data.items()):
-                if info.get("sid") == sid:
-                    removed_bind.append(qq)
-                    del bind_data[qq]
-            if removed_bind:
-                self._bind_data = bind_data
-                self._save_bind_data()
-                logger.info(f"[绑定] 删除SteamID {sid} 时同步清理绑定: QQ {', '.join(removed_bind)}")
-        yield event.plain_result(f"已为群 {group_id} 删除SteamID: {sid}")
+
+        if result.message == "removed push route":
+            yield event.plain_result(f"已关闭群 {group_id} 对 SteamID {sid} 的分发路由")
+        else:
+            yield event.plain_result(
+                f"已删除 SteamID {sid} 的主监控及全部路由分发"
+            )
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam list")
     async def steam_list(self, event: AstrMessageEvent):
         '''列出本群所有玩家当前状态（分群）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        steam_ids = self.group_steam_ids.get(group_id, [])
+        direct_steam_ids = self.group_steam_ids.get(group_id, [])
+        push_steam_ids = [
+            sid
+            for sid, push_groups in (getattr(self, 'push_groups', {}) or {}).items()
+            if group_id in {str(target) for target in push_groups}
+        ]
+        steam_ids = list(dict.fromkeys([*direct_steam_ids, *push_steam_ids]))
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
             return
@@ -1270,14 +1280,31 @@ class SteamStatusMonitorV3(
     @filter.command("steam clear_allids")
     async def steam_clear_allids(self, event: AstrMessageEvent):
         '''删除所有群聊的所有已监控SteamID，并清空相关状态数据'''
+        for task in self._pending_quit_tasks.values():
+            task.cancel()
+        self._pending_quit_tasks.clear()
+        for task in self.achievement_poll_tasks.values():
+            task.cancel()
+        self.achievement_poll_tasks.clear()
+        self.achievement_snapshots.clear()
+        self.achievement_fail_count.clear()
         self.group_steam_ids.clear()
-        self._save_group_steam_ids()  # 新增：保存到 steam_groups.json
+        self.push_groups.clear()
+        self.running_groups.clear()
+        self.group_monitor_enabled.clear()
+        self.group_achievement_enabled.clear()
+        self.next_poll_time.clear()
         self.group_last_states.clear()
         self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
         self.group_pending_quit.clear()
         self.group_recent_games.clear()
+        self._pending_end_notifications.clear()
+        self.notify_sessions.clear()
+        self._save_group_steam_ids()
+        self._save_push_groups()
+        self._save_notify_session()
         self._save_persistent_data(force=True)
         self.config['group_steam_ids'] = self.group_steam_ids
         if hasattr(self.config, "save_config"):
@@ -1288,22 +1315,46 @@ class SteamStatusMonitorV3(
     @filter.command("steam clear_groupids")
     async def steam_clear_groupids(self, event: AstrMessageEvent, group_id: str):
         '''删除指定群聊的所有已监控SteamID，并清空相关状态数据'''
-        if group_id not in self.group_steam_ids:
+        has_primary = group_id in self.group_steam_ids
+        routed_sids = [
+            sid for sid, targets in self.push_groups.items()
+            if group_id in {str(target) for target in targets}
+        ]
+        if not has_primary and not routed_sids:
             yield event.plain_result(f"群聊 {group_id} 未绑定任何SteamID，无需清理。")
             return
+
+        for task_key in list(self._pending_quit_tasks):
+            if task_key[0] == group_id:
+                task = self._pending_quit_tasks.pop(task_key)
+                task.cancel()
+        for sid in list(self.group_steam_ids.get(group_id, [])):
+            self.push_groups.pop(sid, None)
+        for sid in routed_sids:
+            targets = [target for target in self.push_groups.get(sid, []) if str(target) != group_id]
+            if targets:
+                self.push_groups[sid] = targets
+            else:
+                self.push_groups.pop(sid, None)
         self.group_steam_ids.pop(group_id, None)
-        self._save_group_steam_ids()  # 保存到 steam_groups.json
         self.group_last_states.pop(group_id, None)
         self.group_start_play_times.pop(group_id, None)
         self.group_last_quit_times.pop(group_id, None)
         self.group_pending_logs.pop(group_id, None)
         self.group_pending_quit.pop(group_id, None)
         self.group_recent_games.pop(group_id, None)
-        self._save_persistent_data(force=True)
+        self.next_poll_time.pop(group_id, None)
+        self.running_groups.discard(group_id)
+        self.group_monitor_enabled.pop(group_id, None)
+        self.group_achievement_enabled.pop(group_id, None)
         self.notify_sessions.pop(group_id, None)
+        self._save_group_steam_ids()
+        self._save_push_groups()
+        self._save_notify_session()
+        self._save_persistent_data(force=True)
         if hasattr(self.config, "save_config"):
             self.config.save_config()
-        yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID，相关状态数据已清空。")
+        yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID和分发路由，相关状态数据已清空。")
 
     def _should_skip_game(self, gameid):
         """根据黑白名单配置判断是否应跳过该游戏的监控/播报"""
