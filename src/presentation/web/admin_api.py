@@ -988,12 +988,19 @@ class WebAdminAPI:
                 p.config[key] = bool(value)
             elif key == "notify_send_text":
                 p.config[key] = bool(value)
-            elif key == "enable_proxy":
-                p.config[key] = bool(value)
-                p.proxy = p.config.get("proxy_url") if bool(value) and p.config.get("proxy_url") else None
-            elif key == "proxy_url":
-                p.config[key] = str(value)
-                p.proxy = str(value) if p.config.get("enable_proxy") and value else None
+            elif key in {"steam_api_base", "steam_store_base", "sgdb_api_base"}:
+                base_url = str(value or "").strip().rstrip("/")
+                if base_url and not base_url.startswith(("http://", "https://")):
+                    return error_response(f"{key} 必须以 http:// 或 https:// 开头", status_code=400)
+                p.config[key] = base_url
+                if key == "steam_api_base":
+                    p.STEAM_API_BASE = base_url or "https://api.steampowered.com"
+                elif key == "steam_store_base":
+                    p.STEAM_STORE_BASE = base_url or "https://store.steampowered.com"
+                else:
+                    p.SGDB_API_BASE = base_url or "https://www.steamgriddb.com"
+                if hasattr(p, "achievement_monitor"):
+                    p.achievement_monitor.steam_api_base = p.STEAM_API_BASE
             elif key == "ssl_ca_file":
                 try:
                     configure_tls(value)

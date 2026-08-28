@@ -8,7 +8,7 @@ STEAM_STORE_BROWSE_URL = "https://api.steampowered.com/IStoreBrowseService/GetIt
 STEAM_STORE_ASSET_BASE = "https://shared.fastly.steamstatic.com/store_item_assets/steam/apps"
 
 
-async def get_steam_library_cover_url(appid, api_key, proxy=None):
+async def get_steam_library_cover_url(appid, api_key, proxy=None, steam_api_base=None):
     """Return Steam's high-resolution vertical library cover URL for an app."""
     if not appid or not api_key:
         return None
@@ -24,7 +24,8 @@ async def get_steam_library_cover_url(appid, api_key, proxy=None):
     }
     try:
         async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
-            response = await client.get(STEAM_STORE_BROWSE_URL, params=params)
+            browse_url = f"{(steam_api_base or 'https://api.steampowered.com').rstrip('/')}/IStoreBrowseService/GetItems/v1/"
+            response = await client.get(browse_url, params=params)
         if response.status_code != 200:
             print(
                 "[get_steam_library_cover_url] Steam 接口请求失败: "

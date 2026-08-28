@@ -93,6 +93,24 @@
     "hint": "填写代理IP和端口，如：http://127.0.0.1:7890 或 socks5://127.0.0.1:7890",
     "default": ""
   },
+  "steam_api_base": {
+    "description": "Steam Web API 代理地址",
+    "type": "string",
+    "hint": "可填写反向代理地址，例如 https://steam-api.4oi.site；留空使用官方地址",
+    "default": ""
+  },
+  "steam_store_base": {
+    "description": "Steam 商店代理地址",
+    "type": "string",
+    "hint": "可填写反向代理地址，例如 https://steam-store.4oi.site；留空使用官方地址",
+    "default": ""
+  },
+  "sgdb_api_base": {
+    "description": "SteamGridDB 代理地址",
+    "type": "string",
+    "hint": "可填写反向代理地址，例如 https://steamgriddb.4oi.site；留空使用官方地址",
+    "default": ""
+  },
   "qq_official_enabled": {
     "description": "启用后台 QQ 官方机器人配置",
     "type": "bool",

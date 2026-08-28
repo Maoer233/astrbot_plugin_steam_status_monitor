@@ -64,7 +64,7 @@ class NotificationTrackingMixin:
                     font_path=font_path, sgdb_game_name=en_game_name,
                     online_count=await self.get_game_online_count(noti["gameid"]),
                     appid=noti.get("gameid"), proxy=self.proxy,
-                    version=self._plugin_version,
+                    version=self._plugin_version, sgdb_api_base=self.SGDB_API_BASE,
                 )
             else:
                 end_time_str = datetime.fromtimestamp(noti["quit_time"]).strftime("%Y-%m-%d %H:%M")
@@ -78,6 +78,7 @@ class NotificationTrackingMixin:
                     font_path=self.get_font_path("NotoSansHans-Regular.otf"),
                     sgdb_game_name=en_game_name, appid=noti.get("gameid"),
                     proxy=self.proxy, api_key=self.API_KEY,
+                    sgdb_api_base=self.SGDB_API_BASE, steam_store_base=self.STEAM_STORE_BASE,
                 )
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(img_bytes)

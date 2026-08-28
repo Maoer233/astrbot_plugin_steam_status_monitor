@@ -20,13 +20,14 @@ IMG_W, IMG_H = 512, 192
 STAR_BG_PATH = str(IMAGES_DIR / "随机散布的小星星767x809xp.png")
 
 
-async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None):
+async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None, sgdb_api_base=None):
     import httpx
     if not sgdb_api_key:
         return None
     headers = {"Authorization": f"Bearer {sgdb_api_key}"}
     search_name = sgdb_game_name if sgdb_game_name else game_name
-    search_url = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{search_name}"
+    sgdb_base = (sgdb_api_base or "https://www.steamgriddb.com").rstrip("/")
+    search_url = f"{sgdb_base}/api/v2/search/autocomplete/{search_name}"
     async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
         try:
             resp = await client.get(search_url, headers=headers)
@@ -35,18 +36,18 @@ async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=N
                 # 兜底：用 appid 查询 SGDB 游戏名
                 if appid:
                     print(f"[SGDB兜底] appid={appid}，尝试通过appid查SGDB name")
-                    game_url = f"https://www.steamgriddb.com/api/v2/games/steam/{appid}"
+                    game_url = f"{sgdb_base}/api/v2/games/steam/{appid}"
                     resp_game = await client.get(game_url, headers=headers)
                     data_game = resp_game.json()
                     if data_game.get("success") and data_game.get("data") and data_game["data"].get("name"):
                         sgdb_name = data_game["data"]["name"]
                         print(f"[SGDB兜底] appid={appid}，查到SGDB name={sgdb_name}，再次尝试查封面")
-                        search_url2 = f"https://www.steamgriddb.com/api/v2/search/autocomplete/{sgdb_name}"
+                        search_url2 = f"{sgdb_base}/api/v2/search/autocomplete/{sgdb_name}"
                         resp2 = await client.get(search_url2, headers=headers)
                         data2 = resp2.json()
                         if data2.get("success") and data2.get("data"):
                             sgdb_game_id = data2["data"][0]["id"]
-                            grid_url = f"https://www.steamgriddb.com/api/v2/grids/game/{sgdb_game_id}?dimensions=600x900&type=static&limit=1"
+                            grid_url = f"{sgdb_base}/api/v2/grids/game/{sgdb_game_id}?dimensions=600x900&type=static&limit=1"
                             resp3 = await client.get(grid_url, headers=headers)
                             data3 = resp3.json()
                             if data3.get("success") and data3.get("data"):
@@ -56,7 +57,7 @@ async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=N
                 print(f"[SGDB兜底] 兜底流程未查到封面 appid={appid}")
                 return None
             sgdb_game_id = data["data"][0]["id"]
-            grid_url = f"https://www.steamgriddb.com/api/v2/grids/game/{sgdb_game_id}?dimensions=600x900&type=static&limit=1"
+            grid_url = f"{sgdb_base}/api/v2/grids/game/{sgdb_game_id}?dimensions=600x900&type=static&limit=1"
             resp2 = await client.get(grid_url, headers=headers)
             data2 = resp2.json()
             if not data2.get("success") or not data2.get("data"):
@@ -108,7 +109,7 @@ def render_gradient_bg(img_w, img_h, color_top, color_bottom):
     return base
 
 # get_cover_path 改为 async def 并 await get_sgdb_vertical_cover
-async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None):
+async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_api_key=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None, sgdb_api_base=None, steam_store_base=None):
     from PIL import Image as PILImage
     import httpx
     cover_dir = os.path.join(data_dir, "covers_v")
@@ -143,7 +144,7 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
     if is_cache_valid(fallback_path):
         return fallback_path
 
-    url = await get_sgdb_vertical_cover(game_name, sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=steam_appid, proxy=proxy)
+    url = await get_sgdb_vertical_cover(game_name, sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=steam_appid, proxy=proxy, sgdb_api_base=sgdb_api_base)
     if url:
         try:
             async with httpx.AsyncClient(timeout=10, proxy=proxy) as client:
@@ -422,11 +423,11 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
     return img.convert("RGB")
 
 # render_game_end 里 await get_cover_path
-async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, game_name, end_time_str, tip_text, duration_h, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None):
+async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, game_name, end_time_str, tip_text, duration_h, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None, sgdb_api_base=None, steam_store_base=None):
     avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
-    cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key)
+    cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key, sgdb_api_base=sgdb_api_base, steam_store_base=steam_store_base)
     # 获取横版封面（竖版缺失时叠加用）
-    horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy)
+    horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
     avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)

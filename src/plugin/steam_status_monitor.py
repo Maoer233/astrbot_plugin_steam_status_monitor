@@ -1180,7 +1180,7 @@ class SteamStatusMonitorV3(
             online_count = await self.get_game_online_count(gameid)
             img_bytes = await render_game_start(
                 self.data_dir, steamid, player_name, avatar_url, gameid, zh_game_name, api_key=self.API_KEY, superpower=superpower, sgdb_api_key=self.SGDB_API_KEY, font_path=font_path, sgdb_game_name=en_game_name, online_count=online_count, appid=gameid
-                , proxy=self.proxy, version=self._plugin_version)
+                , proxy=self.proxy, version=self._plugin_version, sgdb_api_base=self.SGDB_API_BASE, steam_store_base=self.STEAM_STORE_BASE)
             logger.info(f"[测试开始游戏渲染] render_game_start 返回类型: {type(img_bytes)} 长度: {len(img_bytes) if img_bytes else 'None'}")
             if img_bytes:
                 import tempfile
