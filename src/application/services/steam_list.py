@@ -14,13 +14,35 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
         group_id = str(event.group_id)
     else:
         group_id = 'default'
-    steam_ids = self.group_steam_ids.get(group_id, [])
-    start_play_times = self.group_start_play_times.get(group_id, {})
+    direct_steam_ids = self.group_steam_ids.get(group_id, [])
+    push_steam_ids = [
+        sid
+        for sid, push_groups in (getattr(self, 'push_groups', {}) or {}).items()
+        if group_id in {str(target) for target in push_groups}
+    ]
+    steam_ids = list(dict.fromkeys([*direct_steam_ids, *push_steam_ids]))
     user_list = []
     now = int(time.time())
+    # 分发群不参与轮询，游玩开始时间应读取对应主监控群的缓存。
+    primary_group_by_sid = {}
+    for sid in steam_ids:
+        if sid in direct_steam_ids:
+            primary_group_by_sid[sid] = group_id
+            continue
+        primary_group_by_sid[sid] = next(
+            (
+                owner_group_id
+                for owner_group_id, owner_steam_ids in self.group_steam_ids.items()
+                if sid in {str(owner_sid) for owner_sid in owner_steam_ids}
+            ),
+            group_id,
+        )
     # 批量查询所有玩家状态，减少API调用次数
     status_map = await self.fetch_player_statuses_batch(steam_ids) if steam_ids else {}
     for sid in steam_ids:
+        start_play_times = self.group_start_play_times.get(
+            primary_group_by_sid.get(sid, group_id), {}
+        )
         status = status_map.get(sid)
         if not status:
             user_list.append({

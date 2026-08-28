@@ -16,6 +16,7 @@ from .qqofficial_settings import (
     normalise_qq_official_settings,
 )
 from .response_cache import AsyncTTLCache
+from ...application.services.monitor_admin import MonitorAdminService
 from ...shared.network import configure_tls, httpx_client_kwargs
 from .statistics import (
     build_dashboard_stats,
@@ -139,8 +140,9 @@ def safe_api(handler):
 class WebAdminAPI:
     """Backend API registered into AstrBot's authenticated Dashboard."""
 
-    def __init__(self, plugin_instance):
+    def __init__(self, plugin_instance, admin_service=None):
         self.plugin = plugin_instance
+        self.admin = admin_service or MonitorAdminService(plugin_instance)
         self._response_cache = AsyncTTLCache()
 
     async def _cached_response(self, key, ttl, builder):
@@ -647,25 +649,17 @@ class WebAdminAPI:
                 status_code=400,
             )
         sid = resolved
-        groups = getattr(p, "group_steam_ids", {})
-        if gid not in groups:
-            groups[gid] = []
-        if sid in groups[gid]:
-            return json_response({"ok": True, "message": "already exists"})
-        max_size = getattr(p, "max_group_size", 20)
-        if len(groups[gid]) >= max_size:
-            return json_response(
-                {"error": f"group limit reached ({max_size})"},
-                status_code=400,
-            )
-        groups[gid].append(sid)
-        p._save_group_steam_ids()
+        result = self.admin.add_player(gid, sid)
+        if not result.changed:
+            if result.message in {"already exists", "already push group"}:
+                return json_response({"ok": True, "message": result.message})
+            return json_response({"error": result.message}, status_code=400)
         qq = str(data.get("qq", "")).strip()
         if qq:
             nick = str(data.get("nickname", "")).strip()
-            p._bind_data[qq] = {"sid": sid, "nickname": nick or "*"}
-            p._save_bind_data()
-        return json_response({"ok": True})
+            self.admin.set_binding(qq, sid, nick or "*")
+        self._invalidate_statistics_cache()
+        return json_response({"ok": True, "message": result.message})
 
     async def _api_groups_delete(self, request):
         p = self.plugin
@@ -680,13 +674,14 @@ class WebAdminAPI:
                 {"error": "invalid group_id or steamid"},
                 status_code=400,
             )
-        groups = getattr(p, "group_steam_ids", {}) or {}
-        if gid in groups and sid in groups[gid]:
-            groups[gid].remove(sid)
-            if not groups[gid]:
-                del groups[gid]
-            p._save_group_steam_ids()
-        return json_response({"ok": True})
+        result = self.admin.remove_player(gid, sid)
+        if not result.changed:
+            return json_response(
+                {"ok": False, "error": result.message},
+                status_code=404,
+            )
+        self._invalidate_statistics_cache()
+        return json_response({"ok": True, "message": result.message})
 
     async def _api_groups_add_group(self, request):
         """新增一个空群聊"""
@@ -698,12 +693,13 @@ class WebAdminAPI:
         gid = str(data.get("group_id", "")).strip()
         if not gid:
             return json_response({"error": "invalid group_id"}, status_code=400)
-        groups = getattr(p, "group_steam_ids", {})
-        if gid in groups:
-            return json_response({"ok": True, "message": "already exists"})
-        groups[gid] = []
-        p._save_group_steam_ids()
-        return json_response({"ok": True})
+        result = self.admin.add_group(gid)
+        if result.changed:
+            self._invalidate_statistics_cache()
+        payload = {"ok": True}
+        if result.message:
+            payload["message"] = result.message
+        return json_response(payload)
 
     async def _api_groups_delete_group(self, request):
         """删除一个群聊及其所有 SteamID"""
@@ -715,10 +711,8 @@ class WebAdminAPI:
         gid = str(data.get("group_id", "")).strip()
         if not gid:
             return json_response({"error": "invalid group_id"}, status_code=400)
-        groups = getattr(p, "group_steam_ids", {}) or {}
-        if gid in groups:
-            del groups[gid]
-            p._save_group_steam_ids()
+        if self.admin.remove_group(gid):
+            self._invalidate_statistics_cache()
         return json_response({"ok": True})
 
     async def _api_groups_import_batch(self, request):
@@ -735,11 +729,8 @@ class WebAdminAPI:
         if not text.strip():
             return json_response({"error": "text is empty"}, status_code=400)
 
-        groups = getattr(p, "group_steam_ids", {})
-        if gid not in groups:
-            groups[gid] = []
-        existing = set(groups[gid])
-        max_size = getattr(p, "max_group_size", 20)
+        existing = set(self.admin.groups.get(gid, []))
+        max_size = self.admin.max_group_size
 
         imported = []
         errors = []
@@ -766,29 +757,34 @@ class WebAdminAPI:
                 errors.append(f"第{i+1}行: 无效SteamID - {raw_sid}")
                 continue
 
-            # 检查上限
-            if len(groups[gid]) >= max_size and sid not in existing:
-                errors.append(f"第{i+1}行: 群已满 (上限{max_size})")
-                continue
-
             # 去重
             if sid in existing:
                 errors.append(f"第{i+1}行: {sid} 已存在")
                 continue
 
-            groups[gid].append(sid)
-            existing.add(sid)
+            primary_exists = any(
+                sid in steam_ids
+                for candidate, steam_ids in self.admin.groups.items()
+                if candidate != gid
+            )
+            if len(existing) >= max_size and not primary_exists:
+                errors.append(f"第{i+1}行: 群已满 (上限{max_size})")
+                continue
+
+            result = self.admin.add_player(gid, sid)
+            if not result.changed:
+                errors.append(f"第{i+1}行: {result.message}")
+                continue
+            if result.message == "added as primary monitor":
+                existing.add(sid)
             imported.append(sid)
 
             # 绑定QQ
             if qq:
-                bind_data = getattr(p, "_bind_data", {})
-                bind_data[str(qq)] = {"sid": sid, "nickname": nickname or "*"}
-                p._save_bind_data()
+                self.admin.set_binding(str(qq), sid, nickname or "*")
 
         if imported:
-            p._save_group_steam_ids()
-
+            self._invalidate_statistics_cache()
         return json_response({
             "ok": True,
             "imported": len(imported),
@@ -798,16 +794,13 @@ class WebAdminAPI:
     async def _api_group_players(self, request):
         p = self.plugin
         group_id = request.match_info.get("group_id", "")
-        groups = getattr(p, "group_steam_ids", {}) or {}
-        sids = groups.get(group_id, [])
         result = []
-        last_states = (getattr(p, "group_last_states", {}) or {}).get(group_id, {})
-        for sid in sids:
-            name = _get_player_display_name(p, sid)
-            state = last_states.get(sid, {})
+        for player in self.admin.list_group_players(group_id):
+            sid = player["sid"]
+            state = player["state"]
             result.append({
                 "sid": sid,
-                "name": name,
+                "name": _get_player_display_name(p, sid),
                 "gameid": state.get("gameid", ""),
                 "game": state.get("gameextrainfo", ""),
                 "personastate": state.get("personastate", 0),
@@ -842,8 +835,7 @@ class WebAdminAPI:
                 {"error": "qq and steamid required"},
                 status_code=400,
             )
-        p._bind_data[qq] = {"sid": sid, "nickname": nickname}
-        p._save_bind_data()
+        self.admin.set_binding(qq, sid, nickname)
         return json_response({"ok": True})
 
     async def _api_bindings_delete(self, request):
@@ -853,9 +845,7 @@ class WebAdminAPI:
         except Exception:
             return json_response({"error": "invalid JSON"}, status_code=400)
         qq = str(data.get("qq", ""))
-        if qq in p._bind_data:
-            del p._bind_data[qq]
-            p._save_bind_data()
+        self.admin.remove_binding(qq)
         return json_response({"ok": True})
 
     async def _api_bindings_update(self, request):
@@ -866,9 +856,7 @@ class WebAdminAPI:
             return json_response({"error": "invalid JSON"}, status_code=400)
         qq = str(data.get("qq", ""))
         nickname = str(data.get("nickname", ""))
-        if qq in p._bind_data:
-            p._bind_data[qq]["nickname"] = nickname
-            p._save_bind_data()
+        self.admin.update_binding_nickname(qq, nickname)
         return json_response({"ok": True})
 
     # ────── Push Settings ──────

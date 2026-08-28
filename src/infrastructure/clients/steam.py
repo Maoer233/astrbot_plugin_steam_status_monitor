@@ -8,7 +8,32 @@ from ...shared.logging import logger
 from ...shared.network import httpx_client_kwargs
 
 
+class SteamClientError(RuntimeError):
+    """Steam 客户端调用失败。"""
+
+
 class SteamClientMixin:
+    async def fetch_player_summary(self, steam_id):
+        """获取 Steam 玩家原始摘要，由应用层负责字段本地化与展示。"""
+        if not self.API_KEY:
+            raise SteamClientError("未配置 Steam API Key")
+        url = (
+            f"{self.STEAM_API_BASE}/ISteamUser/GetPlayerSummaries/v2/"
+            f"?key={self.API_KEY}&steamids={steam_id}"
+        )
+        try:
+            async with httpx.AsyncClient(
+                timeout=15,
+                **httpx_client_kwargs(self.proxy),
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                players = response.json().get("response", {}).get("players", [])
+                return players[0] if players else None
+        except Exception as exc:
+            logger.warning(f"获取 Steam 玩家摘要失败: {exc} (SteamID: {steam_id})")
+            raise SteamClientError(f"Steam API 请求失败: {exc}") from exc
+
     async def fetch_player_status(self, steam_id, retry=None):
         '''拉取单个玩家的 Steam 状态，失败自动重试多次并指数退避'''
         url = (

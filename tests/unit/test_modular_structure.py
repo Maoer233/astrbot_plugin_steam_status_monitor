@@ -57,7 +57,12 @@ class ModularStructureTests(unittest.TestCase):
 
         bases = {base.id for base in plugin_class.bases if isinstance(base, ast.Name)}
         self.assertEqual(
-            {"PersistenceMixin", "SteamClientMixin", "Star"},
+            {
+                "StateBackedMonitorMixin",
+                "PersistenceMixin",
+                "SteamClientMixin",
+                "Star",
+            },
             bases,
         )
 

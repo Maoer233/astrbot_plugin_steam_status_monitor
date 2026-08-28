@@ -14,23 +14,26 @@ from ..application.services.openbox import handle_openbox
 from ..application.services.steam_list import handle_steam_list
 import re
 from ..application.services.achievement_monitor import AchievementMonitor
+from ..application.services.achievement_tracking import AchievementTrackingMixin
+from ..application.services.notification_tracking import NotificationTrackingMixin
+from ..application.services.status_change_tracking import StatusChangeTrackingMixin
+from ..application.services.polling_tracking import PollingTrackingMixin
 from ..presentation.renderers.game_start import render_game_start
 from ..presentation.renderers.game_end import render_game_end
 from ..presentation.renderers.rank import render_rank_image
+from ..domain.monitoring import MonitorStateStore, StateBackedMonitorMixin
 from ..domain.ranking.push_scopes import build_rank_push_scopes
 from PIL import Image as PILImage
 import io
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import requests  # 新增导入
 import tempfile
 import traceback
 import shutil
-from typing import Any
-from ..shared.utils.superpower import load_abilities, get_daily_superpower
 from ..presentation.web.admin_api import WebAdminAPI
 from ..infrastructure.persistence.plugin_data import PersistenceMixin
-from ..infrastructure.clients.qqofficial_panel import QQOfficialPanelClient, QQOfficialPanelError
 from ..infrastructure.clients.steam import SteamClientMixin
+from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
@@ -39,10 +42,21 @@ from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 _STALE_STATE_THRESHOLD = 3600
 
 
-class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
+class SteamStatusMonitorV3(
+    QQMenuManagementMixin,
+    PollingTrackingMixin,
+    StatusChangeTrackingMixin,
+    NotificationTrackingMixin,
+    AchievementTrackingMixin,
+    StateBackedMonitorMixin,
+    PersistenceMixin,
+    SteamClientMixin,
+    Star,
+):
 
     def __init__(self, context: Context, config=None):
         super().__init__(context)
+        self.monitor_state = MonitorStateStore()
         # 插件运行状态标志，重启后自动丢失
         if hasattr(self, '_ssm_running') and self._ssm_running:
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
@@ -219,132 +233,6 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             logger.warning(f"[陈旧状态] 判断 states 新鲜度失败: {e} (group_id={group_id})")
             return False
 
-    async def init_poll_time_once(self):
-        '''插件启动后10秒内进行一次全员初始化轮询，设置每个SteamID的next_poll_time，并输出一次初始日志'''
-        await asyncio.sleep(10)
-        all_logs = []
-        # 一次性标记"插件停止期间遗留的陈旧群"：init 过程中 check_status_change 末尾会刷新
-        # states.json 的 mtime，若不预先缓存，同一次 init 内后续 sid 会因 mtime 已刷新而漏判。
-        # init 完成后（含异常）清空，后续正常轮询不再跳过播报。
-        self._startup_stale_groups = {
-            gid: self._is_group_state_stale(gid)
-            for gid in self.group_steam_ids
-        }
-        try:
-            # Steam 状态查询按 SID 去重，但状态基线必须按群分别建立。
-            unique_sids = list(dict.fromkeys(
-                sid
-                for steam_ids in self.group_steam_ids.values()
-                for sid in steam_ids
-            ))
-            status_map = await self.fetch_player_statuses_batch(unique_sids)
-            for group_id in self.group_steam_ids:
-                steam_ids = self.group_steam_ids[group_id]
-                group_lines = []
-                for sid in steam_ids:
-                    # 状态基线按群保存；即使同一玩家属于多个群，也必须逐群初始化。
-                    msg = await self.check_status_change(
-                        group_id,
-                        single_sid=sid,
-                        status_override=status_map.get(sid),
-                        skip_push=True,
-                    )
-                    if msg:
-                        group_lines.append(msg)
-                if group_lines:
-                    all_logs.append(f"群{group_id}：\n" + "\n".join(group_lines))
-            if all_logs:
-                logger.info("====== Steam状态监控初始化日志 ======\n" + "\n".join(all_logs) + "\n=====================================================")
-        finally:
-            self._startup_stale_groups.clear()
-
-    async def global_poll_and_log_loop(self):
-        '''全局定时并发查询所有群Steam状态，按动态间隔判断是否需要查询，40秒统一输出日志'''
-        while True:
-            try:
-                # 计算距离下一个整分钟0秒的秒数
-                now = time.time()
-                next_minute = (int(now) // 60 + 1) * 60
-                await asyncio.sleep(max(0, next_minute - now))
-                # 0秒：跨群收集所有到点的SteamID，合并为一次批量查询（N群=1次API调用+自动去重）
-                group_ids = list(self.group_steam_ids.keys())
-                group_sids = {}  # {group_id: [sid, ...]}
-                all_sids_set = set()
-                now2 = time.time()
-                for group_id in group_ids:
-                    if not self.group_monitor_enabled.get(group_id, True):
-                        continue
-                    steam_ids = self.group_steam_ids.get(group_id, [])
-                    next_poll = self.next_poll_time.setdefault(group_id, {})
-                    sids_to_query = [sid for sid in steam_ids if now2 >= next_poll.get(sid, 0)]
-                    if not sids_to_query:
-                        continue
-                    group_sids[group_id] = sids_to_query
-                    all_sids_set.update(sids_to_query)
-                # 每日排行榜自动推送（以凌晨4:00为一天分界，推送时间可在配置中设定）
-                # 注意：此检查必须放在 continue 之前，否则当没有玩家需要轮询时会跳过排行榜推送
-                now_dt = datetime.now()
-                push_hour = getattr(self, 'rank_push_hour', 8)
-                push_minute = getattr(self, 'rank_push_minute', 30)
-                if now_dt.hour == push_hour and now_dt.minute == push_minute:
-                    push_date_key = self._get_day_key(-1)
-                    if self._last_rank_push_date != push_date_key and hasattr(self, 'rank_push_groups') and (self.rank_push_groups or getattr(self, 'rank_push_all', False)):
-                        self._last_rank_push_date = push_date_key
-                        logger.info(f"[排行榜] 开始每日自动推送，时间={push_hour}:{push_minute:02d}，目标群: {self.rank_push_groups if self.rank_push_groups else '全部群(rank_push_all)'}")
-                        asyncio.create_task(self._daily_rank_push())
-                # 节流保存：本轮有脏数据且超过间隔则落盘，避免每次 check_status_change 都写盘
-                if getattr(self, '_data_dirty', False) and (time.time() - getattr(self, '_last_save_time', 0)) >= getattr(self, '_save_interval', 300):
-                    try:
-                        self._save_persistent_data(force=True)
-                    except Exception as e:
-                        logger.error(f"[SteamStatusMonitor] 节流保存失败: {e}")
-                if not group_sids:
-                    await asyncio.sleep(40)  # 本轮无到点，跳过
-                    continue
-                # 一次批量查询所有到点SteamID（去重），大幅减少API调用
-                all_sids = list(all_sids_set)
-                global_status_map = await self.fetch_player_statuses_batch(all_sids)
-                # 各群并行处理状态变更检测
-                async def query_one_group(gid, sids):
-                    round_msg_lines = []
-                    tasks = []
-                    for sid in sids:
-                        override = global_status_map.get(sid)
-                        tasks.append(self.check_status_change(gid, single_sid=sid, status_override=override))
-                    if tasks:
-                        results = await asyncio.gather(*tasks, return_exceptions=True)
-                        for msg in results:
-                            if isinstance(msg, Exception):
-                                logger.error(f"[轮询] check_status_change 异常: {msg} (gid={gid})")
-                                continue
-                            if msg:
-                                round_msg_lines.append(msg)
-                    if round_msg_lines:
-                        self._last_round_logs.append((gid, "\n".join(round_msg_lines)))
-                poll_tasks = [query_one_group(gid, sids) for gid, sids in group_sids.items()]
-                await asyncio.gather(*poll_tasks, return_exceptions=True)
-                # 统一 flush 本轮收集的所有通知（开始游戏 + 延迟退出的结束游戏），合并发送
-                await self._flush_pending_end_notifications()
-                # 40秒统一输出日志
-                await asyncio.sleep(40)
-                if self._last_round_logs:
-                    if self.detailed_poll_log:
-                        all_logs = []
-                        for group_id, logstr in self._last_round_logs:
-                            all_logs.append(f"群{group_id}：\n" + logstr)
-                        logger.info("====== Steam状态监控轮询日志 ======\n" + "\n".join(all_logs) + "\n=====================================================")
-                    else:
-                        logger.info("周期轮询成功")
-                self._last_round_logs.clear()
-            except asyncio.CancelledError:
-                # terminate 主动取消，正常退出循环，不要吞掉
-                logger.info("[SteamStatusMonitor] 主轮询循环已取消")
-                raise
-            except Exception:
-                # 其他异常：保留堆栈后继续循环，防止单次异常导致轮询彻底失效
-                logger.exception("[SteamStatusMonitor] 主轮询循环异常，5 秒后继续")
-                await asyncio.sleep(5)
-
     async def terminate(self):
         '''插件被卸载/停用时取消所有后台任务并保存持久化数据'''
         # 取消主轮询循环和初始化任务，防止重载/禁用后残留多实例并发
@@ -404,135 +292,6 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         cropped = img.crop((x0, y0, x1, y1))
         return cropped
 
-
-    async def achievement_periodic_check(self, group_id, sid, gameid, player_name, game_name):
-        '''每20分钟对比一次成就列表，直到游戏结束，失败多次自动加入黑名单'''
-        key = (group_id, sid, gameid)
-        try:
-            while True:
-                await asyncio.sleep(1200)  # 20分钟
-                # 黑名单跳过
-                if gameid in self.achievement_blacklist:
-                    logger.info(f"[成就定时对比] 游戏 {gameid} 已在黑名单，跳过轮询")
-                    break
-                achievements_a = self.achievement_snapshots.get(key)
-                achievements_b = await self.achievement_monitor.get_player_achievements(
-                    self.API_KEY, group_id, sid, gameid
-                )
-                # 新增：当天失败次数统计
-                today = time.strftime('%Y-%m-%d')
-                fail_key = (gameid, today)
-                if achievements_b is None:
-                    cnt = self.achievement_fail_count.get(fail_key, 0) + 1
-                    self.achievement_fail_count[fail_key] = cnt
-                    if cnt >= 10:
-                        self.achievement_blacklist.add(gameid)
-                        logger.info(f"[成就黑名单] 游戏 {gameid} 当天累计获取失败10次，已加入黑名单")
-                        break
-                    continue
-                # 修正：补充新成就检测逻辑
-                if achievements_a is not None and achievements_b is not None:
-                    new_achievements = set(achievements_b) - set(achievements_a)
-                    if new_achievements:
-                        logger.info(f"[成就定时对比] {player_name} 在 {game_name} 解锁新成就：{', '.join(new_achievements)}")
-                        await self.notify_new_achievements(group_id, sid, player_name, gameid, game_name, new_achievements)
-                        self.achievement_snapshots[key] = list(achievements_b)
-                    else:
-                        logger.info(f"[成就定时对比] {player_name} 在 {game_name} 未发现新成就")
-        except asyncio.CancelledError:
-            logger.info(f"[成就定时对比] 任务已取消 group_id={group_id} sid={sid} gameid={gameid}")
-        except Exception as e:
-            logger.error(f"[成就定时对比] group_id={group_id} sid={sid} gameid={gameid} 异常: {e}")
-
-    async def achievement_delayed_final_check(self, group_id, sid, gameid, player_name, game_name):
-        '''游戏结束后延迟5分钟再做一次成就对比，失败多次自动加入黑名单'''
-        key = (group_id, sid, gameid)
-        await asyncio.sleep(300)  # 5分钟
-        # 黑名单跳过
-        if gameid in self.achievement_blacklist:
-            logger.info(f"[成就结束冗余对比] 游戏 {gameid} 已在黑名单，跳过轮询")
-            return
-        achievements_a = self.achievement_snapshots.get(key)
-        achievements_b = await self.achievement_monitor.get_player_achievements(
-            self.API_KEY, group_id, sid, gameid
-        )
-        today = time.strftime('%Y-%m-%d')
-        fail_key = (gameid, today)
-        if achievements_b is None:
-            cnt = self.achievement_fail_count.get(fail_key, 0) + 1
-            self.achievement_fail_count[fail_key] = cnt
-            if cnt >= 10:
-                self.achievement_blacklist.add(gameid)
-                logger.info(f"[成就黑名单] 游戏 {gameid} 当天累计获取失败10次，已加入黑名单")
-                return
-        if achievements_a is not None and achievements_b is not None:
-            new_achievements = set(achievements_b) - set(achievements_a)
-            if new_achievements:
-                logger.info(f"[成就结束冗余对比] {player_name} 在 {game_name} 解锁新成就：{', '.join(new_achievements)}")
-                await self.notify_new_achievements(group_id, sid, player_name, gameid, game_name, new_achievements)
-            else:
-                logger.info(f"[成就结束冗余对比] {player_name} 在 {game_name} 未发现新成就")
-        # 清理快照和定时任务
-        self.achievement_snapshots.pop(key, None)
-        self.achievement_poll_tasks.pop(key, None)
-        self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
-
-    async def notify_new_achievements(self, group_id, steamid, player_name, gameid, game_name, new_achievements):
-        if not self.group_achievement_enabled.get(group_id, True):
-            return
-        if not new_achievements or not self.notify_sessions:
-            return
-        achievements_to_notify = list(new_achievements)[:self.max_achievement_notifications]
-        extra_count = len(new_achievements) - len(achievements_to_notify)
-        # 优先用缓存
-        details = self.achievement_monitor.details_cache.get((group_id, gameid))
-        if not details:
-            try:
-                details = await self.achievement_monitor.get_achievement_details(group_id, gameid, lang="schinese", api_key=self.API_KEY, steamid=steamid)
-            except Exception as e:
-                details = None
-                logger.warning(f"获取成就详情失败: {e}")
-        # 在渲染前补充 game_name 字段，确保图片顶部能显示游戏名
-        if details and game_name:
-            for d in details.values():
-                d["game_name"] = game_name
-        font_path = self.get_font_path('NotoSansHans-Regular.otf')
-        # 推送到主群和所有push_group
-        notify_sessions = []
-        notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-        if notify_session:
-            notify_sessions.append(notify_session)
-        for push_gid in self.push_groups.get(steamid, []):
-            push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
-            if push_session and push_session not in notify_sessions:
-                notify_sessions.append(push_session)
-        # 图片推送（受 notify_send_image 开关控制）
-        send_image = self.config.get('notify_send_image', True)
-        tmp_path = None
-        if send_image and details:
-            unlocked_set = await self.achievement_monitor.get_player_achievements(self.API_KEY, group_id, steamid, gameid)
-            if not unlocked_set:
-                key = (group_id, steamid, gameid)
-                unlocked_set = set(self.achievement_snapshots.get(key, []))
-            if unlocked_set is None:
-                unlocked_set = set()
-            try:
-                img_bytes = await self.achievement_monitor.render_achievement_image(details, set(achievements_to_notify), player_name=player_name, steamid=steamid, appid=gameid, unlocked_set=unlocked_set, font_path=font_path)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
-            except Exception as e:
-                import traceback
-                logger.error(f"成就图片渲染失败: {e}\n{traceback.format_exc()}")
-        # 成就通知只发送图片，不发送文字
-        if not tmp_path:
-            return  # 图片渲染失败则不发送
-        for session in notify_sessions:
-            try:
-                msg_chain = [Image.fromFileSystem(tmp_path)]
-                await self.context.send_message(session, MessageChain(msg_chain))
-            except Exception as e:
-                logger.error(f"发送成就通知失败: {e}")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam on")
@@ -622,18 +381,42 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                 steamid_list.append(sid)
         steam_ids = self.group_steam_ids.setdefault(group_id, [])
         added = []
+        pushed = []
         already = []
+        already_pushed = []
+        pushed_primary_groups = {}
         limit = self.max_group_size
         for sid in steamid_list:
             if sid in steam_ids:
                 already.append(sid)
-            elif len(steam_ids) < limit:
+                continue
+            primary_group = next(
+                (
+                    candidate
+                    for candidate, candidate_ids in self.group_steam_ids.items()
+                    if candidate != group_id and sid in candidate_ids
+                ),
+                None,
+            )
+            if primary_group is not None:
+                targets = self.push_groups.setdefault(sid, [])
+                pushed_primary_groups[sid] = primary_group
+                if group_id in targets:
+                    already_pushed.append(sid)
+                else:
+                    targets.append(group_id)
+                    pushed.append(sid)
+                continue
+            if len(steam_ids) < limit:
                 steam_ids.append(sid)
                 added.append(sid)
             else:
                 break
         self.group_steam_ids[group_id] = steam_ids
-        self._save_group_steam_ids()  # 保存到 steam_groups.json
+        if added:
+            self._save_group_steam_ids()
+        if pushed:
+            self._save_push_groups()
         # 绑定数据：写入并保存
         if bind_qq and steamid_list:
             if not hasattr(self, '_bind_data'):
@@ -641,13 +424,31 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             for sid in steamid_list:
                 self._bind_data[bind_qq] = {"sid": sid, "nickname": bind_nickname or "*"}
             self._save_bind_data()
-            logger.info(f"[绑定] QQ{ bind_qq} -> SteamID {added[0]}，备注={bind_nickname or '无'}")
+            logger.info(f"[绑定] QQ{bind_qq} -> SteamID {steamid_list[-1]}，备注={bind_nickname or '无'}")
         msg = ""
         if added:
             msg += f"已为本群添加SteamID: {', '.join(added)}\n"
+        if pushed:
+            push_details = []
+            for sid in pushed:
+                primary_group = pushed_primary_groups.get(sid)
+                suffix = f"（主监控群：{primary_group}）" if primary_group else ""
+                push_details.append(f"{sid}{suffix}")
+            msg += (
+                "以下SteamID已被其他群监控，当前群不会重复监控，已自动设置为分发路由（push_group）："
+                f"{', '.join(push_details)}\n"
+            )
         if already:
-            msg += f"以下SteamID已存在于本群监控组: {', '.join(already)}\n"
-        if len(steam_ids) >= limit and len(added) < len(steamid_list):
+            msg += f"以下SteamID已经在本群监控，无需重复添加：{', '.join(already)}\n"
+        if already_pushed:
+            push_details = []
+            for sid in already_pushed:
+                primary_group = pushed_primary_groups.get(sid)
+                suffix = f"（主监控群：{primary_group}）" if primary_group else ""
+                push_details.append(f"{sid}{suffix}")
+            msg += f"以下SteamID已经是本群的分发路由（push_group），无需重复添加：{', '.join(push_details)}\n"
+        unhandled = len(steamid_list) - len(added) - len(pushed) - len(already) - len(already_pushed)
+        if unhandled:
             msg += f"本群监控组人数已达上限（{limit}人），部分ID未添加。\n"
         # 自动启用本群监控（幂等）
         if added and group_id not in self.running_groups:
@@ -666,6 +467,42 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         yield event.plain_result(msg.strip() if msg else "未添加任何SteamID。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("steam push_group")
+    async def steam_push_group(self, event: AstrMessageEvent, steamid: str):
+        '''将本群加入指定SteamID的联动推送组（不重复轮询，仅同步推送）'''
+        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        if not steamid.isdigit() or len(steamid) != 17:
+            yield event.plain_result("SteamID无效（需为64位数字串，17位）")
+            return
+        if not any(steamid in steam_ids for steam_ids in self.group_steam_ids.values()):
+            yield event.plain_result("未找到已轮询该SteamID的主群，请先在任一群添加并开启监控。")
+            return
+        targets = self.push_groups.setdefault(steamid, [])
+        if group_id in targets:
+            yield event.plain_result("本群已在该SteamID的推送组中。")
+            return
+        targets.append(group_id)
+        self._save_push_groups()
+        yield event.plain_result(f"本群已加入SteamID {steamid} 的联动推送组。")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("steam delpush_group")
+    async def steam_delpush_group(self, event: AstrMessageEvent, steamid: str, target_group: str = ''):
+        '''将当前群或指定群从SteamID的联动推送组移除'''
+        group_id = target_group.strip() or (
+            str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        )
+        targets = self.push_groups.get(steamid, [])
+        if group_id not in targets:
+            yield event.plain_result(f"群 {group_id} 未在 SteamID {steamid} 的推送组中。")
+            return
+        targets.remove(group_id)
+        if not targets:
+            self.push_groups.pop(steamid, None)
+        self._save_push_groups()
+        yield event.plain_result(f"已从 SteamID {steamid} 的联动推送组中移除群 {group_id}。")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam delid")
     async def steam_delid(self, event: AstrMessageEvent, steamid: str, group_id_param: str = ""):
         '''从监控组删除SteamID；支持好友码/链接；可选传群号跨群删除：/steam delid [SteamID/好友码/链接] [群号]'''
@@ -675,36 +512,34 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         if not sid or not sid.isdigit() or len(sid) != 17:
             yield event.plain_result("无法解析为有效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 8位好友码")
             return
-        steam_ids = self.group_steam_ids.get(group_id, [])
-        if not steam_ids:
-            yield event.plain_result(f"群 {group_id} 没有监控任何SteamID")
+        from ..application.services.monitor_admin import MonitorAdminService
+
+        result = MonitorAdminService(self).remove_player(group_id, sid)
+        if not result.changed:
+            yield event.plain_result(
+                f"该SteamID不存在于群 {group_id} 的监控组或分发路由: {sid}"
+            )
             return
-        if sid not in steam_ids:
-            yield event.plain_result(f"该SteamID不存在于群 {group_id} 的监控组")
-            return
-        steam_ids.remove(sid)
-        self.group_steam_ids[group_id] = steam_ids
-        self._save_group_steam_ids()
-        # 同步清理绑定数据
-        removed_bind = []
-        bind_data = getattr(self, '_bind_data', None)
-        if bind_data:
-            for qq, info in list(bind_data.items()):
-                if info.get("sid") == sid:
-                    removed_bind.append(qq)
-                    del bind_data[qq]
-            if removed_bind:
-                self._bind_data = bind_data
-                self._save_bind_data()
-                logger.info(f"[绑定] 删除SteamID {sid} 时同步清理绑定: QQ {', '.join(removed_bind)}")
-        yield event.plain_result(f"已为群 {group_id} 删除SteamID: {sid}")
+
+        if result.message == "removed push route":
+            yield event.plain_result(f"已关闭群 {group_id} 对 SteamID {sid} 的分发路由")
+        else:
+            yield event.plain_result(
+                f"已删除 SteamID {sid} 的主监控及全部路由分发"
+            )
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam list")
     async def steam_list(self, event: AstrMessageEvent):
         '''列出本群所有玩家当前状态（分群）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        steam_ids = self.group_steam_ids.get(group_id, [])
+        direct_steam_ids = self.group_steam_ids.get(group_id, [])
+        push_steam_ids = [
+            sid
+            for sid, push_groups in (getattr(self, 'push_groups', {}) or {}).items()
+            if group_id in {str(target) for target in push_groups}
+        ]
+        steam_ids = list(dict.fromkeys([*direct_steam_ids, *push_steam_ids]))
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
             return
@@ -1121,167 +956,23 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
                 self._save_rank_push_groups()
             yield event.plain_result(f"已开启本群每日排行榜自动推送。")
 
-    def _qq_menu_panel(self) -> dict[str, Any]:
-        default_commands = [
-            {"command": "/steam help", "description": "查看 Steam 插件指令帮助"},
-            {"command": "/steam list", "description": "查看本群玩家当前状态"},
-            {"command": "/steam rank", "description": "查看本群今日时长排行"},
-            {"command": "/steam rank 7", "description": "查看本群最近七天排行"},
-            {"command": "/steam rank 30", "description": "查看本群最近三十天排行"},
-        ]
-        commands = self.config.get("qq_menu_commands", default_commands)
-        items = []
-        for command_item in commands:
-            command = str(command_item.get("command", "")).strip()
-            description = str(command_item.get("description", "")).strip()
-            if not command or not description:
-                continue
-            items.append(
-                {
-                    "name": command,
-                    "desc": description,
-                    "type": "command",
-                    "only_admin": False,
-                }
-            )
-        return {"remark": "Steam 状态监控", "items": items}
-
-    def _qq_menu_client(self, event: AstrMessageEvent) -> tuple[QQOfficialPanelClient, str]:
-        platform_id = event.get_platform_id()
-        platform = self.context.get_platform_inst(platform_id)
-        platform_type = str(platform.meta().name)
-        if platform_type not in {"qq_official", "qq_official_webhook"}:
-            raise QQOfficialPanelError("请从 QQ 官方机器人平台会话执行该指令")
-        use_web_config = bool(self.config.get("qq_official_enabled", False))
-        appid = str(
-            self.config.get("qq_official_appid", "")
-            if use_web_config
-            else getattr(platform, "appid", "")
-        ).strip()
-        secret = str(
-            self.config.get("qq_official_secret", "")
-            if use_web_config
-            else getattr(platform, "secret", "")
-        ).strip()
-        if not appid or not secret:
-            source = "后台 QQ 官方机器人配置" if use_web_config else "QQ 官方机器人平台"
-            raise QQOfficialPanelError(f"{source}缺少 appid 或 secret")
-        return QQOfficialPanelClient(appid, secret, proxy=self.proxy), platform_type
-
-    async def _save_qq_menu_panel_id(self, panel_id: str) -> None:
-        self.config["qq_menu_panel_id"] = panel_id
-        save_async = getattr(self.config, "save_config_async", None)
-        if callable(save_async):
-            await save_async()
-            return
-        save = getattr(self.config, "save_config", None)
-        if callable(save):
-            await asyncio.to_thread(save)
-
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam qq菜单同步")
     async def steam_qq_menu_sync(self, event: AstrMessageEvent):
         """创建或更新 QQ 官方机器人指令面板。"""
-        if not self.config.get("qq_menu_enabled", False):
-            yield event.plain_result("QQ 指令面板未启用，请先在插件配置中开启 qq_menu_enabled。")
-            return
-        scope = str(self.config.get("qq_menu_scope", "group")).strip().lower()
-        if scope not in {"group", "c2c"}:
-            yield event.plain_result("qq_menu_scope 仅支持 group 或 c2c。")
-            return
-        raw_openids = self.config.get("qq_menu_group_openids", [])
-        if isinstance(raw_openids, str):
-            group_openids = [item.strip() for item in raw_openids.split(",") if item.strip()]
-        else:
-            group_openids = [str(item).strip() for item in raw_openids if str(item).strip()]
-        if scope == "group" and not group_openids:
-            platform = self.context.get_platform_inst(event.get_platform_id())
-            platform_type = str(platform.meta().name)
-            current_group = str(event.get_group_id() or "").strip()
-            if platform_type in {"qq_official", "qq_official_webhook"} and current_group:
-                group_openids = [current_group]
-            else:
-                yield event.plain_result(
-                    "群聊面板需要目标群 OpenID；当前会话不是 QQ 官方机器人会话，"
-                    "请在后台填写 qq_menu_group_openids。"
-                )
-                return
-        try:
-            client, _ = self._qq_menu_client(event)
-            async with self._qq_menu_lock:
-                panel_id = str(self.config.get("qq_menu_panel_id", "")).strip()
-                action = "更新"
-                if panel_id:
-                    try:
-                        await client.update_panel(panel_id, self._qq_menu_panel())
-                        if scope == "group":
-                            await client.update_targets(panel_id, group_openids)
-                    except QQOfficialPanelError as exc:
-                        if not exc.panel_not_found:
-                            raise
-                        panel_id = ""
-                if not panel_id:
-                    panel_id = await client.create_panel(
-                        scope=scope,
-                        panel=self._qq_menu_panel(),
-                        group_openids=group_openids,
-                    )
-                    await self._save_qq_menu_panel_id(panel_id)
-                    action = "创建"
-            target = f"{len(group_openids)} 个群" if scope == "group" else "单聊"
-            yield event.plain_result(f"QQ 指令面板已{action}：{target}，panel_id={panel_id}")
-        except QQOfficialPanelError as exc:
-            logger.warning("[SteamStatusMonitor] QQ 指令面板同步失败: %s", exc)
-            yield event.plain_result(f"QQ 指令面板同步失败：{exc}")
-        except Exception as exc:
-            logger.exception("[SteamStatusMonitor] QQ 指令面板同步异常")
-            yield event.plain_result(f"QQ 指令面板同步异常：{type(exc).__name__}")
+        yield event.plain_result(await self.qq_menu_sync(event))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam qq菜单状态")
     async def steam_qq_menu_status(self, event: AstrMessageEvent):
         """查询 QQ 官方机器人指令面板状态。"""
-        panel_id = str(self.config.get("qq_menu_panel_id", "")).strip()
-        if not panel_id:
-            yield event.plain_result("尚未记录 QQ 指令面板，请先执行 /steam qq菜单同步。")
-            return
-        try:
-            client, platform_type = self._qq_menu_client(event)
-            data = await client.get_panel(panel_id)
-            panel = data.get("panel") if isinstance(data.get("panel"), dict) else {}
-            items = panel.get("items") if isinstance(panel.get("items"), list) else []
-            yield event.plain_result(
-                "QQ 指令面板状态：\n"
-                f"平台：{platform_type}\n"
-                f"场景：{data.get('scope') or self.config.get('qq_menu_scope', 'group')}\n"
-                f"面板 ID：{panel_id}\n"
-                f"版本：{panel.get('version', '-')}\n"
-                f"指令数：{len(items)}"
-            )
-        except QQOfficialPanelError as exc:
-            if exc.panel_not_found:
-                await self._save_qq_menu_panel_id("")
-                yield event.plain_result("QQ 指令面板已不存在，本地记录已清除，可重新同步。")
-                return
-            yield event.plain_result(f"查询 QQ 指令面板失败：{exc}")
+        yield event.plain_result(await self.qq_menu_status(event))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam qq菜单删除")
     async def steam_qq_menu_delete(self, event: AstrMessageEvent):
         """删除本插件记录的 QQ 官方机器人指令面板。"""
-        panel_id = str(self.config.get("qq_menu_panel_id", "")).strip()
-        if not panel_id:
-            yield event.plain_result("尚未记录 QQ 指令面板，无需删除。")
-            return
-        try:
-            client, _ = self._qq_menu_client(event)
-            await client.delete_panel(panel_id)
-        except QQOfficialPanelError as exc:
-            if not exc.panel_not_found:
-                yield event.plain_result(f"删除 QQ 指令面板失败：{exc}")
-                return
-        await self._save_qq_menu_panel_id("")
-        yield event.plain_result("QQ 指令面板已删除，本地记录已清除。")
+        yield event.plain_result(await self.qq_menu_delete(event))
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam help")
@@ -1589,14 +1280,31 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
     @filter.command("steam clear_allids")
     async def steam_clear_allids(self, event: AstrMessageEvent):
         '''删除所有群聊的所有已监控SteamID，并清空相关状态数据'''
+        for task in self._pending_quit_tasks.values():
+            task.cancel()
+        self._pending_quit_tasks.clear()
+        for task in self.achievement_poll_tasks.values():
+            task.cancel()
+        self.achievement_poll_tasks.clear()
+        self.achievement_snapshots.clear()
+        self.achievement_fail_count.clear()
         self.group_steam_ids.clear()
-        self._save_group_steam_ids()  # 新增：保存到 steam_groups.json
+        self.push_groups.clear()
+        self.running_groups.clear()
+        self.group_monitor_enabled.clear()
+        self.group_achievement_enabled.clear()
+        self.next_poll_time.clear()
         self.group_last_states.clear()
         self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
         self.group_pending_quit.clear()
         self.group_recent_games.clear()
+        self._pending_end_notifications.clear()
+        self.notify_sessions.clear()
+        self._save_group_steam_ids()
+        self._save_push_groups()
+        self._save_notify_session()
         self._save_persistent_data(force=True)
         self.config['group_steam_ids'] = self.group_steam_ids
         if hasattr(self.config, "save_config"):
@@ -1607,22 +1315,46 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
     @filter.command("steam clear_groupids")
     async def steam_clear_groupids(self, event: AstrMessageEvent, group_id: str):
         '''删除指定群聊的所有已监控SteamID，并清空相关状态数据'''
-        if group_id not in self.group_steam_ids:
+        has_primary = group_id in self.group_steam_ids
+        routed_sids = [
+            sid for sid, targets in self.push_groups.items()
+            if group_id in {str(target) for target in targets}
+        ]
+        if not has_primary and not routed_sids:
             yield event.plain_result(f"群聊 {group_id} 未绑定任何SteamID，无需清理。")
             return
+
+        for task_key in list(self._pending_quit_tasks):
+            if task_key[0] == group_id:
+                task = self._pending_quit_tasks.pop(task_key)
+                task.cancel()
+        for sid in list(self.group_steam_ids.get(group_id, [])):
+            self.push_groups.pop(sid, None)
+        for sid in routed_sids:
+            targets = [target for target in self.push_groups.get(sid, []) if str(target) != group_id]
+            if targets:
+                self.push_groups[sid] = targets
+            else:
+                self.push_groups.pop(sid, None)
         self.group_steam_ids.pop(group_id, None)
-        self._save_group_steam_ids()  # 保存到 steam_groups.json
         self.group_last_states.pop(group_id, None)
         self.group_start_play_times.pop(group_id, None)
         self.group_last_quit_times.pop(group_id, None)
         self.group_pending_logs.pop(group_id, None)
         self.group_pending_quit.pop(group_id, None)
         self.group_recent_games.pop(group_id, None)
-        self._save_persistent_data(force=True)
+        self.next_poll_time.pop(group_id, None)
+        self.running_groups.discard(group_id)
+        self.group_monitor_enabled.pop(group_id, None)
+        self.group_achievement_enabled.pop(group_id, None)
         self.notify_sessions.pop(group_id, None)
+        self._save_group_steam_ids()
+        self._save_push_groups()
+        self._save_notify_session()
+        self._save_persistent_data(force=True)
         if hasattr(self.config, "save_config"):
             self.config.save_config()
-        yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID，相关状态数据已清空。")
+        yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID和分发路由，相关状态数据已清空。")
 
     def _should_skip_game(self, gameid):
         """根据黑白名单配置判断是否应跳过该游戏的监控/播报"""
@@ -1756,460 +1488,6 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
         except Exception as e:
             logger.error(f"[排行榜] 记录游玩时长异常: {e}")
 
-    def _get_notify_sessions(self, group_id, sid):
-        """获取本次状态检测需要通知的 session，避免主群与联动群交叉重复投递。"""
-        sessions = []
-        notify_sessions = getattr(self, 'notify_sessions', {})
-        primary_session = notify_sessions.get(group_id)
-        if primary_session:
-            sessions.append(primary_session)
-
-        # 同一玩家可能同时属于多个主群。每个主群都会独立执行状态检测，因此这里
-        # 只补充该玩家未被直接监控的联动群；否则 A 主群发送 A+B、B 主群再发送
-        # B+A，会让两个群各收到两次完全相同的通知。
-        monitored_groups = {
-            gid for gid, steam_ids in getattr(self, 'group_steam_ids', {}).items()
-            if sid in steam_ids
-        }
-        for push_gid in self.push_groups.get(sid, []):
-            if push_gid != group_id and push_gid in monitored_groups:
-                continue
-            push_session = notify_sessions.get(push_gid)
-            if push_session and push_session not in sessions:
-                sessions.append(push_session)
-        return sessions
-
-    async def _render_notification_image(self, noti):
-        """为单条通知渲染图片（开始游戏 / 结束游戏），返回临时文件路径或 None"""
-        try:
-            if noti["type"] == "start":
-                status = noti.get("status", {})
-                avatar_url = status.get("avatarfull") or status.get("avatar")
-                superpower = self.get_today_superpower(noti["sid"])
-                font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                zh_game_name, en_game_name = await self.get_game_names(noti["gameid"], noti["game"])
-                online_count = await self.get_game_online_count(noti["gameid"])
-                img_bytes = await render_game_start(
-                    self.data_dir, noti["sid"], noti["name"], avatar_url,
-                    noti["gameid"], zh_game_name,
-                    api_key=self.API_KEY, superpower=superpower,
-                    sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
-                    sgdb_game_name=en_game_name, online_count=online_count,
-                    appid=noti.get("gameid"), proxy=self.proxy,
-                    version=self._plugin_version)
-            else:
-                from datetime import datetime
-                end_time_str = datetime.fromtimestamp(noti["quit_time"]).strftime("%Y-%m-%d %H:%M")
-                duration_h = noti["duration_min"] / 60 if noti["duration_min"] > 0 else 0
-                avatar_url = noti.get("avatar_url")
-                tip_text = noti.get("tip_text") or "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
-                zh_game_name, en_game_name = await self.get_game_names(noti["gameid"], noti["game"])
-                font_path = self.get_font_path('NotoSansHans-Regular.otf')
-                img_bytes = await render_game_end(
-                    self.data_dir, noti["sid"], noti["name"], avatar_url,
-                    noti["gameid"], zh_game_name,
-                    end_time_str, tip_text, duration_h,
-                    sgdb_api_key=self.SGDB_API_KEY, font_path=font_path,
-                    sgdb_game_name=en_game_name, appid=noti.get("gameid"),
-                    proxy=self.proxy, api_key=self.API_KEY)
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                tmp.write(img_bytes)
-                return tmp.name
-        except Exception as e:
-            logger.error(f"渲染通知图片失败 ({noti.get('type')}, {noti.get('name')}): {e}")
-            return None
-
-    async def _send_merged_notification(self, group_id, notifications):
-        """按接收会话过滤通知后合并发送，避免联动群收到无关玩家消息。"""
-        if not notifications:
-            return
-        send_text = self.config.get('notify_send_text', True)
-        send_image = self.config.get('notify_send_image', True)
-        session_notifications = {}
-        for notification in notifications:
-            for session in self._get_notify_sessions(group_id, notification["sid"]):
-                session_notifications.setdefault(session, []).append(notification)
-
-        for session, matched_notifications in session_notifications.items():
-            msg_chain = []
-            for notification in matched_notifications:
-                if notification["type"] == "start":
-                    line = f"🟢【{notification['name']}】开始游玩 {notification['game']}\n"
-                else:
-                    line = f"👋 {notification['name']} 不玩 {notification['game']}，游玩时间 {notification['duration_str']}\n"
-                if send_text:
-                    msg_chain.append(Plain(line))
-                if send_image:
-                    img_path = await self._render_notification_image(notification)
-                    if img_path:
-                        msg_chain.append(Image.fromFileSystem(img_path))
-            if not msg_chain:
-                continue
-            try:
-                await self.context.send_message(session, MessageChain(msg_chain))
-            except Exception:
-                logger.exception(f"推送合并通知失败 (group_id={group_id}, session={session})")
-
-    async def _flush_pending_end_notifications(self):
-        """将 _pending_end_notifications 缓冲区中的延迟退出通知按群合并后发送，发送完毕后清空"""
-        if not self._pending_end_notifications:
-            return
-        for group_id, notifications in list(self._pending_end_notifications.items()):
-            await self._send_merged_notification(group_id, notifications)
-        self._pending_end_notifications.clear()
-
-    async def _delayed_quit_check(self, group_id, sid, gameid):
-        await asyncio.sleep(180)
-        info = self.group_pending_quit.get(group_id, {}).get(sid, {}).get(gameid)
-        if info and not info.get("notified"):
-            duration_min = info["duration_min"]
-            if duration_min == 0:
-                for _ in range(2):
-                    last_quit_time = info["quit_time"]
-                    start_time = info["start_time"]
-                    if start_time and last_quit_time:
-                        duration_min = (last_quit_time - start_time) / 60
-                        if duration_min > 0:
-                            info["duration_min"] = duration_min
-                            break
-                    await asyncio.sleep(1)
-            info["notified"] = True
-            # >>> 排行榜数据采集：记录本次游玩时长（在推送/return之前执行，确保即使关闭通知也能记录）<<<
-            self._record_playtime(sid, gameid, info.get("game_name", "未知游戏"), info.get("duration_min", 0))
-            # >>> Session 级别游玩记录采集（甘特图/热力图数据源）<<<
-            self._record_session(
-                sid=sid, gameid=gameid, game_name=info.get("game_name", "未知游戏"),
-                start_time=info.get("start_time"), end_time=info.get("quit_time"),
-                duration_min=info.get("duration_min", 0), group_id=group_id
-            )
-            # 游戏结束通知开关：关闭则跳过推送，但仍清理成就任务和 pending_quit
-            if not self.config.get('enable_game_end_notify', True):
-                key = (group_id, sid, gameid)
-                poll_task = self.achievement_poll_tasks.pop(key, None)
-                if poll_task:
-                    poll_task.cancel()
-                self.achievement_snapshots.pop(key, None)
-                self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
-                self.group_pending_quit.get(group_id, {}).get(sid, {}).pop(gameid, None)
-                return
-            duration_min = info["duration_min"]
-            if duration_min < 60:
-                time_str = f"{duration_min:.1f}分钟"
-            else:
-                time_str = f"{duration_min/60:.1f}小时"
-            # 获取头像 URL 和提示词（供后续图片渲染时使用）
-            from datetime import datetime
-            if duration_min < 5:
-                tip_text = "风扇都没转热，主人就结束了？"
-            elif duration_min < 10:
-                tip_text = "杂鱼杂鱼~主人你就这水平？"
-            elif duration_min < 30:
-                tip_text = "热身一下就结束了？"
-            elif duration_min < 60:
-                tip_text = "歇会儿再来，别太累了喵！"
-            elif duration_min < 120:
-                tip_text = "沉浸在游戏世界，时间过得飞快喵！"
-            elif duration_min < 300:
-                tip_text = "肝到手软了喵！主人不如陪陪咱~"
-            elif duration_min < 600:
-                tip_text = "你吃饭了吗？还是说你已经忘了吃饭这件事？"
-            elif duration_min < 1200:
-                tip_text = "家里电费都要被你玩光了喵！"
-            elif duration_min < 1800:
-                tip_text = "咱都要给你颁发'不眠猫'勋章了！"
-            elif duration_min < 2400:
-                tip_text = "主人你还活着喵？你是不是忘了关电脑呀~"
-            else:
-                tip_text = "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
-            avatar_url = None
-            last_state = self.group_last_states.get(group_id, {}).get(sid)
-            if last_state:
-                avatar_url = last_state.get("avatarfull") or last_state.get("avatar")
-            # 写入通知缓冲区，由主轮询统一 flush 合并发送
-            self._pending_end_notifications.setdefault(group_id, []).append({
-                "type": "end",
-                "name": info["name"],
-                "game": info["game_name"],
-                "duration_str": time_str,
-                "sid": sid,
-                "gameid": gameid,
-                "quit_time": info["quit_time"],
-                "duration_min": duration_min,
-                "avatar_url": avatar_url,
-                "tip_text": tip_text,
-            })
-            # 三分钟后再关闭成就轮询和清理快照
-            key = (group_id, sid, gameid)
-            poll_task = self.achievement_poll_tasks.pop(key, None)
-            if poll_task:
-                poll_task.cancel()
-            self.achievement_snapshots.pop(key, None)
-            self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
-            self.group_pending_quit.get(group_id, {}).get(sid, {}).pop(gameid, None)
-
-    async def check_status_change(self, group_id, single_sid=None, status_override=None, poll_level=None, skip_push=False):
-        '''轮询检测玩家状态变更并推送通知（分群，支持单个sid）
-        返回精简日志字符串，不直接打印日志'''
-        now = int(time.time())
-        # 插件重启后首次初始化期间：若该群状态文件是"停止期间遗留的旧数据"，本次检测到的变化
-        # 属于历史变化（如玩家在插件关闭期间切了游戏），跳过播报，避免补播过时信息。
-        state_stale = self._startup_stale_groups.get(group_id, False)
-        steam_ids = [single_sid] if single_sid else self.group_steam_ids.get(group_id, [])
-        last_states = self.group_last_states.setdefault(group_id, {})
-        start_play_times = self.group_start_play_times.setdefault(group_id, {})
-        last_quit_times = self.group_last_quit_times.setdefault(group_id, {})
-        pending_logs = self.group_pending_logs.setdefault(group_id, {})
-        pending_quit = self.group_pending_quit.setdefault(group_id, {})
-        recent_games = self.group_recent_games.setdefault(group_id, [])
-        notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-        msg_lines = []
-        notifications = []  # 本轮收集的状态变更通知，改为统一合并发送
-        for sid in steam_ids:
-            status = status_override if status_override and sid == single_sid else await self.fetch_player_status(sid)
-            if not status:
-                continue
-            prev = last_states.get(sid)
-            name = self._resolve_bind_name(sid, status.get('name') or sid)
-            gameid = status.get('gameid')
-            game = status.get('gameextrainfo')
-            lastlogoff = status.get('lastlogoff')
-            personastate = status.get('personastate', 0)
-            zh_game_name = await self.get_chinese_game_name(gameid, game) if gameid else (game or "未知游戏")
-            prev_gameid = prev.get('gameid') if prev else None
-            current_gameid = gameid
-            # --- 退出游戏（缓冲3分钟） ---（含游戏切换：直接切到另一款游戏也会结算上一款时长）
-            if prev_gameid and (current_gameid in [None, "", "0"] or current_gameid != prev_gameid):
-                logger.info(f"[退出逻辑] {name} prev_gameid={prev_gameid} current_gameid={current_gameid}")
-                zh_prev_game_name = await self.get_chinese_game_name(prev_gameid, prev.get('gameextrainfo') if prev else None) if prev_gameid else (prev.get('gameextrainfo') if prev else "未知游戏")
-                duration_min = 0
-                # 安全获取 sid_data，兼容旧格式 int → dict
-                sid_data = start_play_times.get(sid)
-                if not isinstance(sid_data, dict):
-                    sid_data = {}
-                    start_play_times[sid] = sid_data
-                start_time = sid_data.get(prev_gameid, now)
-                if prev_gameid in sid_data:
-                    duration_min = (now - sid_data[prev_gameid]) / 60
-                    if duration_min == 0:
-                        for _ in range(2):
-                            start_time = sid_data.get(prev_gameid, now)
-                            duration_min = (now - start_time) / 60
-                            if duration_min > 0:
-                                break
-                            await asyncio.sleep(1)
-                self.achievement_monitor.clear_game_achievements(group_id, sid, prev_gameid)
-                if not self._should_skip_game(prev_gameid) and not state_stale:
-                    pending_quit.setdefault(sid, {})[prev_gameid] = {
-                        "quit_time": now,
-                        "name": name,
-                        "game_name": zh_prev_game_name,
-                        "duration_min": duration_min,
-                        "start_time": start_time,
-                        "notified": False
-                    }
-                    # 成就结算：游戏结束时，延迟15分钟再做一次对比
-                    try:
-                        player_name = name
-                        game_name = zh_prev_game_name
-                        key = (group_id, sid, prev_gameid)
-                        poll_task = self.achievement_poll_tasks.pop(key, None)
-                        if poll_task:
-                            poll_task.cancel()
-                        if not skip_push:
-                            asyncio.create_task(self.achievement_delayed_final_check(group_id, sid, prev_gameid, player_name, game_name))
-                    except Exception as e:
-                        logger.error(f"结算成就时异常: {e}")
-                    # 延迟退出任务必须包含群维度，避免同一玩家在多个群的任务互相取消。
-                    if not hasattr(self, '_pending_quit_tasks'):
-                        self._pending_quit_tasks = {}
-                    task_key = (group_id, sid, prev_gameid)
-                    old_task = self._pending_quit_tasks.get(task_key)
-                    if old_task:
-                        old_task.cancel()
-                    if not skip_push:
-                        task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
-                        self._pending_quit_tasks[task_key] = task
-                else:
-                    reason = "黑白名单过滤" if self._should_skip_game(prev_gameid) else "插件停止期间的遗留变化"
-                    logger.info(f"[退出跳过] {name} 退出游戏 {zh_prev_game_name}({prev_gameid}) 被跳过（{reason}）")
-                last_quit_times.setdefault(sid, {})[prev_gameid] = now
-                last_states[sid] = status
-                if current_gameid in [None, "", "0"]:
-                    continue  # 纯退出：防止重复推送
-                # 游戏切换：不continue，继续执行下方开始游戏逻辑
-
-            # --- 开始游戏/继续游戏（仅当 gameid 变更时推送） ---
-            if current_gameid not in [None, "", "0"] and current_gameid != prev_gameid:
-                quit_info = pending_quit.setdefault(sid, {}).get(current_gameid)
-                # 检查是否为网络波动（3分钟内重启同一游戏）
-                if quit_info and now - quit_info["quit_time"] <= 180 and not quit_info.get("notified"):
-                    # 只取消当前群对应的延迟任务。
-                    task_key = (group_id, sid, current_gameid)
-                    pending_task = getattr(self, '_pending_quit_tasks', {}).pop(task_key, None)
-                    if pending_task:
-                        pending_task.cancel()
-                    quit_info["notified"] = True
-                    msg = f"⚠️ {name} 游玩 {zh_game_name} 时网络波动了"
-                    # 网络波动通知开关检查
-                    if not self.config.get('enable_network_fluctuation_notify', True):
-                        last_states[sid] = status
-                        continue
-                    if skip_push:
-                        last_states[sid] = status
-                        continue
-                    # 推送到主群和所有联动群
-                    notify_sessions = []
-                    notify_session = getattr(self, 'notify_sessions', {}).get(group_id, None)
-                    if notify_session:
-                        notify_sessions.append(notify_session)
-                    for push_gid in self.push_groups.get(sid, []):
-                        push_session = getattr(self, 'notify_sessions', {}).get(push_gid, None)
-                        if push_session and push_session not in notify_sessions:
-                            notify_sessions.append(push_session)
-                    for session in notify_sessions:
-                        await self.context.send_message(session, MessageChain([Plain(msg)]))
-                    last_states[sid] = status
-                    continue  # 只推送网络波动提醒，跳过后续逻辑
-                # 修复：补充开始游戏推送逻辑
-                if self._should_skip_game(current_gameid):
-                    logger.info(f"[游戏过滤] {name} 开始游戏 {zh_game_name}({current_gameid}) 被跳过（黑白名单过滤）")
-                    start_play_times.setdefault(sid, {})[current_gameid] = now
-                    last_states[sid] = status
-                    continue
-                start_play_times.setdefault(sid, {})[current_gameid] = now
-                # 收集通知，由末尾统一合并发送（不在循环内逐条推送）
-                if not skip_push and not state_stale and self.config.get('enable_game_start_notify', True):
-                    notifications.append({
-                        "type": "start",
-                        "name": name,
-                        "game": zh_game_name,
-                        "sid": sid,
-                        "gameid": current_gameid,
-                        "status": status,
-                    })
-                # 成就监控任务启动（受 enable_achievement_poll 配置控制）
-                if skip_push or not self.config.get('enable_achievement_poll', True):
-                    last_states[sid] = status
-                    continue
-                try:
-                    player_name = name
-                    game_name = zh_game_name
-                    key = (group_id, sid, current_gameid)
-                    achievements = await self.achievement_monitor.get_player_achievements(self.API_KEY, group_id, sid, current_gameid)
-                    self.achievement_snapshots[key] = list(achievements) if achievements else []
-                    # 新增日志：已成功获取成就列表
-                    unlocked_count = len(achievements) if achievements else 0
-                    # 获取总成就数量
-                    details = await self.achievement_monitor.get_achievement_details(group_id, current_gameid, lang="schinese", api_key=self.API_KEY, steamid=sid)
-                    total_count = len(details) if details else 0
-                    logger.info(f"[成就初始化] {name} 已成功获取成就列表 {unlocked_count}/{total_count} 游戏名：{zh_game_name}")
-                    poll_task = asyncio.create_task(self.achievement_periodic_check(group_id, sid, current_gameid, player_name, game_name))
-                    self.achievement_poll_tasks[key] = poll_task
-                except Exception as e:
-                    logger.error(f"启动成就监控任务异常: {e}")
-                last_states[sid] = status
-                continue
-
-            # 智能轮询间隔设置（支持固定间隔）
-            next_poll = self.next_poll_time.setdefault(group_id, {})
-            import math
-            # intervals 提前定义，固定间隔模式下对齐逻辑也需要使用（修复原版 NameError）
-            intervals = self.smart_poll_intervals if isinstance(self.smart_poll_intervals, list) and len(self.smart_poll_intervals) == 6 else [1, 3, 5, 10, 20, 30]
-            if self.fixed_poll_interval and self.fixed_poll_interval > 0:
-                poll_interval = self.fixed_poll_interval
-                poll_level_str = f"固定{self.fixed_poll_interval//60 if self.fixed_poll_interval>=60 else self.fixed_poll_interval}{'分钟' if self.fixed_poll_interval>=60 else '秒'}轮询"
-            else:
-                # 优先级：游戏中 > 在线 > 离线 > 默认
-                if gameid:
-                    poll_interval = intervals[0] * 60
-                    poll_level_str = f"{intervals[0]}分钟轮询"
-                elif personastate and int(personastate) > 0:
-                    poll_interval = intervals[1] * 60
-                    poll_level_str = f"{intervals[1]}分钟轮询"
-                elif lastlogoff:
-                    minutes_ago = (now - int(lastlogoff)) / 60
-                    if minutes_ago <= 12:
-                        poll_interval = intervals[1] * 60
-                        poll_level_str = f"{intervals[1]}分钟轮询"
-                    elif minutes_ago <= 180:
-                        poll_interval = intervals[2] * 60
-                        poll_level_str = f"{intervals[2]}分钟轮询"
-                    elif minutes_ago <= 1440:
-                        poll_interval = intervals[3] * 60
-                        poll_level_str = f"{intervals[3]}分钟轮询"
-                    elif minutes_ago <= 2880:
-                        poll_interval = intervals[4] * 60
-                        poll_level_str = f"{intervals[4]}分钟轮询"
-                    else:
-                        poll_interval = intervals[5] * 60
-                        poll_level_str = f"{intervals[5]}分钟轮询"
-                else:
-                    poll_interval = intervals[5] * 60
-                    poll_level_str = f"{intervals[5]}分钟轮询"
-            interval_min = poll_interval // 60
-            next_time = ((now // 60) + math.ceil(interval_min)) * 60
-            if interval_min in [intervals[1], intervals[2], intervals[3], intervals[4], intervals[5]]:
-                next_time = ((now // 60) // interval_min + 1) * interval_min * 60
-            next_poll[sid] = next_time
-            # 轮询间隔描述
-            if gameid:
-                msg_lines.append(f"🟢【{name}】正在玩 {zh_game_name}（{poll_level_str}）")
-            elif personastate and int(personastate) > 0:
-                _persona_text = {1: '在线', 2: '忙碌', 3: '离开', 4: '打盹'}
-                ptext = _persona_text.get(int(personastate), '在线')
-                picon = {1: '🟡', 2: '🔴', 3: '🟣', 4: '🟣'}.get(int(personastate), '🟡')
-                msg_lines.append(f"{picon}【{name}】{ptext}（{poll_level_str}）")
-            elif lastlogoff:
-                hours_ago = (now - int(lastlogoff)) / 3600
-                msg_lines.append(f"⚪️【{name}】离线 上次在线 {hours_ago:.1f} 小时前（{poll_level_str}）")
-            else:
-                msg_lines.append(f"⚪️【{name}】离线（{poll_level_str}）")
-            last_states[sid] = status
-
-        for sid in pending_quit:
-            for gameid in list(pending_quit[sid].keys()):
-                info = pending_quit[sid][gameid]
-                if now - info["quit_time"] >= 180 and not info.get("notified"):
-                    info["notified"] = True
-                    # 游戏结束通知开关：关闭则跳过推送，但仍清理 pending_quit
-                    if not self.config.get('enable_game_end_notify', True):
-                        if gameid in pending_quit[sid]:
-                            del pending_quit[sid][gameid]
-                        continue
-                    duration_min = info.get("duration_min", 0)
-                    # 优化时间显示
-                    if duration_min < 60:
-                        time_str = f"{duration_min:.1f}分钟"
-                    else:
-                        time_str = f"{duration_min/60:.1f}小时"
-                    # 收集到通知缓冲，由主轮询统一合并发送（兜底逻辑，正常由 _delayed_quit_check 处理）
-                    avatar_url = None
-                    ls = last_states.get(sid)
-                    if ls:
-                        avatar_url = ls.get("avatarfull") or ls.get("avatar")
-                    notifications.append({
-                        "type": "end",
-                        "name": info["name"],
-                        "game": info["game_name"],
-                        "duration_str": time_str,
-                        "sid": sid,
-                        "gameid": gameid,
-                        "quit_time": info["quit_time"],
-                        "duration_min": duration_min,
-                        "avatar_url": avatar_url,
-                        "tip_text": "你已经和椅子合为一体，成为传说中的'椅子精'了喵！",
-                    })
-                    if gameid in pending_quit[sid]:
-                        del pending_quit[sid][gameid]
-
-        self._save_persistent_data()
-        # 将本轮收集的开始/结束游戏通知提交到缓冲区，由主轮询统一 flush 合并发送
-        if notifications and not skip_push:
-            self._pending_end_notifications.setdefault(group_id, []).extend(notifications)
-        # 只返回日志字符串
-        return "\n".join(msg_lines) if msg_lines else None
-
     async def get_game_online_count(self, gameid):
         '''通过 Steam Web API 获取当前游戏在线人数'''
         if not gameid:
@@ -2333,14 +1611,14 @@ class SteamStatusMonitorV3(PersistenceMixin, SteamClientMixin, Star):
             yield event.plain_result("渲染图片失败")
 
     def get_today_superpower(self, steamid):
-        from datetime import date
         today = date.today().isoformat()
         cache_key = (steamid, today)
         if cache_key in self._superpower_cache:
             return self._superpower_cache[cache_key]
         if self._abilities is None:
-            self._abilities = load_abilities(self._abilities_path)
-        superpower = get_daily_superpower(steamid, self._abilities)
+            with open(self._abilities_path, encoding="utf-8") as abilities_file:
+                self._abilities = [line.strip() for line in abilities_file if line.strip()]
+        superpower = random.Random(f"{steamid}-{today}").choice(self._abilities)
         self._superpower_cache[cache_key] = superpower
         return superpower
 
