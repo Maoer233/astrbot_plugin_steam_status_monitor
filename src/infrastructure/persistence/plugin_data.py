@@ -213,23 +213,24 @@ class PersistenceMixin:
     def _load_group_steam_ids(self):
         """从 steam_groups.json 加载所有群的 SteamID 列表"""
         path = self._get_groups_file_path()
+        groups = {}
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
-                    self.group_steam_ids = json.load(f)
-                logger.info(f"[SteamStatusMonitor] 已加载 steam_groups.json: {self.group_steam_ids}")
+                    groups = json.load(f)
+                logger.info(f"[SteamStatusMonitor] 已加载 steam_groups.json: {groups}")
             except Exception as e:
                 logger.warning(f"加载 steam_groups.json 失败: {e}")
-        else:
-            self.group_steam_ids = {}
+        self.monitor_state.group_steam_ids = groups
 
     def _save_group_steam_ids(self):
         """保存所有群的 SteamID 列表到 steam_groups.json"""
         path = self._get_groups_file_path()
+        groups = self.monitor_state.group_steam_ids
         try:
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(self.group_steam_ids, f, ensure_ascii=False, indent=2)
-            logger.info(f"[SteamStatusMonitor] 已保存 steam_groups.json: {self.group_steam_ids}")
+                json.dump(groups, f, ensure_ascii=False, indent=2)
+            logger.info(f"[SteamStatusMonitor] 已保存 steam_groups.json: {groups}")
         except Exception as e:
             logger.warning(f"保存 steam_groups.json 失败: {e}")
 
@@ -322,21 +323,26 @@ class PersistenceMixin:
             logger.warning(f"保存 session_records.json 失败: {e}")
 
     def _record_session(self, sid, gameid, game_name, start_time, end_time, duration_min, group_id):
-        """记录单次游玩 session（在游戏退出确认后调用）"""
+        """记录单次游玩 session（在游戏退出确认后调用）。"""
         if duration_min <= 0 or not gameid:
             return
         date_str = self._get_day_key(0)
-        session = {
-            "session_id": f"{date_str}_{start_time}_{gameid}",
+        start_timestamp = int(start_time) if start_time else 0
+        end_timestamp = int(end_time) if end_time else 0
+        session_id = f"{date_str}_{start_timestamp}_{gameid}"
+        sessions = self.session_records.setdefault(str(sid), [])
+        if any(item.get("session_id") == session_id for item in sessions):
+            return
+        sessions.append({
+            "session_id": session_id,
             "gameid": str(gameid),
             "game_name": str(game_name),
-            "start_time": int(start_time) if start_time else 0,
-            "end_time": int(end_time) if end_time else 0,
-            "duration_min": int(duration_min),
+            "start_time": start_timestamp,
+            "end_time": end_timestamp,
+            "duration_min": round(float(duration_min), 2),
             "date": date_str,
             "group_id": str(group_id),
-        }
-        self.session_records.setdefault(str(sid), []).append(session)
+        })
         self._session_dirty = True
 
     # ========== QQ-SteamID 绑定系统 ==========
