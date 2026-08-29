@@ -4,7 +4,9 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-IMPLEMENTATION_PATH = PROJECT_ROOT / "src/plugin/steam_status_monitor.py"
+IMPLEMENTATION_PATH = (
+    PROJECT_ROOT / "src/application/services/notification_tracking.py"
+)
 
 
 def load_get_notify_sessions():
@@ -12,7 +14,7 @@ def load_get_notify_sessions():
     plugin_class = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "SteamStatusMonitorV3"
+        if isinstance(node, ast.ClassDef) and node.name == "NotificationTrackingMixin"
     )
     method = next(
         node
