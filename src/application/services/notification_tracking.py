@@ -1,6 +1,7 @@
 from datetime import datetime
 import asyncio
 import tempfile
+import time
 
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image
@@ -86,12 +87,46 @@ class NotificationTrackingMixin:
             logger.error(f"渲染通知图片失败 ({noti.get('type')}, {noti.get('name')}): {e}")
             return None
 
+    def _notification_event_key(self, notification, session):
+        event_time = notification.get("start_time")
+        if notification.get("type") == "end":
+            event_time = notification.get("quit_time")
+        return (
+            str(session),
+            str(notification.get("sid")),
+            str(notification.get("gameid")),
+            str(notification.get("type")),
+            int(event_time) if event_time is not None else None,
+        )
+
+    def _should_send_notification(self, notification, session):
+        now = time.time()
+        sent_events = getattr(self, "_sent_notification_events", None)
+        if sent_events is None:
+            sent_events = self._sent_notification_events = {}
+        key = self._notification_event_key(notification, session)
+        if key in sent_events and now - sent_events[key] < 600:
+            return False
+        sent_events[key] = now
+        for old_key, sent_at in list(sent_events.items()):
+            if now - sent_at >= 600:
+                del sent_events[old_key]
+        return True
+
     async def _send_merged_notification(self, group_id, notifications):
         if not notifications:
             return
         session_notifications = {}
         for notification in notifications:
             for session in self._get_notify_sessions(group_id, notification["sid"]):
+                if not self._should_send_notification(notification, session):
+                    logger.info(
+                        "Skipping duplicate Steam status notification "
+                        "(session=%s, sid=%s, gameid=%s, type=%s)",
+                        session, notification.get("sid"),
+                        notification.get("gameid"), notification.get("type"),
+                    )
+                    continue
                 session_notifications.setdefault(session, []).append(notification)
         for session, matched_notifications in session_notifications.items():
             msg_chain = []
