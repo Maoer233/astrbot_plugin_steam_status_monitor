@@ -193,6 +193,10 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V4.0.0（2026/08/28）
+  - **重大重构**：核心逻辑深度模块化拆分（#37，感谢 @OLRainM），steam_status_monitor.py 由单体拆分为 src/application/services/ 职责模块（监控/轮询/状态变更/成就/通知/QQ 菜单管理），新增 src/domain/monitoring/ 领域层（polling/state/transitions）；新增单元测试（分发列表路由回归、通知虚构 SteamID）
+  - **Bug 修复**：防止跨群重复监控同一 SteamID 并自动转为推送群；完善分发路由与群组清理，避免主群与联动群重复投递；修复长玩家名称图片布局
+
 - V3.4.0（2026/08/24）
   - **重大重构**：插件主体拆分为 src/ 分层结构（application/domain/infrastructure/presentation/shared），根入口 main.py 保持兼容；新增 QQ 官方机器人适配与后台指令面板（qq_official_* / qq_menu_*）；WebUI 管理接口性能优化（TTL 缓存/同键并发合并/缓存失效）
   - **Bug 修复**：修复初始化时跨群同一 SteamID 状态基线不一致；成就 API 地址改为可配置端点（steam_api_base）

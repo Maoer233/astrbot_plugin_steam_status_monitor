@@ -21,6 +21,8 @@ from ..application.services.polling_tracking import PollingTrackingMixin
 from ..presentation.renderers.game_start import render_game_start
 from ..presentation.renderers.game_end import render_game_end
 from ..presentation.renderers.rank import render_rank_image
+from ..presentation.renderers.game_detail import render_game_detail_image
+from ..presentation.renderers.game_start import get_font_path
 from ..domain.monitoring import MonitorStateStore, StateBackedMonitorMixin
 from ..domain.ranking.push_scopes import build_rank_push_scopes
 from PIL import Image as PILImage
@@ -33,6 +35,7 @@ import shutil
 from ..presentation.web.admin_api import WebAdminAPI
 from ..infrastructure.persistence.plugin_data import PersistenceMixin
 from ..infrastructure.clients.steam import SteamClientMixin
+from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 
@@ -62,7 +65,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "3.4.0"
+        self._plugin_version = "4.0.0"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -117,6 +120,13 @@ class SteamStatusMonitorV3(
         self.ENABLE_PROXY = self.config.get('enable_proxy', False)
         self.PROXY_URL = self.config.get('proxy_url', '')
         self.proxy = self.PROXY_URL if self.ENABLE_PROXY and self.PROXY_URL else None
+        self.ITAD_CLIENT = ITADClient(
+            self.config.get('itad_api_key', ''),
+            proxy=self.proxy,
+            base_url=self.config.get('itad_api_base', ''),
+        )
+        self._steam_search_cache = {}
+        self._steam_search_pending = {}
         # 代理前置校验：若启用 SOCKS 代理但未安装 socksio，尝试自动安装
         if self.proxy and self.proxy.startswith('socks'):
             try:
@@ -384,6 +394,7 @@ class SteamStatusMonitorV3(
         pushed = []
         already = []
         already_pushed = []
+        pushed_primary_groups = {}
         limit = self.max_group_size
         for sid in steamid_list:
             if sid in steam_ids:
@@ -399,6 +410,7 @@ class SteamStatusMonitorV3(
             )
             if primary_group is not None:
                 targets = self.push_groups.setdefault(sid, [])
+                pushed_primary_groups[sid] = primary_group
                 if group_id in targets:
                     already_pushed.append(sid)
                 else:
@@ -427,14 +439,24 @@ class SteamStatusMonitorV3(
         if added:
             msg += f"已为本群添加SteamID: {', '.join(added)}\n"
         if pushed:
+            push_details = []
+            for sid in pushed:
+                primary_group = pushed_primary_groups.get(sid)
+                suffix = f"（主监控群：{primary_group}）" if primary_group else ""
+                push_details.append(f"{sid}{suffix}")
             msg += (
-                "以下SteamID已由其他群主监控，已自动将本群设为推送群: "
-                f"{', '.join(pushed)}\n"
+                "以下SteamID已被其他群监控，当前群不会重复监控，已自动设置为分发路由（push_group）："
+                f"{', '.join(push_details)}\n"
             )
         if already:
-            msg += f"以下SteamID已存在于本群监控组: {', '.join(already)}\n"
+            msg += f"以下SteamID已经在本群监控，无需重复添加：{', '.join(already)}\n"
         if already_pushed:
-            msg += f"以下SteamID已向本群推送: {', '.join(already_pushed)}\n"
+            push_details = []
+            for sid in already_pushed:
+                primary_group = pushed_primary_groups.get(sid)
+                suffix = f"（主监控群：{primary_group}）" if primary_group else ""
+                push_details.append(f"{sid}{suffix}")
+            msg += f"以下SteamID已经是本群的分发路由（push_group），无需重复添加：{', '.join(push_details)}\n"
         unhandled = len(steamid_list) - len(added) - len(pushed) - len(already) - len(already_pushed)
         if unhandled:
             msg += f"本群监控组人数已达上限（{limit}人），部分ID未添加。\n"
@@ -500,36 +522,173 @@ class SteamStatusMonitorV3(
         if not sid or not sid.isdigit() or len(sid) != 17:
             yield event.plain_result("无法解析为有效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 8位好友码")
             return
-        steam_ids = self.group_steam_ids.get(group_id, [])
-        if not steam_ids:
-            yield event.plain_result(f"群 {group_id} 没有监控任何SteamID")
+        from ..application.services.monitor_admin import MonitorAdminService
+
+        result = MonitorAdminService(self).remove_player(group_id, sid)
+        if not result.changed:
+            yield event.plain_result(
+                f"该SteamID不存在于群 {group_id} 的监控组或分发路由: {sid}"
+            )
             return
-        if sid not in steam_ids:
-            yield event.plain_result(f"该SteamID不存在于群 {group_id} 的监控组")
+
+        if result.message == "removed push route":
+            yield event.plain_result(f"已关闭群 {group_id} 对 SteamID {sid} 的分发路由")
+        else:
+            yield event.plain_result(
+                f"已删除 SteamID {sid} 的主监控及全部路由分发"
+            )
+
+    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.command("steam game")
+    async def steam_game(self, event: AstrMessageEvent, appid: str):
+        """查询 Steam 游戏详情并生成详情卡片。"""
+        appid = str(appid).strip()
+        if not appid.isdigit():
+            yield event.plain_result("用法：/steam game <Steam AppID>")
             return
-        steam_ids.remove(sid)
-        self.group_steam_ids[group_id] = steam_ids
-        self._save_group_steam_ids()
-        # 同步清理绑定数据
-        removed_bind = []
-        bind_data = getattr(self, '_bind_data', None)
-        if bind_data:
-            for qq, info in list(bind_data.items()):
-                if info.get("sid") == sid:
-                    removed_bind.append(qq)
-                    del bind_data[qq]
-            if removed_bind:
-                self._bind_data = bind_data
-                self._save_bind_data()
-                logger.info(f"[绑定] 删除SteamID {sid} 时同步清理绑定: QQ {', '.join(removed_bind)}")
-        yield event.plain_result(f"已为群 {group_id} 删除SteamID: {sid}")
+        game = await self.fetch_game_details(appid)
+        if not game:
+            yield event.plain_result(f"未找到 Steam 游戏 AppID：{appid}，或 Steam 商店暂时无法访问。")
+            return
+        try:
+            img_bytes = await render_game_detail_image(
+                game,
+                font_path=get_font_path("NotoSansHans-Regular.otf"),
+                proxy=self.proxy,
+            )
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                image_path = tmp.name
+            yield event.image_result(image_path)
+        except Exception as exc:
+            logger.exception("渲染 Steam 游戏详情卡片失败: %s", exc)
+            yield event.plain_result(f"游戏详情获取成功，但卡片生成失败：{exc}")
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def steam_price_selection(self, event: AstrMessageEvent):
+        """接收候选游戏确认消息，支持纯序号或 @机器人后跟序号。"""
+        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        if not self._steam_search_pending.get(group_id):
+            return
+        message = str(event.get_message_str() or '').strip()
+        if message.startswith('/'):
+            return
+        match = re.search(r"(?:^|\s)([1-9]\d?)\s*$", message)
+        if not match:
+            return
+        async for result in self.steam_price(event, match.group(1)):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.command("steam price")
+    async def steam_price(self, event: AstrMessageEvent, query: str):
+        """按中文名、英文名或 Steam 链接查询当前价格与历史最低价。"""
+        query = str(query).strip()
+        if not query:
+            yield event.plain_result("用法：/steam price <游戏名或 Steam 链接>")
+            return
+        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        pending = self._steam_search_pending.get(group_id)
+        selected_from_cache = False
+        if query.isdigit() and pending:
+            index = int(query) - 1
+            games = self._steam_search_cache.get(group_id, [])
+            if 0 <= index < len(games):
+                game = games[index]
+                selected_from_cache = True
+            else:
+                yield event.plain_result("候选序号无效，请重新回复序号。")
+                return
+        else:
+            games = await self.ITAD_CLIENT.search_games(query)
+            if not games:
+                yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
+                return
+            game = games[0]
+        if not selected_from_cache and len(games) > 1:
+            self._steam_search_cache[group_id] = games
+            self._steam_search_pending[group_id] = True
+            lines = ["找到多个匹配游戏，请回复序号："]
+            for index, game in enumerate(games, 1):
+                lines.append(f"{index}. {game.title}")
+            yield event.plain_result("\n".join(lines))
+            # 只发送第一项代表性封面，避免候选较多时连续刷屏。
+            representative = next((candidate for candidate in games if candidate.image), None)
+            if representative:
+                try:
+                    yield event.chain_result([Plain(representative.title), Image.fromURL(representative.image)])
+                except Exception:
+                    logger.debug("候选游戏图片发送失败: %s", representative.title)
+            return
+        summary = await self.ITAD_CLIENT.get_price_summary(game.id, self.config.get('price_region', 'CN'))
+        detail = await self.fetch_game_details(game.appid) if game.appid else None
+        if detail and game.appid:
+            review = await self.fetch_game_reviews(game.appid)
+            if review:
+                detail['review'] = review
+        self._steam_search_pending.pop(group_id, None)
+        self._steam_search_cache.pop(group_id, None)
+        currency = summary.get('currency') or ''
+        current_price = summary.get('current_price')
+        regular_price = summary.get('current_regular')
+        cut = summary.get('cut')
+        lowest = summary.get('history_low')
+        if lowest is None:
+            lowest = summary.get('lowest')
+        lines = [game.title]
+        if current_price is not None:
+            price_text = f"{current_price:g} {currency}".strip()
+            if regular_price is not None and regular_price != current_price:
+                price_text += f"（原价 {regular_price:g} {currency}）".strip()
+            if cut:
+                price_text += f"，折扣 {int(cut)}%"
+            lines.append(f"当前价格：{price_text}")
+        else:
+            lines.append("当前价格：暂无")
+        lines.append(f"历史最低价：{f'{lowest:g} {currency}'.strip() if lowest is not None else '暂无'}")
+        if detail and detail.get('store_appid'):
+            lines.append(f"Steam AppID：{detail['store_appid']}")
+        lines.append("来源：ITAD")
+
+        card_data = detail or {
+            'name': game.title,
+            'header_image': game.image,
+            'short_description': '由 ITAD 提供当前价格与历史最低价信息。',
+            'genres': [],
+            'developers': [],
+            'release_date': {'date': '未知'},
+            'price_overview': {},
+            'review': {},
+        }
+        try:
+            img_bytes = await render_game_detail_image(
+                card_data,
+                font_path=get_font_path("NotoSansHans-Regular.otf"),
+                proxy=self.proxy,
+                itad_summary=summary,
+            )
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                image_path = tmp.name
+            yield event.image_result(image_path)
+            return
+        except Exception as exc:
+            logger.exception("渲染 Steam 价格详情卡片失败: %s", exc)
+
+        yield event.plain_result("\n".join(lines))
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam list")
     async def steam_list(self, event: AstrMessageEvent):
         '''列出本群所有玩家当前状态（分群）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        steam_ids = self.group_steam_ids.get(group_id, [])
+        direct_steam_ids = self.group_steam_ids.get(group_id, [])
+        push_steam_ids = [
+            sid
+            for sid, push_groups in (getattr(self, 'push_groups', {}) or {}).items()
+            if group_id in {str(target) for target in push_groups}
+        ]
+        steam_ids = list(dict.fromkeys([*direct_steam_ids, *push_steam_ids]))
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
             return
@@ -1270,14 +1429,31 @@ class SteamStatusMonitorV3(
     @filter.command("steam clear_allids")
     async def steam_clear_allids(self, event: AstrMessageEvent):
         '''删除所有群聊的所有已监控SteamID，并清空相关状态数据'''
+        for task in self._pending_quit_tasks.values():
+            task.cancel()
+        self._pending_quit_tasks.clear()
+        for task in self.achievement_poll_tasks.values():
+            task.cancel()
+        self.achievement_poll_tasks.clear()
+        self.achievement_snapshots.clear()
+        self.achievement_fail_count.clear()
         self.group_steam_ids.clear()
-        self._save_group_steam_ids()  # 新增：保存到 steam_groups.json
+        self.push_groups.clear()
+        self.running_groups.clear()
+        self.group_monitor_enabled.clear()
+        self.group_achievement_enabled.clear()
+        self.next_poll_time.clear()
         self.group_last_states.clear()
         self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
         self.group_pending_quit.clear()
         self.group_recent_games.clear()
+        self._pending_end_notifications.clear()
+        self.notify_sessions.clear()
+        self._save_group_steam_ids()
+        self._save_push_groups()
+        self._save_notify_session()
         self._save_persistent_data(force=True)
         self.config['group_steam_ids'] = self.group_steam_ids
         if hasattr(self.config, "save_config"):
@@ -1288,22 +1464,46 @@ class SteamStatusMonitorV3(
     @filter.command("steam clear_groupids")
     async def steam_clear_groupids(self, event: AstrMessageEvent, group_id: str):
         '''删除指定群聊的所有已监控SteamID，并清空相关状态数据'''
-        if group_id not in self.group_steam_ids:
+        has_primary = group_id in self.group_steam_ids
+        routed_sids = [
+            sid for sid, targets in self.push_groups.items()
+            if group_id in {str(target) for target in targets}
+        ]
+        if not has_primary and not routed_sids:
             yield event.plain_result(f"群聊 {group_id} 未绑定任何SteamID，无需清理。")
             return
+
+        for task_key in list(self._pending_quit_tasks):
+            if task_key[0] == group_id:
+                task = self._pending_quit_tasks.pop(task_key)
+                task.cancel()
+        for sid in list(self.group_steam_ids.get(group_id, [])):
+            self.push_groups.pop(sid, None)
+        for sid in routed_sids:
+            targets = [target for target in self.push_groups.get(sid, []) if str(target) != group_id]
+            if targets:
+                self.push_groups[sid] = targets
+            else:
+                self.push_groups.pop(sid, None)
         self.group_steam_ids.pop(group_id, None)
-        self._save_group_steam_ids()  # 保存到 steam_groups.json
         self.group_last_states.pop(group_id, None)
         self.group_start_play_times.pop(group_id, None)
         self.group_last_quit_times.pop(group_id, None)
         self.group_pending_logs.pop(group_id, None)
         self.group_pending_quit.pop(group_id, None)
         self.group_recent_games.pop(group_id, None)
-        self._save_persistent_data(force=True)
+        self.next_poll_time.pop(group_id, None)
+        self.running_groups.discard(group_id)
+        self.group_monitor_enabled.pop(group_id, None)
+        self.group_achievement_enabled.pop(group_id, None)
         self.notify_sessions.pop(group_id, None)
+        self._save_group_steam_ids()
+        self._save_push_groups()
+        self._save_notify_session()
+        self._save_persistent_data(force=True)
         if hasattr(self.config, "save_config"):
             self.config.save_config()
-        yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID，相关状态数据已清空。")
+        yield event.plain_result(f"已删除群聊 {group_id} 的所有SteamID和分发路由，相关状态数据已清空。")
 
     def _should_skip_game(self, gameid):
         """根据黑白名单配置判断是否应跳过该游戏的监控/播报"""

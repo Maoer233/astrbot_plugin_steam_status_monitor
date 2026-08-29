@@ -19,7 +19,9 @@ def _build_display_names(plugin):
 
 def build_dashboard_stats(plugin, today, last_update):
     groups = getattr(plugin, "group_steam_ids", {}) or {}
+    push_groups = getattr(plugin, "push_groups", {}) or {}
     all_sids = {str(sid) for sids in groups.values() for sid in list(sids)}
+    all_sids.update(str(sid) for sid in push_groups)
     bind_data = getattr(plugin, "_bind_data", {}) or {}
     today_records = (getattr(plugin, "play_records", {}) or {}).get(today, {})
     display_names = _build_display_names(plugin)
@@ -87,9 +89,17 @@ def build_dashboard_stats(plugin, today, last_update):
 def build_groups(plugin):
     display_names = _build_display_names(plugin)
     groups = getattr(plugin, "group_steam_ids", {}) or {}
+    push_groups = getattr(plugin, "push_groups", {}) or {}
     last_states = getattr(plugin, "group_last_states", {}) or {}
     result = {}
-    for group_id, steam_ids in list(groups.items()):
+    for group_id, direct_ids in list(groups.items()):
+        visible_ids = list(direct_ids)
+        visible_ids.extend(
+            sid
+            for sid, target_groups in push_groups.items()
+            if str(group_id) in {str(target) for target in target_groups}
+            and sid not in visible_ids
+        )
         states = last_states.get(group_id, {})
         result[group_id] = [
             {
@@ -98,8 +108,9 @@ def build_groups(plugin):
                 "gameid": states.get(str(sid), {}).get("gameid", ""),
                 "game": states.get(str(sid), {}).get("gameextrainfo", ""),
                 "personastate": states.get(str(sid), {}).get("personastate", 0),
+                "is_push_group": sid not in direct_ids,
             }
-            for sid in list(steam_ids)
+            for sid in visible_ids
         ]
     return result
 
@@ -107,22 +118,51 @@ def build_groups(plugin):
 def build_player_search_index(plugin):
     display_names = _build_display_names(plugin)
     groups = getattr(plugin, "group_steam_ids", {}) or {}
-    return [
+    push_groups = getattr(plugin, "push_groups", {}) or {}
+    result = [
         {
             "sid": str(sid),
             "name": display_names.get(str(sid), str(sid)),
             "group_id": group_id,
+            "is_push_group": False,
         }
         for group_id, steam_ids in list(groups.items())
         for sid in list(steam_ids)
     ]
+    result.extend(
+        {
+            "sid": str(sid),
+            "name": display_names.get(str(sid), str(sid)),
+            "group_id": group_id,
+            "is_push_group": True,
+        }
+        for sid, target_groups in push_groups.items()
+        for group_id in target_groups
+        if str(sid) not in {
+            str(item["sid"])
+            for item in result
+            if str(item["group_id"]) == str(group_id)
+        }
+    )
+    return result
 
 
 def _heatmap_group_sids(plugin, group_id):
     groups = getattr(plugin, "group_steam_ids", {}) or {}
+    push_groups = getattr(plugin, "push_groups", {}) or {}
     if group_id:
-        return {str(sid) for sid in groups.get(group_id, [])}
-    return {str(sid) for steam_ids in groups.values() for sid in steam_ids}
+        direct_ids = groups.get(group_id, [])
+        push_ids = [
+            sid
+            for sid, target_groups in push_groups.items()
+            if str(group_id) in {str(target) for target in target_groups}
+        ]
+        return {str(sid) for sid in [*direct_ids, *push_ids]}
+    return {
+        str(sid)
+        for steam_ids in groups.values()
+        for sid in steam_ids
+    } | {str(sid) for sid in push_groups}
 
 
 def _build_heatmap_contributions(plugin, start_key, end_key, allowed_sids):
