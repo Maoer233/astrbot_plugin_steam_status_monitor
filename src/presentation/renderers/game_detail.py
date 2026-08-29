@@ -101,7 +101,9 @@ async def _download_image(url, proxy=None):
         return None
 
 
-async def render_game_detail_image(game, font_path=None, proxy=None, itad_summary=None):
+async def render_game_detail_image(
+    game, font_path=None, proxy=None, itad_summary=None, region_prices=None
+):
     """将 Steam appdetails 数据与可选的 ITAD 价格信息渲染为详情卡片。"""
     title_font = _font(font_path, 25)
     english_font = _font(font_path, 15)
@@ -111,6 +113,7 @@ async def render_game_detail_image(game, font_path=None, proxy=None, itad_summar
     tag_font = _font(font_path, 13)
 
     itad_summary = itad_summary or {}
+    region_prices = region_prices or {}
     price = game.get("price_overview") or {}
     currency = itad_summary.get("currency") or price.get("currency") or ""
     if game.get("is_free"):
@@ -184,18 +187,19 @@ async def render_game_detail_image(game, font_path=None, proxy=None, itad_summar
     draw.line((left_x, y + 28, left_x + left_width, y + 28), fill=STEAM_BORDER)
 
     region_rows = []
-    region_price = itad_summary.get("region_price") or itad_summary.get("cn_price")
-    region_ua = itad_summary.get("ua_price") or itad_summary.get("region_ua")
-    if region_price is not None:
-        region_rows.append(("国区", region_price))
-    if region_ua is not None:
-        region_rows.append(("UA", region_ua))
+    for country, label in (("CN", "国区"), ("RU", "俄区")):
+        region_summary = region_prices.get(country) or {}
+        region_price = region_summary.get("current_price")
+        if region_price is not None:
+            region_rows.append(
+                (label, region_price, region_summary.get("currency") or currency)
+            )
     if region_rows:
         ry = CARD_HEIGHT - 112
         draw.rounded_rectangle((left_x, ry, left_x + left_width, CARD_HEIGHT - 22), radius=8, fill=(28, 45, 61), outline=STEAM_BORDER)
-        for label, value in region_rows:
+        for label, value, region_currency in region_rows:
             draw.text((left_x + 12, ry + 12), label, font=tag_font, fill=STEAM_BLUE_SOFT)
-            draw.text((left_x + 56, ry + 12), _value_text(value, currency), font=small_font, fill=STEAM_TEXT)
+            draw.text((left_x + 56, ry + 12), _value_text(value, region_currency), font=small_font, fill=STEAM_TEXT)
             ry += 28
 
     if cover:
