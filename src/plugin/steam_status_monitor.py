@@ -579,6 +579,41 @@ class SteamStatusMonitorV3(
         async for result in self.steam_price(event, match.group(1)):
             yield result
 
+    @staticmethod
+    def _contains_chinese(text: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+    async def _translate_game_query(self, query: str) -> str:
+        """将中文游戏名转换为 Steam/ITAD 更容易命中的英文官方名。"""
+        if not self._contains_chinese(query):
+            return query
+        try:
+            provider = self.context.get_using_provider()
+            if not provider:
+                return query
+            response = await provider.text_chat(
+                prompt=(
+                    "请将以下游戏名翻译为 Steam 商店使用的英文官方名称，"
+                    f"仅输出英文名，不要输出其他内容：{query}"
+                ),
+                contexts=[],
+                image_urls=[],
+                func_tool=None,
+                system_prompt="",
+            )
+            translated = re.sub(
+                r"^(?:英文名|翻译结果|Translation)\s*[:：]?\s*",
+                "",
+                str(response.completion_text or "").strip(),
+                flags=re.IGNORECASE,
+            ).strip().strip('`\"“”')
+            if translated:
+                logger.info("[LLM][翻译游戏名] %s -> %s", query, translated)
+                return translated
+        except Exception as exc:
+            logger.warning("LLM 翻译游戏名失败，将使用原始查询: %s", exc)
+        return query
+
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam price")
     async def steam_price(self, event: AstrMessageEvent, query: str):
@@ -600,7 +635,8 @@ class SteamStatusMonitorV3(
                 yield event.plain_result("候选序号无效，请重新回复序号。")
                 return
         else:
-            games = await self.ITAD_CLIENT.search_games(query)
+            search_query = await self._translate_game_query(query)
+            games = await self.ITAD_CLIENT.search_games(search_query, steam_first=False)
             if not games:
                 yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
                 return
@@ -612,15 +648,14 @@ class SteamStatusMonitorV3(
             for index, game in enumerate(games, 1):
                 lines.append(f"{index}. {game.title}")
             yield event.plain_result("\n".join(lines))
-            # 只发送第一项代表性封面，避免候选较多时连续刷屏。
-            representative = next((candidate for candidate in games if candidate.image), None)
-            if representative:
-                try:
-                    yield event.chain_result([Plain(representative.title), Image.fromURL(representative.image)])
-                except Exception:
-                    logger.debug("候选游戏图片发送失败: %s", representative.title)
             return
-        summary = await self.ITAD_CLIENT.get_price_summary(game.id, self.config.get('price_region', 'CN'))
+        price_region = self.config.get("price_region", "CN")
+        summary, cn_summary, ru_summary = await asyncio.gather(
+            self.ITAD_CLIENT.get_price_summary(game.id, price_region),
+            self.ITAD_CLIENT.get_price_summary(game.id, "CN"),
+            self.ITAD_CLIENT.get_price_summary(game.id, "RU"),
+        )
+        region_prices = {"CN": cn_summary, "RU": ru_summary}
         detail = await self.fetch_game_details(game.appid) if game.appid else None
         if detail and game.appid:
             review = await self.fetch_game_reviews(game.appid)
@@ -666,6 +701,7 @@ class SteamStatusMonitorV3(
                 font_path=get_font_path("NotoSansHans-Regular.otf"),
                 proxy=self.proxy,
                 itad_summary=summary,
+                region_prices=region_prices,
             )
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(img_bytes)

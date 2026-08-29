@@ -65,7 +65,10 @@ class PollingTrackingMixin:
                         continue
                     steam_ids = self.group_steam_ids.get(group_id, [])
                     next_poll = self.next_poll_time.setdefault(group_id, {})
-                    sids_to_query = [sid for sid in steam_ids if now2 >= next_poll.get(sid, 0)]
+                    sids_to_query = list(dict.fromkeys(
+                        sid for sid in steam_ids
+                        if now2 >= next_poll.get(sid, 0)
+                    ))
                     if not sids_to_query:
                         continue
                     group_sids[group_id] = sids_to_query
