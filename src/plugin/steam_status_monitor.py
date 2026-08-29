@@ -653,7 +653,7 @@ class SteamStatusMonitorV3(
                 return
         else:
             search_query = await self._translate_game_query(query)
-            games = await self.ITAD_CLIENT.search_games(search_query, steam_first=False)
+            games = await self.ITAD_CLIENT.search_games(search_query)
             if not games:
                 yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
                 return
