@@ -62,7 +62,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.1.0"
+        self._plugin_version = "4.2.0"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -384,11 +384,15 @@ class SteamStatusMonitorV3(
         pushed = []
         already = []
         already_pushed = []
+        binding_updated = []
         pushed_primary_groups = {}
         limit = self.max_group_size
         for sid in steamid_list:
             if sid in steam_ids:
                 already.append(sid)
+                # 已在本群监控：若本次携带绑定/备注，仍允许更新（不直接跳过）
+                if bind_qq or bind_nickname:
+                    binding_updated.append(sid)
                 continue
             primary_group = next(
                 (
@@ -417,14 +421,24 @@ class SteamStatusMonitorV3(
             self._save_group_steam_ids()
         if pushed:
             self._save_push_groups()
-        # 绑定数据：写入并保存
-        if bind_qq and steamid_list:
+        # 绑定数据：写入并保存（已在本群监控的ID同样允许更新备注/绑定）
+        if steamid_list and (bind_qq or bind_nickname):
             if not hasattr(self, '_bind_data'):
                 self._bind_data = {}
             for sid in steamid_list:
-                self._bind_data[bind_qq] = {"sid": sid, "nickname": bind_nickname or "*"}
+                if bind_qq:
+                    self._bind_data[bind_qq] = {"sid": sid, "nickname": bind_nickname or "*"}
+                elif bind_nickname:
+                    # 未解析到QQ：更新该SteamID已有绑定记录的备注，无记录则以 sid 为键新增
+                    matched = False
+                    for _key, _info in list(self._bind_data.items()):
+                        if _info.get("sid") == str(sid):
+                            self._bind_data[_key]["nickname"] = bind_nickname
+                            matched = True
+                    if not matched:
+                        self._bind_data[f"__remark:{sid}"] = {"sid": sid, "nickname": bind_nickname}
             self._save_bind_data()
-            logger.info(f"[绑定] QQ{bind_qq} -> SteamID {steamid_list[-1]}，备注={bind_nickname or '无'}")
+            logger.info(f"[绑定] {'QQ'+str(bind_qq) if bind_qq else '备注'} -> SteamID {steamid_list[-1]}，备注={bind_nickname or '无'}")
         msg = ""
         if added:
             msg += f"已为本群添加SteamID: {', '.join(added)}\n"
@@ -438,8 +452,11 @@ class SteamStatusMonitorV3(
                 "以下SteamID已被其他群监控，当前群不会重复监控，已自动设置为分发路由（push_group）："
                 f"{', '.join(push_details)}\n"
             )
-        if already:
-            msg += f"以下SteamID已经在本群监控，无需重复添加：{', '.join(already)}\n"
+        if binding_updated:
+            msg += f"以下SteamID已在本群监控，备注/绑定已更新：{', '.join(binding_updated)}\n"
+        already_plain = [sid for sid in already if sid not in binding_updated]
+        if already_plain:
+            msg += f"以下SteamID已经在本群监控，无需重复添加：{', '.join(already_plain)}\n"
         if already_pushed:
             push_details = []
             for sid in already_pushed:
