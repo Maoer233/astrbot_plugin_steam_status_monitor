@@ -1,6 +1,15 @@
 from datetime import datetime, timedelta
 
 
+def build_report_window(now, days, offset):
+    """Return the report time window using the dashboard's 04:00 day boundary."""
+    boundary_today = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    if now < boundary_today:
+        boundary_today -= timedelta(days=1)
+    range_end = boundary_today + timedelta(days=offset + 1)
+    return range_end - timedelta(days=days), range_end
+
+
 def _build_display_names(plugin):
     names = {}
     for info in (getattr(plugin, "_bind_data", {}) or {}).values():

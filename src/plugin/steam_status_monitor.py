@@ -4,6 +4,7 @@ from ..shared.network import configure_tls, httpx_client_kwargs, requests_verify
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image  # 确保已导入 Image
+import base64
 import json
 import time
 import httpx
@@ -494,42 +495,6 @@ class SteamStatusMonitorV3(
         yield event.plain_result(msg.strip() if msg else "未添加任何SteamID。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("steam push_group")
-    async def steam_push_group(self, event: AstrMessageEvent, steamid: str):
-        '''将本群加入指定SteamID的联动推送组（不重复轮询，仅同步推送）'''
-        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        if not steamid.isdigit() or len(steamid) != 17:
-            yield event.plain_result("SteamID无效（需为64位数字串，17位）")
-            return
-        if not any(steamid in steam_ids for steam_ids in self.group_steam_ids.values()):
-            yield event.plain_result("未找到已轮询该SteamID的主群，请先在任一群添加并开启监控。")
-            return
-        targets = self.push_groups.setdefault(steamid, [])
-        if group_id in targets:
-            yield event.plain_result("本群已在该SteamID的推送组中。")
-            return
-        targets.append(group_id)
-        self._save_push_groups()
-        yield event.plain_result(f"本群已加入SteamID {steamid} 的联动推送组。")
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("steam delpush_group")
-    async def steam_delpush_group(self, event: AstrMessageEvent, steamid: str, target_group: str = ''):
-        '''将当前群或指定群从SteamID的联动推送组移除'''
-        group_id = target_group.strip() or (
-            str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        )
-        targets = self.push_groups.get(steamid, [])
-        if group_id not in targets:
-            yield event.plain_result(f"群 {group_id} 未在 SteamID {steamid} 的推送组中。")
-            return
-        targets.remove(group_id)
-        if not targets:
-            self.push_groups.pop(steamid, None)
-        self._save_push_groups()
-        yield event.plain_result(f"已从 SteamID {steamid} 的联动推送组中移除群 {group_id}。")
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam delid")
     async def steam_delid(self, event: AstrMessageEvent, steamid: str, group_id_param: str = ""):
         '''从监控组删除SteamID；支持好友码/链接；可选传群号跨群删除：/steam delid [SteamID/好友码/链接] [群号]'''
@@ -690,27 +655,8 @@ class SteamStatusMonitorV3(
                 detail['review'] = review
         self._steam_search_pending.pop(session_key, None)
         self._steam_search_cache.pop(session_key, None)
-        currency = summary.get('currency') or ''
-        current_price = summary.get('current_price')
-        regular_price = summary.get('current_regular')
-        cut = summary.get('cut')
-        lowest = summary.get('history_low')
-        if lowest is None:
-            lowest = summary.get('lowest')
-        lines = [game.title]
-        if current_price is not None:
-            price_text = f"{current_price:g} {currency}".strip()
-            if regular_price is not None and regular_price != current_price:
-                price_text += f"（原价 {regular_price:g} {currency}）".strip()
-            if cut:
-                price_text += f"，折扣 {int(cut)}%"
-            lines.append(f"当前价格：{price_text}")
-        else:
-            lines.append("当前价格：暂无")
-        lines.append(f"历史最低价：{f'{lowest:g} {currency}'.strip() if lowest is not None else '暂无'}")
-        if detail and detail.get('store_appid'):
-            lines.append(f"Steam AppID：{detail['store_appid']}")
-        lines.append("来源：ITAD")
+        store_appid = (detail or {}).get('store_appid') or game.appid
+        store_url = f"https://store.steampowered.com/app/{store_appid}/" if store_appid else ""
 
         card_data = detail or {
             'name': game.title,
@@ -733,12 +679,20 @@ class SteamStatusMonitorV3(
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 tmp.write(img_bytes)
                 image_path = tmp.name
-            yield event.image_result(image_path)
+            with open(image_path, "rb") as image_file:
+                image_base64 = base64.b64encode(image_file.read()).decode("ascii")
+            result = event.make_result().base64_image(image_base64)
+            if store_url:
+                result.message(store_url)
+            yield result
             return
         except Exception as exc:
             logger.exception("渲染 Steam 价格详情卡片失败: %s", exc)
 
-        yield event.plain_result("\n".join(lines))
+        if store_url:
+            yield event.plain_result(store_url)
+        else:
+            yield event.plain_result("未找到对应的 Steam 商店链接。")
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam list")

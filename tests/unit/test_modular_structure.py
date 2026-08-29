@@ -85,6 +85,22 @@ class ModularStructureTests(unittest.TestCase):
                 "filter.permission_type(filter.PermissionType.ADMIN)", decorators
             )
 
+    def test_push_group_commands_have_one_definition_each(self):
+        implementation_path = PROJECT_ROOT / "src/plugin/steam_status_monitor.py"
+        tree = ast.parse(implementation_path.read_text(encoding="utf-8"))
+        plugin_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "SteamStatusMonitorV3"
+        )
+        method_names = [
+            node.name
+            for node in plugin_class.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        self.assertEqual(1, method_names.count("steam_push_group"))
+        self.assertEqual(1, method_names.count("steam_delpush_group"))
+
 
 if __name__ == "__main__":
     unittest.main()

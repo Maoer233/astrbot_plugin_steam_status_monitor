@@ -23,6 +23,7 @@ from .statistics import (
     build_groups,
     build_heatmap_data,
     build_player_search_index,
+    build_report_window,
 )
 from astrbot.core.star.command_management import (
     list_commands,
@@ -154,6 +155,10 @@ class WebAdminAPI:
     def invalidate_cache(self, *names):
         self._response_cache.invalidate(*names)
 
+    def _invalidate_statistics_cache(self):
+        """Invalidate cached responses affected by group/player mutations."""
+        self.invalidate_cache("dashboard", "groups", "heatmap", "player_search_index")
+
     def register_routes(self, context):
         """Register all routes used by ``pages/steam-monitor``."""
 
@@ -282,12 +287,7 @@ class WebAdminAPI:
         except (ValueError, TypeError):
             offset = 0
 
-        now = datetime.now()
-        boundary_today = now.replace(hour=4, minute=0, second=0, microsecond=0)
-        if now < boundary_today:
-            boundary_today -= timedelta(days=1)
-        range_end = boundary_today + timedelta(days=offset + 1)
-        range_start = range_end - timedelta(days=days)
+        range_start, range_end = build_report_window(datetime.now(), days, offset)
 
         start_key = range_start.strftime("%Y-%m-%d")
         end_key = range_end.strftime("%Y-%m-%d")
@@ -391,13 +391,8 @@ class WebAdminAPI:
         except (ValueError, TypeError):
             offset = 0
 
-        now = datetime.now()
         # 日期范围：以凌晨4:00为边界，从今天往回推 N 天
-        boundary_today = now.replace(hour=4, minute=0, second=0, microsecond=0)
-        if now < boundary_today:
-            boundary_today -= timedelta(days=1)
-        range_end = boundary_today + timedelta(days=offset + 1)
-        range_start = range_end - timedelta(days=days)
+        range_start, range_end = build_report_window(datetime.now(), days, offset)
 
         start_key = range_start.strftime("%Y-%m-%d")
         end_key = range_end.strftime("%Y-%m-%d")
@@ -836,6 +831,7 @@ class WebAdminAPI:
                 status_code=400,
             )
         self.admin.set_binding(qq, sid, nickname)
+        self._invalidate_statistics_cache()
         return json_response({"ok": True})
 
     async def _api_bindings_delete(self, request):
@@ -846,6 +842,7 @@ class WebAdminAPI:
             return json_response({"error": "invalid JSON"}, status_code=400)
         qq = str(data.get("qq", ""))
         self.admin.remove_binding(qq)
+        self._invalidate_statistics_cache()
         return json_response({"ok": True})
 
     async def _api_bindings_update(self, request):
@@ -857,6 +854,7 @@ class WebAdminAPI:
         qq = str(data.get("qq", ""))
         nickname = str(data.get("nickname", ""))
         self.admin.update_binding_nickname(qq, nickname)
+        self._invalidate_statistics_cache()
         return json_response({"ok": True})
 
     # ────── Push Settings ──────

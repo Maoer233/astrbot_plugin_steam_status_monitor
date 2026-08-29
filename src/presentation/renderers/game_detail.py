@@ -36,6 +36,16 @@ def _font(path, size):
     return ImageFont.load_default()
 
 
+def _fit_font(draw, value, path, max_size, min_size, max_width):
+    """在指定宽度内为标题选择合适字号。"""
+    value = str(value or "")
+    for size in range(max_size, min_size - 1, -1):
+        font = _font(path, size)
+        if draw.textbbox((0, 0), value, font=font)[2] <= max_width:
+            return font
+    return _font(path, min_size)
+
+
 def _plain_text(value):
     value = re.sub(r"<img[^>]*>", "", value or "", flags=re.I)
     value = re.sub(r"<script[^>]*>.*?</script>", "", value or "", flags=re.I | re.S)
@@ -152,65 +162,112 @@ async def render_game_detail_image(
     description = _plain_text(game.get("short_description") or game.get("about_the_game"))
 
     cover = await _download_image(game.get("header_image") or game.get("image"), proxy)
-    image = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), STEAM_PAGE)
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((0, 0, CARD_WIDTH - 1, CARD_HEIGHT - 1), radius=10, fill=STEAM_CARD, outline=STEAM_BORDER, width=2)
-
     left_x, right_x = PADDING, 344
     left_width, right_width = 300, 454
-    y = 22
-    draw.text((left_x, y), title, font=title_font, fill=STEAM_WHITE)
-    if english_title and english_title != title:
-        title_width = draw.textbbox((0, 0), title, font=title_font)[2]
-        draw.text((left_x + min(title_width + 10, left_width - 80), y + 7), english_title, font=english_font, fill=STEAM_MUTED)
-    y += 44
-    draw.text((left_x, y), review_text, font=body_font, fill=STEAM_BLUE)
-    if review_percent_text:
-        review_width = draw.textbbox((0, 0), review_text, font=body_font)[2]
-        draw.text((left_x + review_width + 10, y), review_percent_text, font=body_font, fill=STEAM_BLUE_SOFT)
-    y += 32
-    draw.text((left_x, y), "发行日期", font=small_font, fill=STEAM_MUTED)
-    draw.text((left_x + 68, y), release_date, font=small_font, fill=STEAM_TEXT)
-    draw.line((left_x, y + 30, left_x + left_width, y + 30), fill=STEAM_BORDER)
+    cover_top = 22
+    cover_height = max(1, round(right_width * cover.height / cover.width)) if cover else 220
+    measure_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    description_lines = _wrap(measure_draw, description, body_font, right_width)
+    tag_rows = []
+    tag_x = 0
+    for tag in tags:
+        tag_width = measure_draw.textbbox((0, 0), tag, font=tag_font)[2] + 18
+        if tag_x and tag_x + tag_width > right_width:
+            tag_rows.append(tag_x)
+            tag_x = 0
+        tag_x += tag_width + 6
+    if tags:
+        tag_rows.append(tag_x)
+    tag_height = len(tag_rows) * 28
 
-    y += 52
-    draw.text((left_x, y), current_text, font=price_font, fill=STEAM_WHITE)
-    cursor = left_x + draw.textbbox((0, 0), current_text, font=price_font)[2] + 10
-    cursor += _discount_tag(draw, cursor, y + 8, discount_text, tag_font)
-    if regular_text:
-        draw.text((cursor + 10, y + 14), regular_text, font=small_font, fill=STEAM_STRIKE)
-        regular_width = draw.textbbox((0, 0), regular_text, font=small_font)[2]
-        draw.line((cursor + 10, y + 22, cursor + 10 + regular_width, y + 22), fill=STEAM_STRIKE)
-    y += 48
-    draw.text((left_x, y), "史低", font=small_font, fill=STEAM_MUTED)
-    draw.text((left_x + 44, y), history_text, font=small_font, fill=STEAM_TEXT)
-    draw.line((left_x, y + 28, left_x + left_width, y + 28), fill=STEAM_BORDER)
-
+    section_gap = 8
     region_rows = []
     for country, label in (("CN", "国区"), ("RU", "俄区")):
         region_summary = region_prices.get(country) or {}
         region_price = region_summary.get("current_price")
         if region_price is not None:
-            region_rows.append(
-                (label, region_price, region_summary.get("currency") or currency)
-            )
-    if region_rows:
-        ry = CARD_HEIGHT - 112
-        draw.rounded_rectangle((left_x, ry, left_x + left_width, CARD_HEIGHT - 22), radius=8, fill=(28, 45, 61), outline=STEAM_BORDER)
-        for label, value, region_currency in region_rows:
-            draw.text((left_x + 12, ry + 12), label, font=tag_font, fill=STEAM_BLUE_SOFT)
-            draw.text((left_x + 56, ry + 12), _value_text(value, region_currency), font=small_font, fill=STEAM_TEXT)
-            ry += 28
+            region_rows.append((label, region_price, region_summary.get("currency") or currency))
+    region_height = max(86, 28 + len(region_rows) * 34 + 20)
+    section_heights = (150, 150, region_height)
 
+    right_content_bottom = cover_top + cover_height + 20 + len(description_lines) * 24 + 8 + tag_height + 40 + 46
+    left_content_bottom = PADDING + sum(section_heights) + 2 * section_gap
+    card_height = max(left_content_bottom + PADDING, right_content_bottom + PADDING)
+    image = Image.new("RGB", (CARD_WIDTH, card_height), STEAM_PAGE)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((0, 0, CARD_WIDTH - 1, card_height - 1), radius=10, fill=STEAM_CARD, outline=STEAM_BORDER, width=2)
+    section_top = [
+        PADDING,
+        PADDING + section_heights[0] + section_gap,
+        PADDING + section_heights[0] + section_gap + section_heights[1] + section_gap,
+    ]
+    for top in section_top[1:]:
+        separator_y = top - section_gap // 2
+        draw.line((left_x, separator_y, left_x + left_width, separator_y), fill=STEAM_BORDER, width=1)
+    draw.rounded_rectangle(
+        (left_x, section_top[2], left_x + left_width, section_top[2] + section_heights[2]),
+        radius=8,
+        fill=(28, 45, 61),
+        outline=STEAM_BORDER,
+    )
+
+    title_font = _fit_font(draw, title, font_path, 25, 12, left_width - 24)
+    title_y = section_top[0] + 12
+    draw.text((left_x + 12, title_y), title, font=title_font, fill=STEAM_WHITE)
+    if english_title and english_title != title:
+        title_width = draw.textbbox((0, 0), title, font=title_font)[2]
+        remaining_width = max(40, left_width - 24 - title_width - 10)
+        english_font = _fit_font(draw, english_title, font_path, 15, 10, remaining_width)
+        draw.text((left_x + 12 + title_width + 10, title_y + 7), english_title, font=english_font, fill=STEAM_MUTED)
+    review_y = section_top[0] + 70
+    draw.text((left_x + 12, review_y), review_text, font=body_font, fill=STEAM_BLUE)
+    if review_percent_text:
+        review_width = draw.textbbox((0, 0), review_text, font=body_font)[2]
+        draw.text((left_x + 12 + review_width + 10, review_y), review_percent_text, font=body_font, fill=STEAM_BLUE_SOFT)
+    draw.text((left_x + 12, section_top[0] + 108), "发行日期", font=small_font, fill=STEAM_MUTED)
+    draw.text((left_x + 80, section_top[0] + 108), release_date, font=small_font, fill=STEAM_TEXT)
+
+    price_y = section_top[1] + 28
+    draw.text((left_x + 12, price_y), current_text, font=price_font, fill=STEAM_WHITE)
+    cursor = left_x + 12 + draw.textbbox((0, 0), current_text, font=price_font)[2] + 10
+    cursor += _discount_tag(draw, cursor, price_y + 8, discount_text, tag_font)
+    if regular_text:
+        draw.text((cursor + 10, price_y + 14), regular_text, font=small_font, fill=STEAM_STRIKE)
+        regular_width = draw.textbbox((0, 0), regular_text, font=small_font)[2]
+        draw.line((cursor + 10, price_y + 22, cursor + 10 + regular_width, price_y + 22), fill=STEAM_STRIKE)
+    draw.text((left_x + 12, section_top[1] + 102), "史低", font=small_font, fill=STEAM_MUTED)
+    draw.text((left_x + 56, section_top[1] + 102), history_text, font=small_font, fill=STEAM_TEXT)
+
+    for index, (label, value, region_currency) in enumerate(region_rows):
+        row_y = section_top[2] + 28 + index * 34
+        draw.text((left_x + 12, row_y), label, font=tag_font, fill=STEAM_BLUE_SOFT)
+        draw.text((left_x + 72, row_y), _value_text(value, region_currency), font=small_font, fill=STEAM_TEXT)
+
+    cover_box = (right_width, cover_height)
+    cover_left = right_x
     if cover:
-        cover = ImageOps.fit(cover, (right_width, 260), method=Image.Resampling.LANCZOS)
-        image.paste(cover, (right_x, 22))
+        cover = ImageOps.contain(cover, cover_box, method=Image.Resampling.LANCZOS)
+        cover_x = cover_left + (right_width - cover.width) // 2
+        cover_y = cover_top + (cover_height - cover.height) // 2
+        draw.rectangle(
+            (cover_left, cover_top, cover_left + right_width, cover_top + cover_height),
+            fill=(31, 48, 65),
+        )
+        image.paste(cover, (cover_x, cover_y))
+        draw.rectangle(
+            (cover_left, cover_top, cover_left + right_width - 1, cover_top + cover_height - 1),
+            outline=STEAM_BORDER,
+        )
     else:
-        draw.rectangle((right_x, 22, right_x + right_width, 282), fill=(31, 48, 65), outline=STEAM_BORDER)
-        draw.text((right_x + right_width / 2, 152), "STEAM", font=title_font, fill=STEAM_BLUE_SOFT, anchor="mm")
+        draw.rectangle(
+            (cover_left, cover_top, cover_left + right_width, cover_top + cover_height),
+            fill=(31, 48, 65),
+            outline=STEAM_BORDER,
+        )
+        draw.text((right_x + right_width / 2, cover_top + cover_height / 2), "STEAM", font=title_font, fill=STEAM_BLUE_SOFT, anchor="mm")
 
-    y = 302
-    for line in _wrap(draw, description, body_font, right_width, max_lines=4):
+    y = cover_top + cover_height + 20
+    for line in description_lines:
         draw.text((right_x, y), line, font=body_font, fill=STEAM_TEXT)
         y += 24
     y += 8
@@ -226,10 +283,6 @@ async def render_game_detail_image(
     draw.text((right_x, y), f"开发商：{developers}", font=small_font, fill=STEAM_MUTED)
     y += 23
     draw.text((right_x, y), f"发行商：{publishers}", font=small_font, fill=STEAM_MUTED)
-    appid = game.get("steam_appid") or game.get("store_appid")
-    if appid:
-        draw.text((right_x, y + 23), f"Steam 商店：store.steampowered.com/app/{appid}", font=small_font, fill=STEAM_BLUE)
-
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
     return output.getvalue()
