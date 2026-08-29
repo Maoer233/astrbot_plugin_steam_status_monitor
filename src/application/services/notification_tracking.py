@@ -43,8 +43,6 @@ class NotificationTrackingMixin:
             )
         for push_gid in push_targets:
             normalized_push_gid = str(push_gid)
-            if normalized_push_gid != normalized_group_id and normalized_push_gid in monitored_groups:
-                continue
             push_session = notify_sessions.get(normalized_push_gid)
             if push_session and push_session not in sessions:
                 sessions.append(push_session)
