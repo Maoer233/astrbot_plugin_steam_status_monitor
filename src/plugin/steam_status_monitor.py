@@ -581,18 +581,28 @@ class SteamStatusMonitorV3(
             logger.exception("渲染 Steam 游戏详情卡片失败: %s", exc)
             yield event.plain_result(f"游戏详情获取成功，但卡片生成失败：{exc}")
 
-    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    @staticmethod
+    def _steam_search_session_key(event: AstrMessageEvent) -> str:
+        """Return a stable key for both group and private conversations."""
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if origin:
+            return origin
+        session_id = str(event.get_session_id() or "").strip()
+        return session_id or "default"
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
     async def steam_price_selection(self, event: AstrMessageEvent):
-        """接收候选游戏确认消息，支持纯序号或 @机器人后跟序号。"""
-        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        if not self._steam_search_pending.get(group_id):
+        """接收群聊或私聊中的候选游戏序号。"""
+        session_key = self._steam_search_session_key(event)
+        if not self._steam_search_pending.get(session_key):
             return
-        message = str(event.get_message_str() or '').strip()
-        if message.startswith('/'):
+        message = str(event.get_message_str() or "").strip()
+        if message.startswith("/"):
             return
-        match = re.search(r"(?:^|\s)([1-9]\d?)\s*$", message)
+        match = re.search(r"([1-9]\d?)\s*$", message)
         if not match:
             return
+        event.stop_event()
         async for result in self.steam_price(event, match.group(1)):
             yield result
 
@@ -639,12 +649,12 @@ class SteamStatusMonitorV3(
         if not query:
             yield event.plain_result("用法：/steam price <游戏名或 Steam 链接>")
             return
-        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        pending = self._steam_search_pending.get(group_id)
+        session_key = self._steam_search_session_key(event)
+        pending = self._steam_search_pending.get(session_key)
         selected_from_cache = False
         if query.isdigit() and pending:
             index = int(query) - 1
-            games = self._steam_search_cache.get(group_id, [])
+            games = self._steam_search_cache.get(session_key, [])
             if 0 <= index < len(games):
                 game = games[index]
                 selected_from_cache = True
@@ -659,8 +669,8 @@ class SteamStatusMonitorV3(
                 return
             game = games[0]
         if not selected_from_cache and len(games) > 1:
-            self._steam_search_cache[group_id] = games
-            self._steam_search_pending[group_id] = True
+            self._steam_search_cache[session_key] = games
+            self._steam_search_pending[session_key] = True
             lines = ["找到多个匹配游戏，请回复序号："]
             for index, game in enumerate(games, 1):
                 lines.append(f"{index}. {game.title}")
@@ -678,8 +688,8 @@ class SteamStatusMonitorV3(
             review = await self.fetch_game_reviews(game.appid)
             if review:
                 detail['review'] = review
-        self._steam_search_pending.pop(group_id, None)
-        self._steam_search_cache.pop(group_id, None)
+        self._steam_search_pending.pop(session_key, None)
+        self._steam_search_cache.pop(session_key, None)
         currency = summary.get('currency') or ''
         current_price = summary.get('current_price')
         regular_price = summary.get('current_regular')
