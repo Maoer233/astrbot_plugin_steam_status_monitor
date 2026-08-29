@@ -11,8 +11,23 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from ...shared.network import httpx_client_kwargs
 
 
-CARD_WIDTH = 900
-PADDING = 28
+CARD_WIDTH = 820
+CARD_HEIGHT = 560
+PADDING = 22
+
+
+STEAM_PAGE = (27, 40, 56)
+STEAM_CARD = (22, 32, 45)
+STEAM_BORDER = (42, 71, 94)
+STEAM_BLUE = (102, 192, 244)
+STEAM_BLUE_SOFT = (172, 219, 245)
+STEAM_TEXT = (199, 213, 224)
+STEAM_WHITE = (255, 255, 255)
+STEAM_MUTED = (143, 152, 160)
+STEAM_STRIKE = (115, 136, 149)
+STEAM_GREEN = (164, 208, 7)
+STEAM_GREEN_BG = (76, 107, 34)
+STEAM_GREEN_TOP = (92, 126, 16)
 
 
 def _font(path, size):
@@ -29,7 +44,7 @@ def _plain_text(value):
     return re.sub(r"\s+", " ", unescape(value)).strip()
 
 
-def _wrap(draw, value, font, max_width):
+def _wrap(draw, value, font, max_width, max_lines=None):
     value = value or "暂无简介"
     lines = []
     current = ""
@@ -42,7 +57,36 @@ def _wrap(draw, value, font, max_width):
             current = candidate
     if current:
         lines.append(current)
+    if max_lines and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while last and draw.textbbox((0, 0), last + "…", font=font)[2] > max_width:
+            last = last[:-1]
+        lines[-1] = (last or "暂无简介") + "…"
     return lines or ["暂无简介"]
+
+
+def _value_text(value, currency=""):
+    if value is None:
+        return "暂无"
+    if isinstance(value, str):
+        return value
+    return f"{value:g} {currency}".strip()
+
+
+def _discount_tag(draw, x, y, text, font, small=False):
+    if not text:
+        return 0
+    width = max(38 if small else 46, draw.textbbox((0, 0), text, font=font)[2] + 14)
+    height = 24 if small else 30
+    draw.rounded_rectangle(
+        (x, y, x + width, y + height),
+        radius=3,
+        fill=STEAM_GREEN_BG,
+        outline=STEAM_GREEN_TOP,
+    )
+    draw.text((x + width / 2, y + height / 2), text, font=font, fill=(210, 243, 76), anchor="mm")
+    return width
 
 
 async def _download_image(url, proxy=None):
@@ -59,96 +103,128 @@ async def _download_image(url, proxy=None):
 
 async def render_game_detail_image(game, font_path=None, proxy=None, itad_summary=None):
     """将 Steam appdetails 数据与可选的 ITAD 价格信息渲染为详情卡片。"""
-    small = _font(font_path, 20)
-    title_font = _font(font_path, 40)
-    section_font = _font(font_path, 28)
+    title_font = _font(font_path, 25)
+    english_font = _font(font_path, 15)
+    body_font = _font(font_path, 16)
+    small_font = _font(font_path, 14)
     price_font = _font(font_path, 34)
-    muted = (181, 201, 215)
-    dark = (238, 244, 248)
-    blue = (111, 190, 225)
-    panel = (28, 49, 66)
-    panel_inner = (18, 36, 50)
-    outline = (62, 89, 108)
-
-    header = await _download_image(game.get("header_image") or game.get("image"), proxy)
-    header_height = 270
-    if header:
-        header = ImageOps.fit(header, (CARD_WIDTH - PADDING * 2, header_height), method=Image.Resampling.LANCZOS)
-
-    price = game.get("price_overview") or {}
-    if game.get("is_free"):
-        price_text = "免费"
-        discount_text = ""
-    elif price:
-        price_text = price.get("final_formatted") or f"{price.get('final', 0) / 100:.2f}"
-        discount_text = f"-{price.get('discount_percent', 0)}%" if price.get("discount_percent") else ""
-    else:
-        price_text = "暂无价格"
-        discount_text = ""
+    tag_font = _font(font_path, 13)
 
     itad_summary = itad_summary or {}
-    if not price and itad_summary.get("current_price") is not None:
-        itad_currency = itad_summary.get("currency") or ""
-        price_text = f"{itad_summary['current_price']:g} {itad_currency}".strip()
-        if itad_summary.get("cut"):
-            discount_text = f"-{int(itad_summary['cut'])}%"
-    itad_currency = itad_summary.get("currency") or ""
-    itad_low = itad_summary.get("history_low")
-    if itad_low is None:
-        itad_low = itad_summary.get("lowest")
-    itad_low_text = f"{itad_low:g} {itad_currency}".strip() if itad_low is not None else "暂无"
+    price = game.get("price_overview") or {}
+    currency = itad_summary.get("currency") or price.get("currency") or ""
+    if game.get("is_free"):
+        current_text, discount_text, regular_text = "免费", "", ""
+    elif price:
+        current_text = price.get("final_formatted") or _value_text(price.get("final", 0) / 100, currency)
+        discount = price.get("discount_percent") or 0
+        discount_text = f"-{discount}%" if discount else ""
+        regular_text = price.get("initial_formatted") if discount else ""
+    elif itad_summary.get("current_price") is not None:
+        current_text = _value_text(itad_summary.get("current_price"), currency)
+        discount = itad_summary.get("cut") or 0
+        discount_text = f"-{int(discount)}%" if discount else ""
+        regular_text = _value_text(itad_summary.get("current_regular"), currency) if itad_summary.get("current_regular") is not None else ""
+    else:
+        current_text, discount_text, regular_text = "暂无价格", "", ""
+
+    history_low = itad_summary.get("history_low")
+    if history_low is None:
+        history_low = itad_summary.get("lowest")
+    history_text = _value_text(history_low, currency)
 
     review = game.get("review") or {}
     review_text = review.get("text") or review.get("review_score_desc") or "暂无评价"
     review_percent = review.get("percent") or review.get("review_score_percent")
-    if review_percent is not None:
-        review_text += f" {review_percent}%"
+    review_percent_text = f"{review_percent}%" if review_percent is not None else ""
 
-    genres = "、".join(x.get("description", "") for x in game.get("genres", [])) or "未分类"
-    developers = "、".join(game.get("developers", [])) or "未知"
-    release_date = (game.get("release_date") or {}).get("date") or "未知"
-
-    itad_height = 92 if itad_summary else 0
-    height = 40 + header_height + 30 + 64 + 82 + 94 + itad_height + 30
-    image = Image.new("RGB", (CARD_WIDTH, height), (10, 23, 32))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((12, 12, CARD_WIDTH - 12, height - 12), radius=20, fill=(22, 42, 57), outline=(65, 91, 109), width=2)
-    if header:
-        image.paste(header, (PADDING, 28))
-    else:
-        draw.rectangle((PADDING, 28, CARD_WIDTH - PADDING, 28 + header_height), fill=(34, 55, 75))
-        draw.text((CARD_WIDTH // 2, 150), "STEAM", font=title_font, fill=(220, 235, 245), anchor="mm")
-
-    y = 28 + header_height + 20
     title = game.get("name") or "未知游戏"
-    title_lines = _wrap(draw, title, title_font, CARD_WIDTH - PADDING * 2)
-    for line in title_lines[:2]:
-        draw.text((PADDING, y), line, font=title_font, fill=dark)
-        y += 48
-    draw.text((PADDING, y), f"{genres}  |  开发商：{developers}  |  发行日期：{release_date}", font=small, fill=muted)
-    y += 42
+    english_title = game.get("english_name") or game.get("original_name") or ""
+    release_date = (game.get("release_date") or {}).get("date") or "未知"
+    genres = [x.get("description", "") for x in game.get("genres", []) if x.get("description")]
+    categories = [x.get("description", "") for x in game.get("categories", []) if x.get("description")]
+    tags = list(dict.fromkeys(genres + categories))[:8]
+    developers = "、".join(game.get("developers", [])) or "未知"
+    publishers = "、".join(game.get("publishers", [])) or "未知"
+    description = _plain_text(game.get("short_description") or game.get("about_the_game"))
 
-    draw.rounded_rectangle((PADDING, y, CARD_WIDTH // 2 - 10, y + 72), radius=12, fill=panel_inner, outline=outline)
-    draw.text((PADDING + 18, y + 12), "当前价格", font=small, fill=dark)
-    draw.text((PADDING + 18, y + 35), price_text, font=price_font, fill=blue)
-    if discount_text:
-        draw.rounded_rectangle((CARD_WIDTH // 2 - 120, y + 18, CARD_WIDTH // 2 - 28, y + 58), radius=8, fill=(202, 52, 49))
-        draw.text((CARD_WIDTH // 2 - 74, y + 38), discount_text, font=small, fill="white", anchor="mm")
+    cover = await _download_image(game.get("header_image") or game.get("image"), proxy)
+    image = Image.new("RGB", (CARD_WIDTH, CARD_HEIGHT), STEAM_PAGE)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((0, 0, CARD_WIDTH - 1, CARD_HEIGHT - 1), radius=10, fill=STEAM_CARD, outline=STEAM_BORDER, width=2)
 
-    left = CARD_WIDTH // 2 + 10
-    draw.rounded_rectangle((left, y, CARD_WIDTH - PADDING, y + 72), radius=12, fill=panel_inner, outline=outline)
-    draw.text((left + 18, y + 12), "Steam 评价", font=small, fill=dark)
-    draw.text((left + 18, y + 36), review_text, font=price_font, fill=blue)
-    y += 94
+    left_x, right_x = PADDING, 344
+    left_width, right_width = 300, 454
+    y = 22
+    draw.text((left_x, y), title, font=title_font, fill=STEAM_WHITE)
+    if english_title and english_title != title:
+        title_width = draw.textbbox((0, 0), title, font=title_font)[2]
+        draw.text((left_x + min(title_width + 10, left_width - 80), y + 7), english_title, font=english_font, fill=STEAM_MUTED)
+    y += 44
+    draw.text((left_x, y), review_text, font=body_font, fill=STEAM_BLUE)
+    if review_percent_text:
+        review_width = draw.textbbox((0, 0), review_text, font=body_font)[2]
+        draw.text((left_x + review_width + 10, y), review_percent_text, font=body_font, fill=STEAM_BLUE_SOFT)
+    y += 32
+    draw.text((left_x, y), "发行日期", font=small_font, fill=STEAM_MUTED)
+    draw.text((left_x + 68, y), release_date, font=small_font, fill=STEAM_TEXT)
+    draw.line((left_x, y + 30, left_x + left_width, y + 30), fill=STEAM_BORDER)
 
-    if itad_summary:
-        draw.rounded_rectangle((PADDING, y, CARD_WIDTH - PADDING, y + 76), radius=12, fill=panel_inner, outline=outline)
-        draw.text((PADDING + 18, y + 12), "ITAD 历史最低价", font=small, fill=dark)
-        draw.text((PADDING + 18, y + 38), itad_low_text, font=price_font, fill=blue)
-        y += 94
+    y += 52
+    draw.text((left_x, y), current_text, font=price_font, fill=STEAM_WHITE)
+    cursor = left_x + draw.textbbox((0, 0), current_text, font=price_font)[2] + 10
+    cursor += _discount_tag(draw, cursor, y + 8, discount_text, tag_font)
+    if regular_text:
+        draw.text((cursor + 10, y + 14), regular_text, font=small_font, fill=STEAM_STRIKE)
+        regular_width = draw.textbbox((0, 0), regular_text, font=small_font)[2]
+        draw.line((cursor + 10, y + 22, cursor + 10 + regular_width, y + 22), fill=STEAM_STRIKE)
+    y += 48
+    draw.text((left_x, y), "史低", font=small_font, fill=STEAM_MUTED)
+    draw.text((left_x + 44, y), history_text, font=small_font, fill=STEAM_TEXT)
+    draw.line((left_x, y + 28, left_x + left_width, y + 28), fill=STEAM_BORDER)
 
-    draw.rounded_rectangle((PADDING, y, CARD_WIDTH - PADDING, y + 52), radius=12, fill=panel)
-    draw.text((PADDING + 18, y + 15), "数据来源：Steam · ITAD", font=small, fill=muted)
+    region_rows = []
+    region_price = itad_summary.get("region_price") or itad_summary.get("cn_price")
+    region_ua = itad_summary.get("ua_price") or itad_summary.get("region_ua")
+    if region_price is not None:
+        region_rows.append(("国区", region_price))
+    if region_ua is not None:
+        region_rows.append(("UA", region_ua))
+    if region_rows:
+        ry = CARD_HEIGHT - 112
+        draw.rounded_rectangle((left_x, ry, left_x + left_width, CARD_HEIGHT - 22), radius=8, fill=(28, 45, 61), outline=STEAM_BORDER)
+        for label, value in region_rows:
+            draw.text((left_x + 12, ry + 12), label, font=tag_font, fill=STEAM_BLUE_SOFT)
+            draw.text((left_x + 56, ry + 12), _value_text(value, currency), font=small_font, fill=STEAM_TEXT)
+            ry += 28
+
+    if cover:
+        cover = ImageOps.fit(cover, (right_width, 260), method=Image.Resampling.LANCZOS)
+        image.paste(cover, (right_x, 22))
+    else:
+        draw.rectangle((right_x, 22, right_x + right_width, 282), fill=(31, 48, 65), outline=STEAM_BORDER)
+        draw.text((right_x + right_width / 2, 152), "STEAM", font=title_font, fill=STEAM_BLUE_SOFT, anchor="mm")
+
+    y = 302
+    for line in _wrap(draw, description, body_font, right_width, max_lines=4):
+        draw.text((right_x, y), line, font=body_font, fill=STEAM_TEXT)
+        y += 24
+    y += 8
+    tag_x = right_x
+    for tag in tags:
+        tag_width = draw.textbbox((0, 0), tag, font=tag_font)[2] + 18
+        if tag_x + tag_width > right_x + right_width:
+            tag_x, y = right_x, y + 28
+        draw.rounded_rectangle((tag_x, y, tag_x + tag_width, y + 23), radius=3, fill=(31, 54, 72), outline=(55, 91, 116))
+        draw.text((tag_x + tag_width / 2, y + 11), tag, font=tag_font, fill=STEAM_BLUE_SOFT, anchor="mm")
+        tag_x += tag_width + 6
+    y += 40
+    draw.text((right_x, y), f"开发商：{developers}", font=small_font, fill=STEAM_MUTED)
+    y += 23
+    draw.text((right_x, y), f"发行商：{publishers}", font=small_font, fill=STEAM_MUTED)
+    appid = game.get("steam_appid") or game.get("store_appid")
+    if appid:
+        draw.text((right_x, y + 23), f"Steam 商店：store.steampowered.com/app/{appid}", font=small_font, fill=STEAM_BLUE)
 
     output = io.BytesIO()
     image.save(output, format="PNG", optimize=True)
