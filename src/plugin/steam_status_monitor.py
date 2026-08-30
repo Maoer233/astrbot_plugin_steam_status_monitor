@@ -39,6 +39,7 @@ from ..infrastructure.clients.steam import SteamClientMixin
 from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
+from ..shared.utils.price import summary_to_cny
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
 # 正常运行时 states.json 约每 5 分钟落盘一次（最慢轮询间隔 30 分钟 + 保存节流 5 分钟），
@@ -66,7 +67,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.2.0"
+        self._plugin_version = "4.3.0"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -593,10 +594,19 @@ class SteamStatusMonitorV3(
                 func_tool=None,
                 system_prompt="",
             )
+            raw = str(response.completion_text or "").strip()
+            # 剥离 LLM 推理/思考内容：取最后一个 </thinking>/</think> 之后的部分作为最终答案，
+            # 前面的思考内容丢弃；若没有闭合标签则删除独立 think 标签，避免思考内容混入搜索结果。
+            closes = list(re.finditer(r"</(?:thinking|think)[^>]*>", raw, flags=re.I))
+            if closes:
+                raw = raw[closes[-1].end():]
+            else:
+                raw = re.sub(r"<think[^>]*>", "", raw, flags=re.I)
+                raw = re.sub(r"</?(?:thinking|think)[^>]*>", "", raw, flags=re.I)
             translated = re.sub(
                 r"^(?:英文名|翻译结果|Translation)\s*[:：]?\s*",
                 "",
-                str(response.completion_text or "").strip(),
+                raw,
                 flags=re.IGNORECASE,
             ).strip().strip('`\"“”')
             if translated:
@@ -610,7 +620,19 @@ class SteamStatusMonitorV3(
     @filter.command("steam price")
     async def steam_price(self, event: AstrMessageEvent, query: str):
         """按中文名、英文名或 Steam 链接查询当前价格与历史最低价。"""
-        query = str(query).strip()
+        # 修复参数截断：AstrBot 的 command 注入参数会吞掉尾部数字（如“猫娘乐园 3”中的 3），
+        # 改用 event.message_str 手动剥离“steam price”前缀，保留含空格与数字的完整参数。
+        raw_msg = getattr(event, "message_str", None)
+        if raw_msg is None:
+            getter = getattr(event, "get_message_str", None)
+            raw_msg = getter() if callable(getter) else ""
+        query = re.sub(
+            r"^[/.。／]*\s*steam\s*price\s*",
+            "",
+            str(raw_msg or ""),
+            count=1,
+            flags=re.IGNORECASE,
+        ).strip()
         if not query:
             yield event.plain_result("用法：/steam price <游戏名或 Steam 链接>")
             return
@@ -641,13 +663,26 @@ class SteamStatusMonitorV3(
                 lines.append(f"{index}. {game.title}")
             yield event.plain_result("\n".join(lines))
             return
-        price_region = self.config.get("price_region", "CN")
-        summary, cn_summary, ru_summary = await asyncio.gather(
-            self.ITAD_CLIENT.get_price_summary(game.id, price_region),
-            self.ITAD_CLIENT.get_price_summary(game.id, "CN"),
-            self.ITAD_CLIENT.get_price_summary(game.id, "RU"),
-        )
-        region_prices = {"CN": cn_summary, "RU": ru_summary}
+        price_region = (self.config.get("price_region", "CN") or "CN").strip().upper() or "CN"
+        compare_region_raw = (self.config.get("price_compare_regions", "UA") or "NONE").strip()
+        # 兼容旧配置：price_compare_regions 此前为逗号分隔（如 "CN,US"），此处取第一个作为单选对比区
+        compare_region = compare_region_raw.split(",")[0].strip().upper()
+        region_codes = [price_region]
+        if compare_region and compare_region != "NONE" and compare_region != price_region:
+            region_codes.append(compare_region)
+        # 主区史低/兜底仍由 ITAD 提供；地区对比行改用 Steam 商店各国家区价（cc=<国家>），
+        # 再统一折算为 CNY 显示与比较（与参考插件一致，UA 区即 Steam 商店价）
+        summary = await self.ITAD_CLIENT.get_price_summary(game.id, price_region)
+        region_prices = {}
+        if game.appid:
+            region_summaries = await asyncio.gather(
+                *[self.fetch_region_price(game.appid, region) for region in region_codes]
+            )
+            region_prices = {
+                code: summary_to_cny(region_summary)
+                for code, region_summary in zip(region_codes, region_summaries)
+                if region_summary
+            }
         detail = await self.fetch_game_details(game.appid) if game.appid else None
         if detail and game.appid:
             review = await self.fetch_game_reviews(game.appid)

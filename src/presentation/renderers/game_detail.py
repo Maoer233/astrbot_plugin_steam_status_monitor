@@ -29,6 +29,27 @@ STEAM_GREEN = (164, 208, 7)
 STEAM_GREEN_BG = (76, 107, 34)
 STEAM_GREEN_TOP = (92, 126, 16)
 
+# 货币符号（ITAD currency 代码 → 符号）
+CURRENCY_SYMBOL = {
+    "CNY": "¥", "USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥",
+    "KRW": "₩", "RUB": "₽", "UAH": "₴", "TRY": "₺", "PLN": "zł",
+    "BRL": "R$", "INR": "₹",
+}
+
+# 地区代码 → 显示名。未列出的地区直接显示其国家代码。纯文字绘制，避免字体缺字形成豆腐块。
+COUNTRY_LABEL = {
+    "CN": "国区",
+    "RU": "俄区",
+    "UA": "乌区",
+    "US": "美区",
+    "JP": "日区",
+    "KR": "韩区",
+    "TR": "土区",
+    "GB": "英区",
+    "DE": "德区",
+    "PL": "波区",
+}
+
 
 def _font(path, size):
     if path and os.path.exists(path):
@@ -76,12 +97,25 @@ def _wrap(draw, value, font, max_width, max_lines=None):
     return lines or ["暂无简介"]
 
 
-def _value_text(value, currency=""):
+def _currency_symbol(currency):
+    return CURRENCY_SYMBOL.get((currency or "").upper(), "")
+
+
+def _country_display(code):
+    code = (code or "").upper()
+    return COUNTRY_LABEL.get(code, code)
+
+
+def _value_text(value, currency="", symbol=True):
     if value is None:
         return "暂无"
     if isinstance(value, str):
         return value
-    return f"{value:g} {currency}".strip()
+    amount = f"{value:g}"
+    sym = _currency_symbol(currency) if symbol else ""
+    if sym:
+        return f"{sym}{amount}"
+    return f"{amount} {currency}".strip()
 
 
 def _discount_tag(draw, x, y, text, font, small=False):
@@ -182,12 +216,20 @@ async def render_game_detail_image(
 
     section_gap = 8
     region_rows = []
-    for country, label in (("CN", "国区"), ("RU", "俄区")):
-        region_summary = region_prices.get(country) or {}
+    for code, region_summary in (region_prices or {}).items():
+        region_summary = region_summary or {}
         region_price = region_summary.get("current_price")
-        if region_price is not None:
-            region_rows.append((label, region_price, region_summary.get("currency") or currency))
-    region_height = max(86, 28 + len(region_rows) * 34 + 20)
+        if region_price is None:
+            continue
+        label = _country_display(code)
+        region_rows.append({
+            "label": label,
+            "price": region_price,
+            "regular": region_summary.get("current_regular"),
+            "currency": region_summary.get("currency") or currency,
+            "cut": region_summary.get("cut"),
+        })
+    region_height = max(86, 26 + len(region_rows) * 36 + 16)
     section_heights = (150, 150, region_height)
 
     right_content_bottom = cover_top + cover_height + 20 + len(description_lines) * 24 + 8 + tag_height + 40 + 46
@@ -238,10 +280,36 @@ async def render_game_detail_image(
     draw.text((left_x + 12, section_top[1] + 102), "史低", font=small_font, fill=STEAM_MUTED)
     draw.text((left_x + 56, section_top[1] + 102), history_text, font=small_font, fill=STEAM_TEXT)
 
-    for index, (label, value, region_currency) in enumerate(region_rows):
-        row_y = section_top[2] + 28 + index * 34
-        draw.text((left_x + 12, row_y), label, font=tag_font, fill=STEAM_BLUE_SOFT)
-        draw.text((left_x + 72, row_y), _value_text(value, region_currency), font=small_font, fill=STEAM_TEXT)
+    for index, row in enumerate(region_rows):
+        row_y = section_top[2] + 22 + index * 36
+        x = left_x + 12
+        label_text = row["label"]
+        draw.text((x, row_y), label_text, font=tag_font, fill=STEAM_BLUE_SOFT)
+        x += draw.textbbox((0, 0), label_text, font=tag_font)[2] + 12
+        price_text = _value_text(row["price"], row["currency"])
+        draw.text((x, row_y), price_text, font=small_font, fill=STEAM_WHITE)
+        x += draw.textbbox((0, 0), price_text, font=small_font)[2] + 10
+        if row["regular"]:
+            regular_text = _value_text(row["regular"], row["currency"])
+            draw.text((x, row_y + 1), regular_text, font=small_font, fill=STEAM_STRIKE)
+            regular_width = draw.textbbox((0, 0), regular_text, font=small_font)[2]
+            draw.line((x, row_y + 11, x + regular_width, row_y + 11), fill=STEAM_STRIKE)
+            x += regular_width + 12
+        if row["cut"]:
+            x += _discount_tag(draw, x, row_y - 4, f"-{int(row['cut'])}%", tag_font, small=True)
+
+    # 地区差价提示：找出最贵/最便宜地区（已统一 CNY），显示“XX 更贵，多花 X.XX 元呢！(+X.XX%)”
+    if len(region_rows) >= 2:
+        prices = [row["price"] for row in region_rows]
+        cheapest = min(prices)
+        if cheapest and max(prices) > cheapest:
+            expensive_idx = prices.index(max(prices))
+            expensive = region_rows[expensive_idx]
+            diff = round(max(prices) - cheapest, 2)
+            percent = diff / cheapest * 100
+            note = f"{expensive['label']}更贵，多花{diff:.2f}元呢！(+{percent:.2f}%)"
+            note_y = section_top[2] + region_height - 24
+            draw.text((left_x + 12, note_y), note, font=small_font, fill=(255, 178, 44))
 
     cover_box = (right_width, cover_height)
     cover_left = right_x

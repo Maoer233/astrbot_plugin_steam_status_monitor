@@ -265,6 +265,33 @@ class SteamClientMixin:
             logger.warning(f"获取 Steam 游戏详情失败: {exc} (appid={gid})")
             return None
 
+    async def fetch_region_price(self, appid, country="CN"):
+        """获取指定国家区 Steam 商店价格（含币种、折后价/原价/折扣）。返回 dict 或 None。"""
+        gid = str(appid).strip()
+        if not gid.isdigit():
+            return None
+        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}&cc={str(country).lower()}"
+        try:
+            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                payload = response.json().get(gid, {})
+                data = payload.get("data") if payload.get("success") else None
+                if not data:
+                    return None
+                price_overview = data.get("price_overview") or {}
+                if not price_overview:
+                    return None
+                return {
+                    "currency": price_overview.get("currency"),
+                    "current_price": price_overview.get("final", 0) / 100,
+                    "current_regular": price_overview.get("initial", 0) / 100,
+                    "cut": price_overview.get("discount_percent", 0),
+                }
+        except Exception as exc:
+            logger.warning(f"获取 Steam {country} 区价格失败: {exc} (appid={gid})")
+            return None
+
     async def get_chinese_game_name(self, gameid, fallback_name=None):
         '''
         优先通过 Steam 商店API获取游戏中文名（l=schinese），若无则返回英文名（l=en），最后才返回 fallback_name 或“未知游戏”
