@@ -217,6 +217,54 @@ class SteamClientMixin:
             logger.warning(f"[vanity解析] 异常: {e} (vanity={vanity})")
             return None
 
+    async def fetch_game_reviews(self, appid, language="schinese"):
+        """获取 Steam 商店评价摘要。"""
+        gid = str(appid).strip()
+        if not gid.isdigit():
+            return None
+        url = f"{self.STEAM_STORE_BASE}/appreviews/{gid}"
+        try:
+            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+                response = await client.get(url, params={"json": 1, "language": language, "filter": "summary"})
+                response.raise_for_status()
+                payload = response.json()
+                summary = payload.get("query_summary") or payload.get("querySummary") or {}
+                total = int(summary.get("total_reviews") or summary.get("totalReviews") or 0)
+                positive = int(summary.get("total_positive") or summary.get("totalPositive") or 0)
+                if total <= 0:
+                    return {"text": "暂无评价"}
+                percent = round(positive * 100 / total)
+                if percent >= 95:
+                    label = "好评如潮"
+                elif percent >= 80:
+                    label = "特别好评"
+                elif percent >= 70:
+                    label = "多半好评"
+                elif percent >= 40:
+                    label = "褒贬不一"
+                else:
+                    label = "差评"
+                return {"text": label, "percent": percent, "total": total}
+        except Exception as exc:
+            logger.warning(f"获取 Steam 评价摘要失败: {exc} (appid={gid})")
+            return None
+
+    async def fetch_game_details(self, appid, language="schinese"):
+        """获取 Steam 商店游戏详情。"""
+        gid = str(appid).strip()
+        if not gid.isdigit():
+            return None
+        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}&l={language}&cc=cn"
+        try:
+            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                payload = response.json().get(gid, {})
+                return payload.get("data") if payload.get("success") else None
+        except Exception as exc:
+            logger.warning(f"获取 Steam 游戏详情失败: {exc} (appid={gid})")
+            return None
+
     async def get_chinese_game_name(self, gameid, fallback_name=None):
         '''
         优先通过 Steam 商店API获取游戏中文名（l=schinese），若无则返回英文名（l=en），最后才返回 fallback_name 或“未知游戏”

@@ -155,6 +155,7 @@ class StatusChangeTrackingMixin:
                         "game": zh_game_name,
                         "sid": sid,
                         "gameid": current_gameid,
+                        "start_time": now,
                         "status": status,
                     })
                 # 成就监控任务启动（受 enable_achievement_poll 配置控制）

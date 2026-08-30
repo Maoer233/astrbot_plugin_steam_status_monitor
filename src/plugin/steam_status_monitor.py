@@ -4,6 +4,7 @@ from ..shared.network import configure_tls, httpx_client_kwargs, requests_verify
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image  # 确保已导入 Image
+import base64
 import json
 import time
 import httpx
@@ -21,6 +22,8 @@ from ..application.services.polling_tracking import PollingTrackingMixin
 from ..presentation.renderers.game_start import render_game_start
 from ..presentation.renderers.game_end import render_game_end
 from ..presentation.renderers.rank import render_rank_image
+from ..presentation.renderers.game_detail import render_game_detail_image
+from ..presentation.renderers.game_start import get_font_path
 from ..domain.monitoring import MonitorStateStore, StateBackedMonitorMixin
 from ..domain.ranking.push_scopes import build_rank_push_scopes
 from PIL import Image as PILImage
@@ -33,6 +36,7 @@ import shutil
 from ..presentation.web.admin_api import WebAdminAPI
 from ..infrastructure.persistence.plugin_data import PersistenceMixin
 from ..infrastructure.clients.steam import SteamClientMixin
+from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 
@@ -117,6 +121,13 @@ class SteamStatusMonitorV3(
         self.ENABLE_PROXY = self.config.get('enable_proxy', False)
         self.PROXY_URL = self.config.get('proxy_url', '')
         self.proxy = self.PROXY_URL if self.ENABLE_PROXY and self.PROXY_URL else None
+        self.ITAD_CLIENT = ITADClient(
+            self.config.get('itad_api_key', ''),
+            proxy=self.proxy,
+            base_url=self.config.get('itad_api_base', ''),
+        )
+        self._steam_search_cache = {}
+        self._steam_search_pending = {}
         # 代理前置校验：若启用 SOCKS 代理但未安装 socksio，尝试自动安装
         if self.proxy and self.proxy.startswith('socks'):
             try:
@@ -484,42 +495,6 @@ class SteamStatusMonitorV3(
         yield event.plain_result(msg.strip() if msg else "未添加任何SteamID。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("steam push_group")
-    async def steam_push_group(self, event: AstrMessageEvent, steamid: str):
-        '''将本群加入指定SteamID的联动推送组（不重复轮询，仅同步推送）'''
-        group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        if not steamid.isdigit() or len(steamid) != 17:
-            yield event.plain_result("SteamID无效（需为64位数字串，17位）")
-            return
-        if not any(steamid in steam_ids for steam_ids in self.group_steam_ids.values()):
-            yield event.plain_result("未找到已轮询该SteamID的主群，请先在任一群添加并开启监控。")
-            return
-        targets = self.push_groups.setdefault(steamid, [])
-        if group_id in targets:
-            yield event.plain_result("本群已在该SteamID的推送组中。")
-            return
-        targets.append(group_id)
-        self._save_push_groups()
-        yield event.plain_result(f"本群已加入SteamID {steamid} 的联动推送组。")
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("steam delpush_group")
-    async def steam_delpush_group(self, event: AstrMessageEvent, steamid: str, target_group: str = ''):
-        '''将当前群或指定群从SteamID的联动推送组移除'''
-        group_id = target_group.strip() or (
-            str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        )
-        targets = self.push_groups.get(steamid, [])
-        if group_id not in targets:
-            yield event.plain_result(f"群 {group_id} 未在 SteamID {steamid} 的推送组中。")
-            return
-        targets.remove(group_id)
-        if not targets:
-            self.push_groups.pop(steamid, None)
-        self._save_push_groups()
-        yield event.plain_result(f"已从 SteamID {steamid} 的联动推送组中移除群 {group_id}。")
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam delid")
     async def steam_delid(self, event: AstrMessageEvent, steamid: str, group_id_param: str = ""):
         '''从监控组删除SteamID；支持好友码/链接；可选传群号跨群删除：/steam delid [SteamID/好友码/链接] [群号]'''
@@ -544,6 +519,180 @@ class SteamStatusMonitorV3(
             yield event.plain_result(
                 f"已删除 SteamID {sid} 的主监控及全部路由分发"
             )
+
+    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.command("steam game")
+    async def steam_game(self, event: AstrMessageEvent, appid: str):
+        """查询 Steam 游戏详情并生成详情卡片。"""
+        appid = str(appid).strip()
+        if not appid.isdigit():
+            yield event.plain_result("用法：/steam game <Steam AppID>")
+            return
+        game = await self.fetch_game_details(appid)
+        if not game:
+            yield event.plain_result(f"未找到 Steam 游戏 AppID：{appid}，或 Steam 商店暂时无法访问。")
+            return
+        try:
+            img_bytes = await render_game_detail_image(
+                game,
+                font_path=get_font_path("NotoSansHans-Regular.otf"),
+                proxy=self.proxy,
+            )
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                image_path = tmp.name
+            yield event.image_result(image_path)
+        except Exception as exc:
+            logger.exception("渲染 Steam 游戏详情卡片失败: %s", exc)
+            yield event.plain_result(f"游戏详情获取成功，但卡片生成失败：{exc}")
+
+    @staticmethod
+    def _steam_search_session_key(event: AstrMessageEvent) -> str:
+        """Return a stable key for both group and private conversations."""
+        origin = str(getattr(event, "unified_msg_origin", "") or "").strip()
+        if origin:
+            return origin
+        session_id = str(event.get_session_id() or "").strip()
+        return session_id or "default"
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def steam_price_selection(self, event: AstrMessageEvent):
+        """接收群聊或私聊中的候选游戏序号。"""
+        session_key = self._steam_search_session_key(event)
+        if not self._steam_search_pending.get(session_key):
+            return
+        message = str(event.get_message_str() or "").strip()
+        if message.startswith("/"):
+            return
+        match = re.search(r"([1-9]\d?)\s*$", message)
+        if not match:
+            return
+        event.stop_event()
+        async for result in self.steam_price(event, match.group(1)):
+            yield result
+
+    @staticmethod
+    def _contains_chinese(text: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in text)
+
+    async def _translate_game_query(self, query: str) -> str:
+        """将中文游戏名转换为 Steam/ITAD 更容易命中的英文官方名。"""
+        if not self._contains_chinese(query):
+            return query
+        try:
+            provider = self.context.get_using_provider()
+            if not provider:
+                return query
+            response = await provider.text_chat(
+                prompt=(
+                    "请将以下游戏名翻译为 Steam 商店使用的英文官方名称，"
+                    f"仅输出英文名，不要输出其他内容：{query}"
+                ),
+                contexts=[],
+                image_urls=[],
+                func_tool=None,
+                system_prompt="",
+            )
+            translated = re.sub(
+                r"^(?:英文名|翻译结果|Translation)\s*[:：]?\s*",
+                "",
+                str(response.completion_text or "").strip(),
+                flags=re.IGNORECASE,
+            ).strip().strip('`\"“”')
+            if translated:
+                logger.info("[LLM][翻译游戏名] %s -> %s", query, translated)
+                return translated
+        except Exception as exc:
+            logger.warning("LLM 翻译游戏名失败，将使用原始查询: %s", exc)
+        return query
+
+    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.command("steam price")
+    async def steam_price(self, event: AstrMessageEvent, query: str):
+        """按中文名、英文名或 Steam 链接查询当前价格与历史最低价。"""
+        query = str(query).strip()
+        if not query:
+            yield event.plain_result("用法：/steam price <游戏名或 Steam 链接>")
+            return
+        session_key = self._steam_search_session_key(event)
+        pending = self._steam_search_pending.get(session_key)
+        selected_from_cache = False
+        if query.isdigit() and pending:
+            index = int(query) - 1
+            games = self._steam_search_cache.get(session_key, [])
+            if 0 <= index < len(games):
+                game = games[index]
+                selected_from_cache = True
+            else:
+                yield event.plain_result("候选序号无效，请重新回复序号。")
+                return
+        else:
+            search_query = await self._translate_game_query(query)
+            games = await self.ITAD_CLIENT.search_games(search_query)
+            if not games:
+                yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
+                return
+            game = games[0]
+        if not selected_from_cache and len(games) > 1:
+            self._steam_search_cache[session_key] = games
+            self._steam_search_pending[session_key] = True
+            lines = ["找到多个匹配游戏，请回复序号："]
+            for index, game in enumerate(games, 1):
+                lines.append(f"{index}. {game.title}")
+            yield event.plain_result("\n".join(lines))
+            return
+        price_region = self.config.get("price_region", "CN")
+        summary, cn_summary, ru_summary = await asyncio.gather(
+            self.ITAD_CLIENT.get_price_summary(game.id, price_region),
+            self.ITAD_CLIENT.get_price_summary(game.id, "CN"),
+            self.ITAD_CLIENT.get_price_summary(game.id, "RU"),
+        )
+        region_prices = {"CN": cn_summary, "RU": ru_summary}
+        detail = await self.fetch_game_details(game.appid) if game.appid else None
+        if detail and game.appid:
+            review = await self.fetch_game_reviews(game.appid)
+            if review:
+                detail['review'] = review
+        self._steam_search_pending.pop(session_key, None)
+        self._steam_search_cache.pop(session_key, None)
+        store_appid = (detail or {}).get('store_appid') or game.appid
+        store_url = f"https://store.steampowered.com/app/{store_appid}/" if store_appid else ""
+
+        card_data = detail or {
+            'name': game.title,
+            'header_image': game.image,
+            'short_description': '由 ITAD 提供当前价格与历史最低价信息。',
+            'genres': [],
+            'developers': [],
+            'release_date': {'date': '未知'},
+            'price_overview': {},
+            'review': {},
+        }
+        try:
+            img_bytes = await render_game_detail_image(
+                card_data,
+                font_path=get_font_path("NotoSansHans-Regular.otf"),
+                proxy=self.proxy,
+                itad_summary=summary,
+                region_prices=region_prices,
+            )
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                tmp.write(img_bytes)
+                image_path = tmp.name
+            with open(image_path, "rb") as image_file:
+                image_base64 = base64.b64encode(image_file.read()).decode("ascii")
+            result = event.make_result().base64_image(image_base64)
+            if store_url:
+                result.message(store_url)
+            yield result
+            return
+        except Exception as exc:
+            logger.exception("渲染 Steam 价格详情卡片失败: %s", exc)
+
+        if store_url:
+            yield event.plain_result(store_url)
+        else:
+            yield event.plain_result("未找到对应的 Steam 商店链接。")
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam list")

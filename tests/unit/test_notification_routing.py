@@ -4,7 +4,9 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-IMPLEMENTATION_PATH = PROJECT_ROOT / "src/plugin/steam_status_monitor.py"
+IMPLEMENTATION_PATH = (
+    PROJECT_ROOT / "src/application/services/notification_tracking.py"
+)
 
 
 def load_get_notify_sessions():
@@ -12,7 +14,7 @@ def load_get_notify_sessions():
     plugin_class = next(
         node
         for node in tree.body
-        if isinstance(node, ast.ClassDef) and node.name == "SteamStatusMonitorV3"
+        if isinstance(node, ast.ClassDef) and node.name == "NotificationTrackingMixin"
     )
     method = next(
         node
@@ -29,7 +31,7 @@ class NotificationRoutingTests(unittest.TestCase):
     def setUp(self):
         self.get_notify_sessions = load_get_notify_sessions()
 
-    def test_cross_linked_primary_groups_are_not_sent_twice(self):
+    def test_cross_linked_primary_groups_receive_notification_once_each(self):
         sid = "test-steam-id"
         plugin = type("Plugin", (), {})()
         plugin.notify_sessions = {"group-a": "session-a", "group-b": "session-b"}
@@ -37,10 +39,10 @@ class NotificationRoutingTests(unittest.TestCase):
         plugin.push_groups = {sid: ["group-a", "group-b"]}
 
         self.assertEqual(
-            ["session-a"], self.get_notify_sessions(plugin, "group-a", sid)
+            ["session-a", "session-b"], self.get_notify_sessions(plugin, "group-a", sid)
         )
         self.assertEqual(
-            ["session-b"], self.get_notify_sessions(plugin, "group-b", sid)
+            ["session-b", "session-a"], self.get_notify_sessions(plugin, "group-b", sid)
         )
 
     def test_linked_group_without_direct_monitoring_still_receives_notification(self):

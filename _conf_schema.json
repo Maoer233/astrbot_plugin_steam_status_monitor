@@ -9,6 +9,30 @@
     "type": "string",
     "hint": "请在 https://www.steamgriddb.com/profile/preferences/api 获取"
   },
+  "itad_api_key": {
+    "description": "IsThereAnyDeal API Key",
+    "type": "string",
+    "hint": "用于中文游戏搜索、当前价格和历史最低价查询；请在 ITAD 开发者页面获取",
+    "default": ""
+  },
+  "itad_api_base": {
+    "description": "ITAD API 地址",
+    "type": "string",
+    "hint": "通常留空使用官方 API 地址",
+    "default": ""
+  },
+  "price_region": {
+    "description": "价格查询地区代码",
+    "type": "string",
+    "hint": "例如 CN、US、JP；ITAD 使用 ISO 国家代码",
+    "default": "CN"
+  },
+  "price_compare_regions": {
+    "description": "价格对比地区",
+    "type": "string",
+    "hint": "逗号分隔国家代码，例如 CN,US,JP；留空不进行多地区对比",
+    "default": "CN,US"
+  },
   "fixed_poll_interval": {
     "description": "固定轮询间隔（秒）-修改后重启AstrBot生效",
     "type": "int",

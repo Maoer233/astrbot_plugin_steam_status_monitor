@@ -8,6 +8,7 @@ from src.presentation.web.statistics import (
     build_groups,
     build_heatmap_data,
     build_player_search_index,
+    build_report_window,
 )
 
 
@@ -135,6 +136,19 @@ class StatisticsTests(unittest.TestCase):
         )
 
         self.assertEqual(result["heatmap_data"]["2026-08-21"], 30)
+
+    def test_report_window_uses_four_am_boundary(self):
+        before_boundary = build_report_window(datetime(2026, 8, 29, 3, 30), 1, 0)
+        after_boundary = build_report_window(datetime(2026, 8, 29, 4, 30), 1, 0)
+
+        self.assertEqual(
+            (before_boundary[0].strftime("%Y-%m-%d %H:%M"), before_boundary[1].strftime("%Y-%m-%d %H:%M")),
+            ("2026-08-28 04:00", "2026-08-29 04:00"),
+        )
+        self.assertEqual(
+            (after_boundary[0].strftime("%Y-%m-%d %H:%M"), after_boundary[1].strftime("%Y-%m-%d %H:%M")),
+            ("2026-08-29 04:00", "2026-08-30 04:00"),
+        )
 
 
 if __name__ == "__main__":
