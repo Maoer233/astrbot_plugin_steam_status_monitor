@@ -30,6 +30,17 @@ class PluginStub:
     def _save_bind_data(self):
         self.bind_data_saves += 1
 
+    @property
+    def session_service(self):
+        class _Stub:
+            def discard_player(self, steam_id):
+                return None
+
+            def discard_group(self, group_id):
+                return None
+
+        return _Stub()
+
 
 def test_add_player_creates_primary_monitor_when_unassigned():
     plugin = PluginStub({"group-a": []})

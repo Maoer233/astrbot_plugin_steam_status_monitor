@@ -20,6 +20,7 @@ class MonitorStateStore:
     group_pending_logs: Dict[GroupId, Dict[str, Any]] = field(default_factory=dict)
     group_recent_games: Dict[GroupId, List[GameId]] = field(default_factory=dict)
     group_pending_quit: Dict[GroupId, Dict[str, Any]] = field(default_factory=dict)
+    playing_sessions: Dict[Tuple[GroupId, SteamId], Any] = field(default_factory=dict)
     next_poll_time: Dict[GroupId, Dict[SteamId, float]] = field(default_factory=dict)
     startup_stale_groups: Dict[GroupId, bool] = field(default_factory=dict)
     pending_end_notifications: Dict[GroupId, List[Dict[str, Any]]] = field(default_factory=dict)
@@ -57,6 +58,7 @@ for _legacy_name, _state_name in {
     "group_pending_logs": "group_pending_logs",
     "group_recent_games": "group_recent_games",
     "group_pending_quit": "group_pending_quit",
+    "playing_sessions": "playing_sessions",
     "next_poll_time": "next_poll_time",
     "_startup_stale_groups": "startup_stale_groups",
     "_pending_end_notifications": "pending_end_notifications",

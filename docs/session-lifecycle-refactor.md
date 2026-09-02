@@ -300,13 +300,13 @@ t=T+30   observe(A) → resume playing(A)，不记账、不发结束图
 
 此步可以先不改 mixin。
 
-#### 第 2 步：应用层换血
+#### 第 2 步：应用层换血（已落地）
 
-`SessionService` 替换 `pending_quit`、`_pending_quit_tasks` 和兜底循环。废弃 delayed task。deadline 只由 `handle(snapshot, now)` 检查并 `close()`。
+`SessionService.handle` 替换 `pending_quit`、`_pending_quit_tasks` 和检测循环内的确认退出。废弃 delayed task。`confirming_exit` 的 deadline 由主轮询每分钟 `tick_due(now)` 检查并 close；离线玩家可能数十分钟才再入轮询，不能只靠下一次 snapshot。
 
-删除 `start_play_times` 兼容层，列表改读 `session.started_at`。通知只订阅 `SessionClosed`。成就改为在 `SessionStarted` / `SessionClosed` 上启动或终检。
+列表、`/steam qq`、`/steam status` 改读 `session.started_at`。`group_start_play_times` 仍由 SessionService 同步投影，供旧数据 hydrate，检测循环不再直接写。开始/结束通知和成就轮询订阅 `started` / `closed`。
 
-磁盘上 `group_pending_quit` 可先当作旧 `confirming_exit` 读入，再逐步换成 `sessions.json`。`play_records` / `session_records` 格式先不动。
+磁盘新增 `playing_sessions.json`；启动时若无会话则从 `group_pending_quit` / `start_play_times` hydrate。`play_records` / `session_records` 格式不动。
 
 #### 第 3 步：可选并发模型
 

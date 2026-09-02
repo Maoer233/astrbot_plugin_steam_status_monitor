@@ -67,7 +67,14 @@ class PersistenceMixin:
                         self.group_recent_games[group_id] = json.load(f)
             except Exception as e:
                 logger.warning(f"加载 group_recent_games 失败: {e} (group_id={group_id})")
-
+        try:
+            path = os.path.join(self.data_dir, "playing_sessions.json")
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    self.session_service.load(json.load(f))
+        except Exception as e:
+            logger.warning(f"加载 playing_sessions 失败: {e}")
+        self.session_service.hydrate_from_legacy()
 
     def _save_persistent_data(self, force=False):
         '''分群保存各群的状态数据。
@@ -116,6 +123,12 @@ class PersistenceMixin:
                     json.dump(self.group_recent_games.get(group_id, []), f, ensure_ascii=False)
             except Exception as e:
                 logger.warning(f"保存 group_recent_games 失败: {e} (group_id={group_id})")
+        try:
+            path = os.path.join(self.data_dir, "playing_sessions.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.session_service.dump(), f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"保存 playing_sessions 失败: {e}")
         # 保存游玩时长记录（全局，不分群）
         try:
             self._save_play_records()

@@ -34,6 +34,8 @@ class ModularStructureTests(unittest.TestCase):
             "src/infrastructure/clients/steam.py",
             "src/infrastructure/persistence/plugin_data.py",
             "src/application/services/achievement_monitor.py",
+            "src/application/services/session_service.py",
+            "src/domain/monitoring/session.py",
             "src/domain/ranking/push_scopes.py",
             "src/presentation/web/admin_api.py",
             "src/presentation/renderers/game_start.py",

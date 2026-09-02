@@ -29,7 +29,7 @@
 - 分群 SteamID；
 - 上次玩家状态；
 - 游戏开始和退出时间；
-- 待确认退出及异步任务；
+- 待确认退出（兼容旧数据）与 playing_sessions；
 - 下一次轮询时间；
 - 启动阶段状态和待发送通知。
 
@@ -45,9 +45,11 @@
 
 | 模块 | 职责 |
 | --- | --- |
-| `polling_tracking.py` | 启动初始化、全局轮询调度、跨群 SteamID 批量去重查询 |
-| `status_change_tracking.py` | 状态变化检测、游戏开始/切换/退出编排、网络波动识别 |
-| `notification_tracking.py` | 延迟退出确认、通知聚合与发送 |
+| `polling_tracking.py` | 启动初始化、全局轮询调度、跨群 SteamID 批量去重查询、到期会话 tick |
+| `status_change_tracking.py` | 状态快照投递；会话所有权交给 SessionService |
+| `session_service.py` | 一局游戏的唯一入口：apply、记账、开始/结束通知、成就启停 |
+| `session_quit.py` | 结束卡文案与 SessionService 入口 |
+| `notification_tracking.py` | 通知聚合与发送 |
 | `achievement_tracking.py` | 成就变化跟踪与结算 |
 | `monitor_admin.py` | 管理页面的群组和绑定查询、修改边界 |
 | `qq_menu_management.py` | QQ 菜单相关管理流程 |

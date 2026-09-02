@@ -90,7 +90,10 @@ class PollingTrackingMixin:
                         self._save_persistent_data(force=True)
                     except Exception as e:
                         logger.error(f"[SteamStatusMonitor] 节流保存失败: {e}")
+                # 离线玩家可能数十分钟才再入轮询，deadline 必须每分钟单独检查。
+                self.session_service.tick_due(int(now2))
                 if not group_sids:
+                    await self._flush_pending_end_notifications()
                     await asyncio.sleep(40)  # 本轮无到点，跳过
                     continue
                 # 一次批量查询所有到点SteamID（去重），大幅减少API调用
