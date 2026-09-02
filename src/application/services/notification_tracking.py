@@ -6,6 +6,7 @@ from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image
 
 from ...shared.logging import logger
+from ...shared.utils.notify_session import is_sendable_group_session
 from ...presentation.renderers.game_start import render_game_start
 from ...presentation.renderers.game_end import render_game_end
 
@@ -44,7 +45,11 @@ class NotificationTrackingMixin:
             push_session = notify_sessions.get(normalized_push_gid)
             if push_session and push_session not in sessions:
                 sessions.append(push_session)
-        return sessions
+        return [
+            session
+            for session in sessions
+            if is_sendable_group_session(session)
+        ]
 
     async def _render_notification_image(self, noti):
         try:
@@ -126,6 +131,13 @@ class NotificationTrackingMixin:
                     continue
                 session_notifications.setdefault(session, []).append(notification)
         for session, matched_notifications in session_notifications.items():
+            if not is_sendable_group_session(session):
+                logger.warning(
+                    "跳过无效通知会话 (group_id=%s, session=%r)",
+                    group_id,
+                    session,
+                )
+                continue
             msg_chain = []
             for notification in matched_notifications:
                 if notification["type"] == "start":

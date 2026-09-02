@@ -5,8 +5,12 @@ import shutil
 import time
 
 from ...shared.logging import logger
-
 from ...shared.paths import FONTS_DIR
+from ...shared.utils.notify_session import (
+    build_group_notify_session,
+    is_sendable_group_session,
+    is_valid_group_id,
+)
 
 
 class PersistenceMixin:
@@ -135,8 +139,10 @@ class PersistenceMixin:
                 logger.info(f"[SteamStatusMonitor] 已加载 notify_sessions: {self.notify_sessions}")
             except Exception as e:
                 logger.warning(f"加载 notify_sessions 失败: {e}")
+                self.notify_sessions = {}
         else:
             self.notify_sessions = {}
+        self._sanitize_notify_sessions()
 
     def _save_notify_session(self):
         if hasattr(self, 'notify_sessions'):
@@ -163,12 +169,44 @@ class PersistenceMixin:
             self.notify_sessions = {}
         filled = 0
         for gid in getattr(self, 'group_steam_ids', {}) or {}:
-            if gid not in self.notify_sessions or not self.notify_sessions[gid]:
-                self.notify_sessions[gid] = f"{self._platform_id}:GroupMessage:0_{gid}"
-                filled += 1
+            if not is_valid_group_id(gid):
+                continue
+            current = self.notify_sessions.get(gid)
+            if is_sendable_group_session(current):
+                continue
+            self.notify_sessions[gid] = build_group_notify_session(self._platform_id, gid)
+            filled += 1
         if filled:
             self._save_notify_session()
             logger.info(f"[WebUI自动投递] 已为 {filled} 个群补全通知目标")
+
+    def _sanitize_notify_sessions(self):
+        sessions = getattr(self, "notify_sessions", {}) or {}
+        cleaned = {}
+        dropped = []
+        for gid, session in sessions.items():
+            if is_valid_group_id(gid) and is_sendable_group_session(session):
+                cleaned[str(gid)] = session
+            else:
+                dropped.append(gid)
+        self.notify_sessions = cleaned
+        if dropped:
+            logger.warning("已丢弃无效 notify_sessions: %s", dropped)
+            self._save_notify_session()
+
+    def _sanitize_group_steam_ids(self):
+        groups = getattr(self, "group_steam_ids", {}) or {}
+        cleaned = {}
+        dropped = []
+        for gid, steam_ids in groups.items():
+            if is_valid_group_id(gid):
+                cleaned[str(gid)] = steam_ids
+            else:
+                dropped.append(gid)
+        if dropped:
+            self.monitor_state.group_steam_ids = cleaned
+            logger.warning("已丢弃无效监控群: %s", dropped)
+            self._save_group_steam_ids()
 
     def _ensure_fonts(self):
         """检测插件fonts目录是否有NotoSansHans系列字体，有则复制到缓存目录并缓存路径"""
@@ -221,6 +259,7 @@ class PersistenceMixin:
             except Exception as e:
                 logger.warning(f"加载 steam_groups.json 失败: {e}")
         self.monitor_state.group_steam_ids = groups
+        self._sanitize_group_steam_ids()
 
     def _save_group_steam_ids(self):
         """保存所有群的 SteamID 列表到 steam_groups.json"""

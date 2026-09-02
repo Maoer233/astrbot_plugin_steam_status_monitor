@@ -41,6 +41,7 @@ from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 from ..shared.utils.price import summary_to_cny
+from ..shared.utils.notify_session import is_sendable_group_session, is_valid_group_id
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
 # 正常运行时 states.json 约每 5 分钟落盘一次（最慢轮询间隔 30 分钟 + 保存节流 5 分钟），
@@ -306,6 +307,9 @@ class SteamStatusMonitorV3(
     async def steam_on(self, event: AstrMessageEvent):
         '''手动启动Steam状态监控轮询（分群）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        if not is_valid_group_id(group_id):
+            yield event.plain_result("请在群聊中使用该命令，私聊无法启动群监控。")
+            return
         self.group_monitor_enabled[group_id] = True
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
@@ -355,6 +359,9 @@ class SteamStatusMonitorV3(
         '''添加SteamID到本群监控列表（分群），支持逗号分隔多个ID，支持SteamID/个人资料链接/自定义ID/好友码
         末尾可加 @用户 [备注名] 绑定QQ与SteamID'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        if not is_valid_group_id(group_id):
+            yield event.plain_result("请在群聊中使用该命令，或到 WebUI 填写有效群号后再添加。")
+            return
         # 解析 @用户 [备注名] 后缀（多参数接收，兼容 AstrBot 参数分割）
         bind_qq = None
         bind_nickname = None
@@ -959,9 +966,9 @@ class SteamStatusMonitorV3(
                     session = getattr(self, "notify_sessions", {}).get(
                         target_group_id
                     )
-                    if not session:
+                    if not is_sendable_group_session(session):
                         logger.warning(
-                            f"[排行榜] 群 {target_group_id} 未找到推送会话，跳过"
+                            f"[排行榜] 群 {target_group_id} 未找到有效推送会话，跳过"
                         )
                         continue
                     await self.context.send_message(
@@ -1139,6 +1146,9 @@ class SteamStatusMonitorV3(
         if param == "all":
             self.rank_push_all = True
             group_id = event.get_group_id() or "default"
+            if not is_valid_group_id(group_id):
+                yield event.plain_result("请在群聊中开启排行榜推送。")
+                return
             if group_id not in self.rank_push_groups:
                 self.rank_push_groups.append(group_id)
             self._save_rank_push_groups()
@@ -1146,6 +1156,9 @@ class SteamStatusMonitorV3(
         else:
             self.rank_push_all = False
             group_id = event.get_group_id() or "default"
+            if not is_valid_group_id(group_id):
+                yield event.plain_result("请在群聊中开启排行榜推送。")
+                return
             if group_id not in self.rank_push_groups:
                 self.rank_push_groups.append(group_id)
                 self._save_rank_push_groups()

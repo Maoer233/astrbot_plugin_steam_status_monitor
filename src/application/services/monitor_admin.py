@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ...domain.monitoring import MonitorStateStore
+from ...shared.utils.notify_session import is_valid_group_id
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,8 @@ class MonitorAdminService:
         return await self._plugin.resolve_steam_input(value)
 
     def add_player(self, group_id: str, steam_id: str) -> GroupMutationResult:
+        if not is_valid_group_id(group_id):
+            return GroupMutationResult(False, "invalid group_id")
         steam_ids = self.groups.setdefault(group_id, [])
         if steam_id in steam_ids:
             return GroupMutationResult(False, "already exists")
@@ -139,6 +142,8 @@ class MonitorAdminService:
             self._plugin._save_bind_data()
 
     def add_group(self, group_id: str) -> GroupMutationResult:
+        if not is_valid_group_id(group_id):
+            return GroupMutationResult(False, "invalid group_id")
         if group_id in self.groups:
             return GroupMutationResult(False, "already exists")
         self.groups[group_id] = []
