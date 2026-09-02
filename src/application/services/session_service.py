@@ -22,14 +22,7 @@ class SessionService:
         if session is not None and session.state in ("playing", "confirming_exit"):
             if gameid is None or str(gameid) == str(session.gameid):
                 return session.started_at
-            return None
-        times = (getattr(self._plugin, "group_start_play_times", {}) or {}).get(str(group_id), {})
-        sid_times = times.get(str(sid), times.get(sid))
-        if isinstance(sid_times, dict):
-            if gameid is None:
-                return None
-            return sid_times.get(str(gameid), sid_times.get(gameid))
-        return sid_times if gameid is None else None
+        return None
 
     async def handle(
         self,
@@ -45,8 +38,6 @@ class SessionService:
     ):
         key = self._key(group_id, sid)
         current = self._sessions().get(key)
-        if current is None:
-            current = self._restore_from_projection(group_id, sid, observed_gameid)
         snapshot = {"steamid": str(sid), "group_id": str(group_id), "gameid": observed_gameid}
         next_session, events = apply(
             current,
@@ -56,7 +47,6 @@ class SessionService:
             group_id=str(group_id),
         )
         self._store(group_id, sid, next_session)
-        self._sync_projection(group_id, sid, next_session)
         for event in events:
             await self._dispatch(
                 event,
@@ -96,7 +86,6 @@ class SessionService:
                 group_id=group_id,
             )
             self._store(group_id, sid, next_session)
-            self._sync_projection(group_id, sid, next_session)
             for event in events:
                 self._dispatch_sync(event, skip_push=False)
             if events:
@@ -114,10 +103,10 @@ class SessionService:
             self._sessions().pop(key, None)
             self._meta().pop(key, None)
 
-    def hydrate_from_legacy(self):
-        pending_all = getattr(self._plugin, "group_pending_quit", {}) or {}
-        start_all = getattr(self._plugin, "group_start_play_times", {}) or {}
-        last_all = getattr(self._plugin, "group_last_states", {}) or {}
+    def hydrate_from_legacy(self, pending_all=None, start_all=None, last_all=None):
+        pending_all = pending_all or {}
+        start_all = start_all or {}
+        last_all = last_all if last_all is not None else (getattr(self._plugin, "group_last_states", {}) or {})
         for group_id, pending_sids in pending_all.items():
             for sid, games in (pending_sids or {}).items():
                 if self.get(group_id, sid) is not None:
@@ -179,8 +168,6 @@ class SessionService:
                     "game_name": last.get("gameextrainfo") or "未知游戏",
                     "avatar_url": last.get("avatarfull") or last.get("avatar"),
                 }
-        if pending_all:
-            pending_all.clear()
 
     def dump(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
         payload = {}
@@ -255,32 +242,6 @@ class SessionService:
         else:
             self._sessions()[key] = session
 
-    def _sync_projection(self, group_id, sid, session: Optional[PlayingSession]):
-        times = self._plugin.group_start_play_times.setdefault(str(group_id), {})
-        if session is None or session.state == "closed":
-            times.pop(str(sid), None)
-            return
-        times[str(sid)] = {str(session.gameid): int(session.started_at)}
-
-    def _restore_from_projection(self, group_id, sid, gameid) -> Optional[PlayingSession]:
-        if not gameid or str(gameid) == "0":
-            return None
-        started_at = None
-        sid_times = (getattr(self._plugin, "group_start_play_times", {}) or {}).get(str(group_id), {}).get(str(sid))
-        if isinstance(sid_times, dict):
-            started_at = sid_times.get(str(gameid), sid_times.get(gameid))
-        elif sid_times:
-            started_at = sid_times
-        if not started_at:
-            return None
-        return PlayingSession(
-            sid=str(sid),
-            gameid=str(gameid),
-            started_at=int(started_at),
-            state="playing",
-            group_id=str(group_id),
-        )
-
     @staticmethod
     def _pick_pending(games):
         if not isinstance(games, dict):
@@ -339,9 +300,6 @@ class SessionService:
         last_quit.setdefault(session.sid, {})[session.gameid] = int(session.closed_at or session.exited_at or 0)
 
         task_key = (session.group_id, session.sid, session.gameid)
-        pending_task = getattr(plugin, "_pending_quit_tasks", {}).pop(task_key, None)
-        if pending_task:
-            pending_task.cancel()
         poll_task = getattr(plugin, "achievement_poll_tasks", {}).pop(task_key, None)
         if poll_task:
             poll_task.cancel()

@@ -107,11 +107,155 @@ Go channel / `asyncio.Queue` 只解决投递，不解决所有权。只要兜底
 
 ## 3. 解决方案
 
-### 3.1 目标不变量
+### 3.1 方案选型：显式状态 vs 隐式状态
+
+重构核心是「一局游戏只有一个所有者」，需要持久化三个核心信息：
+
+1. **当前游戏 ID** —— 判断切换/恢复的对象
+2. **开始时间** —— 计算游戏时长（`duration = now - started_at`）
+3. **消抖截止时间** —— 区分正在游玩 / 确认退出中
+
+**这三个字段缺一不可**。区别只在于：用显式状态枚举，还是通过字段组合推导状态。
+
+#### 方案 A：显式状态（本文档采用）
+
+```python
+class PlayingSession:
+    game_id: str                                        # 游戏 ID
+    started_at: int                                     # 开始时间（秒级时间戳）
+    state: Literal["playing", "confirming_exit", "closed"]  # 显式状态枚举
+    confirmed_at: int | None                            # 进入 confirming_exit 的时间
+    group_id: str                                       # 所属群组（多群隔离）
+```
+
+**字段语义**：
+
+| 字段 | 含义 | 约束 |
+|------|------|------|
+| `game_id` | 当前会话的游戏 ID | 用于判断切换、恢复、结算对象 |
+| `started_at` | 游戏开始时间 | 计算时长：`duration = now - started_at` |
+| `state` | 会话状态 | `playing` / `confirming_exit` / `closed` |
+| `confirmed_at` | 进入消抖的时间 | `state=playing` 时为 `None`；`confirming_exit` 时必须有值；`deadline = confirmed_at + 180` |
+| `group_id` | 所属群组 | 多群监控同一 sid 时，各群各持有一份 session |
+
+**状态转换**：
+
+```python
+# A 开始游玩
+state = "playing", confirmed_at = None
+
+# A 消失，进入消抖
+observe(∅) → state = "confirming_exit", confirmed_at = now
+
+# 180 秒内回到 A（波动恢复）
+observe(A) and (now < confirmed_at + 180) → state = "playing", confirmed_at = None
+
+# 消抖到期或切换游戏
+(now >= confirmed_at + 180) or observe(B) → state = "closed" → 记账
+```
+
+**优点**：
+- ✅ 状态显式，代码可读性高（`if session.state == "playing"`）
+- ✅ 类型系统保证状态转换合法（ADT / tagged union）
+- ✅ 易于扩展新状态（如 `paused`）
+- ✅ 新人容易理解
+
+**缺点**：
+- ⚠️ 字段较多（4-5 个）
+- ⚠️ 需要写状态转换方法（但可以用纯函数 `apply()` 统一处理）
+
+---
+
+#### 方案 B：隐式状态（极简字段）
+
+```python
+{
+    "current_game": "730",          # 当前游戏
+    "started_at": 1725235200,       # 开始时间
+    "debounce_deadline": None       # None=playing, 有值=confirming_exit
+}
+```
+
+**状态推导**：
+
+```python
+# 状态通过字段组合推导
+if debounce_deadline is None:
+    state = "playing"
+else:
+    state = "confirming_exit"
+    deadline = debounce_deadline
+```
+
+**转换逻辑**：
+
+```python
+# A 开始游玩
+current_game = "A", started_at = t0, debounce_deadline = None
+
+# A 消失，进入消抖
+observe(∅) → debounce_deadline = now + 180
+# ✅ current_game 保持不变（关键！不能清空）
+
+# 180 秒内回到 A（波动恢复）
+observe(A) and (A == current_game) → debounce_deadline = None
+
+# 消抖到期
+now >= debounce_deadline → 结算 current_game，时长 = now - started_at
+
+# 切换游戏
+observe(B) and (B != current_game) → 立即结算 A，写入 current_game = B, started_at = now
+```
+
+**优点**：
+- ✅ 字段最少（3 个）
+- ✅ 运行时判断逻辑简单
+- ✅ 只在状态变化时写入
+
+**缺点**：
+- ⚠️ 状态不显式，需要团队约定（"`debounce_deadline = None` 表示 playing"）
+- ⚠️ 可能误用字段（如在 playing 状态访问 deadline）
+- ⚠️ 扩展新状态需要增加更多字段组合
+- ⚠️ 代码可读性稍低（需要理解隐式约定）
+
+**关键约定**（必须明确）：
+1. `debounce_deadline = None` 时，系统处于 playing 状态
+2. `current_game` 和 `started_at` 在消抖期间**保持不变**
+3. 看到新游戏时，立即结算当前游戏（无论是否在消抖）
+
+---
+
+#### 方案对比
+
+| 维度 | 隐式状态（方案 B） | 显式状态（方案 A） |
+|------|-------------------|-------------------|
+| **字段数** | ✅ 3 个 | ⚠️ 4-5 个 |
+| **状态清晰度** | ⚠️ 需通过 `debounce_deadline` 推导 | ✅ `state` 字段直接表达 |
+| **类型安全** | ⚠️ 可能误用字段 | ✅ 类型系统保证状态转换合法 |
+| **代码简洁性** | ✅ 判断逻辑更简单 | ⚠️ 需要写状态机转换方法 |
+| **易扩展** | ⚠️ 新增状态需要更多字段组合 | ✅ 直接加枚举值 |
+| **可读性** | ⚠️ 需要理解"None=playing"的约定 | ✅ `state="playing"` 一目了然 |
+| **新人友好度** | ⚠️ 需要熟悉隐式约定 | ✅ 状态机显式，易于理解 |
+
+---
+
+#### 本文档采用方案 A（显式状态）
+
+**理由**：
+1. **可维护性优先**：显式状态让代码意图更清晰，降低长期维护成本
+2. **类型安全**：Python 类型提示可以保证状态转换合法性
+3. **团队协作**：新人容易理解状态机图和代码对应关系
+4. **可扩展性**：未来如需新增状态（如 `paused`、`suspended`），只需加枚举值
+
+如果团队追求"最少字段"，方案 B 也**完全可行**，但需要在代码注释和文档中明确约定三条规则（见上文"关键约定"）。两种方案本质相同，都能正确处理所有场景。
+
+---
+
+### 3.2 状态机设计（方案 A：显式状态）
 
 一局游戏只有一个所有者：`PlayingSession`。会话按 **`(group_id, sid)`** 持有：同一群的同一玩家同一时刻最多一局 `playing`。多群监控同一 sid 时，各群各持有一份 session，各自 close；`session_id` 幂等去重，避免排行榜重复加分钟。
 
-状态机：
+#### 状态机图：
 
 ```text
                     observe(gameid=A)
@@ -136,7 +280,7 @@ Go channel / `asyncio.Queue` 只解决投递，不解决所有权。只要兜底
                                       playing(B)
 ```
 
-规则：
+#### 不变量规则：
 
 1. 同一 `(group_id, sid)` 同一时刻最多一局 `playing`。Steam 摘要本来也只有一个 `gameid`。
 2. `switch`（一次快照里 A → B）立即 `close(A)`，再 `open(B)`。**不进入** `confirming_exit`，不写 pending。
@@ -146,7 +290,73 @@ Go channel / `asyncio.Queue` 只解决投递，不解决所有权。只要兜底
 6. 拉 Steam 的轮询协程只产快照，不直接结算、不发结束图、不改投影。`SessionService.handle(snapshot, now)`（内部 `apply()`）是唯一能 `close()` 的入口。deadline 是 handle 的输入，不是检测循环自己的副作用。
 7. 确认退出用 deadline，不用平行的 `sleep` 任务。每轮把 `now` 交给 handle；到期则同一个 `close()`。终态禁止第三条退出路径。
 
-### 3.2 模块切分
+---
+
+### 3.3 如果采用方案 B（隐式状态）的设计调整
+
+若团队选择方案 B（3 字段隐式状态），状态机逻辑保持不变，只需调整数据结构：
+
+```python
+# 隐式状态数据结构
+{
+    "current_game": "730",          # 当前游戏（消抖期间不变）
+    "started_at": 1725235200,       # 开始时间
+    "debounce_deadline": None       # None=playing, 有值=confirming_exit
+}
+```
+
+**状态判断**：
+```python
+def get_state(session):
+    return "playing" if session["debounce_deadline"] is None else "confirming_exit"
+
+def get_deadline(session):
+    return session["debounce_deadline"]  # 仅在 confirming_exit 时有效
+```
+
+**转换逻辑映射**：
+
+| 场景 | 方案 A（显式） | 方案 B（隐式） |
+|------|---------------|---------------|
+| 开始游戏 A | `state="playing", confirmed_at=None` | `debounce_deadline=None` |
+| A 消失，进入消抖 | `state="confirming_exit", confirmed_at=t` | `debounce_deadline=t+180`<br/>✅ `current_game` 保持 "A" |
+| 180s 内回到 A | `state="playing", confirmed_at=None` | `debounce_deadline=None` |
+| 消抖到期 | `state="closed"` → 结算 | `now >= debounce_deadline` → 结算 |
+| 切换到 B | 立即 `close(A)` + `open(B)` | 立即结算 A，写入 `current_game="B", debounce_deadline=None` |
+
+**必须遵守的约定**：
+1. **`current_game` 在消抖期间不变** —— 看到 ∅ 时不要清空，否则无法判断恢复对象
+2. **`debounce_deadline` 的存在性表示状态** —— `None` = playing，有值 = confirming_exit
+3. **看到新游戏立即结算** —— `new_game != current_game` 时，立即结算 `current_game`
+
+**代码示例**（隐式状态）：
+```python
+def handle_snapshot(session, gameid, now):
+    if gameid is None:
+        # 游戏消失，进入消抖
+        if session["debounce_deadline"] is None:
+            session["debounce_deadline"] = now + 180
+    elif gameid == session["current_game"]:
+        # 回到同一游戏（波动恢复）
+        if session["debounce_deadline"] is not None:
+            session["debounce_deadline"] = None  # 取消消抖
+    else:
+        # 切换到新游戏，立即结算旧游戏
+        close_session(session, now)
+        session["current_game"] = gameid
+        session["started_at"] = now
+        session["debounce_deadline"] = None
+
+    # 检查消抖到期
+    if session["debounce_deadline"] and now >= session["debounce_deadline"]:
+        close_session(session, now)
+```
+
+两种方案的**不变量规则（§3.2）完全相同**，只是实现细节不同。选择哪种取决于团队对"字段数 vs 显式性"的权衡。
+
+---
+
+### 3.4 模块切分
 
 沿用现有 `src/domain` / `src/application`，把「检测」和「会话」拆开：
 
@@ -188,7 +398,7 @@ application/services/session_service.py
 
 不要引入：Go、每游戏一条 Queue、第三条「以防万一」的退出路径。
 
-### 3.3 与现有代码的对应
+### 3.5 与现有代码的对应
 
 | 目标概念 | 现有对应 | 重构动作 |
 | --- | --- | --- |
@@ -216,7 +426,7 @@ application/services/session_service.py
        kind == start 且 fluctuation（pending 仍是同一 gameid）→ session.resume()
 ```
 
-### 3.4 场景时序（实施前验收基线）
+### 3.6 场景时序（实施前验收基线）
 
 三种主路径，每种都应「记账一次、结束通知一次、投影收回」。
 
@@ -251,7 +461,7 @@ t=T+30   observe(A) → resume playing(A)，不记账、不发结束图
 | A → B → A | 第一次 switch 已 close(A) 且不留 pending；再切回 A 是新 `start`，新一局 |
 | 多群监控同一 sid，A → B | 各群各 close 一次；`session_id` 相同则 `_record_session` 跳过；`_record_playtime` 暂留 5 分钟缓存 |
 
-### 3.5 分阶段落地
+### 3.7 分阶段落地
 
 #### 第 0 步：止血（可单独合入）
 
@@ -308,11 +518,13 @@ t=T+30   observe(A) → resume playing(A)，不记账、不发结束图
 
 磁盘新增 `playing_sessions.json`；启动时若无会话则从 `group_pending_quit` / `start_play_times` hydrate。`play_records` / `session_records` 格式不动。
 
-#### 第 3 步：可选并发模型
+#### 第 3 步：清理旧字段（已落地）
 
-若以后要并行处理大量 sid，再给每个 sid 一个 `asyncio.Task` + `Queue`。当前一轮询协程串行 `apply()` 足够。过早上 channel 只会把所有权问题藏进队列。
+运行时不再持有 `group_pending_quit`、`_pending_quit_tasks`、`group_start_play_times`。列表只读 `session.started_at`。启动仍一次性从旧 `pending_quit` / `start_play_times` 文件 hydrate 进 `playing_sessions.json`，之后不再回写这两类文件。
 
-### 3.6 兼容边界
+并行 sid 队列仍是可选后续，当前一轮询协程串行 `apply()` 足够。
+
+### 3.8 兼容边界
 
 保持：
 
@@ -332,7 +544,7 @@ t=T+30   observe(A) → resume playing(A)，不记账、不发结束图
 
 不自动清理历史里已经丢失的 A 局。若要修旧数据，应先备份，再按 `SteamID + session_id` 审查，无法从 Steam 摘要补回从未写入的局。
 
-### 3.7 明确不要做的事
+### 3.9 明确不要做的事
 
 - 不要引入 Go 或跨语言运行时。
 - 不要先加 `asyncio.Queue` 再设计状态机。
@@ -344,8 +556,28 @@ t=T+30   observe(A) → resume playing(A)，不记账、不发结束图
 - 不要把 `network_fluctuation` 做成第六种 kind。
 - 不要上 Redis TTL 做防刷屏；插件单进程、JSON 落盘，进程内 deadline 即可。
 
-## 4. 建议的下一步
+---
+
+## 4. 方案选型总结
+
+### 显式状态 vs 隐式状态
+
+| 方案 | 适用场景 | 优势 | 劣势 |
+|------|---------|------|------|
+| **方案 A：显式状态** | 追求可维护性、类型安全、团队协作 | 状态清晰、易扩展、新人友好 | 字段较多 |
+| **方案 B：隐式状态** | 追求极简字段、小型项目 | 字段最少、判断简单 | 需要约定、可读性稍低 |
+
+**本文档默认采用方案 A（显式状态）**，理由：
+1. 可维护性优先于极简字段数
+2. 状态机显式表达，降低理解成本
+3. 类型系统可以保证状态转换合法性
+
+**如果团队选择方案 B（隐式状态）**，参考 §3.3 的设计调整，核心不变量（§3.2）保持一致。
+
+---
+
+## 5. 建议的下一步
 
 先做第 0 步止血和第 1 步领域单测。这两步不碰渲染和 Steam API，可以独立合入，并作为后续 `PlayingSession` 的验收基线。
 
-实施第 0 步前，用 §3.4 的三条主路径写回归测试，确认每种场景的记账次数、通知次数和 pending / 投影变化。
+实施第 0 步前，用 §3.6 的三条主路径写回归测试，确认每种场景的记账次数、通知次数和 pending / 投影变化。

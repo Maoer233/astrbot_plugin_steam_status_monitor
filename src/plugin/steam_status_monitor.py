@@ -75,11 +75,9 @@ class SteamStatusMonitorV3(
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
         self.group_last_states = {}       # {group_id: {steamid: status}}
-        self.group_start_play_times = {}  # {group_id: {steamid: {gameid: start_time}}}
         self.group_last_quit_times = {}   # {group_id: {steamid: {gameid: quit_time}}}
         self.group_pending_logs = {}      # {group_id: {steamid: {gameid: log_dict}}}
         self.group_recent_games = {}      # {group_id: [gameid, ...]}
-        self.group_pending_quit = {}      # 兼容旧数据；第 2 步后不再写入
         self._session_meta = {}           # {(group_id, sid): {player_name, game_name, avatar_url}}
         # 超能力缓存和能力列表
         self._superpower_cache = {}  # {(steamid, date): superpower}
@@ -254,15 +252,10 @@ class SteamStatusMonitorV3(
         for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None)):
             if t and not t.done():
                 t.cancel()
-        # 取消残留的延迟退出检查任务（第 2 步后不再新建）
-        if hasattr(self, '_pending_quit_tasks'):
-            for task in self._pending_quit_tasks.values():
+        if hasattr(self, 'achievement_poll_tasks'):
+            for task in self.achievement_poll_tasks.values():
                 task.cancel()
-            self._pending_quit_tasks.clear()
-        # 停止所有成就定时任务
-        for task in self.achievement_poll_tasks.values():
-            task.cancel()
-        self.achievement_poll_tasks.clear()
+            self.achievement_poll_tasks.clear()
         self.achievement_snapshots.clear()
         # 保存持久化数据（强制落盘，不节流）
         self._save_persistent_data(force=True)
@@ -821,10 +814,8 @@ class SteamStatusMonitorV3(
     async def steam_rs(self, event: AstrMessageEvent):
         '''清除所有状态并初始化（重启插件用）'''
         self.group_last_states.clear()
-        self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
-        self.group_pending_quit.clear()
         self.playing_sessions.clear()
         getattr(self, "_session_meta", {}).clear()
         self.group_recent_games.clear()
@@ -1479,9 +1470,6 @@ class SteamStatusMonitorV3(
     @filter.command("steam clear_allids")
     async def steam_clear_allids(self, event: AstrMessageEvent):
         '''删除所有群聊的所有已监控SteamID，并清空相关状态数据'''
-        for task in self._pending_quit_tasks.values():
-            task.cancel()
-        self._pending_quit_tasks.clear()
         for task in self.achievement_poll_tasks.values():
             task.cancel()
         self.achievement_poll_tasks.clear()
@@ -1494,10 +1482,8 @@ class SteamStatusMonitorV3(
         self.group_achievement_enabled.clear()
         self.next_poll_time.clear()
         self.group_last_states.clear()
-        self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
-        self.group_pending_quit.clear()
         self.playing_sessions.clear()
         getattr(self, "_session_meta", {}).clear()
         self.group_recent_games.clear()
@@ -1525,10 +1511,6 @@ class SteamStatusMonitorV3(
             yield event.plain_result(f"群聊 {group_id} 未绑定任何SteamID，无需清理。")
             return
 
-        for task_key in list(self._pending_quit_tasks):
-            if task_key[0] == group_id:
-                task = self._pending_quit_tasks.pop(task_key)
-                task.cancel()
         for sid in list(self.group_steam_ids.get(group_id, [])):
             self.push_groups.pop(sid, None)
         for sid in routed_sids:
@@ -1539,10 +1521,8 @@ class SteamStatusMonitorV3(
                 self.push_groups.pop(sid, None)
         self.group_steam_ids.pop(group_id, None)
         self.group_last_states.pop(group_id, None)
-        self.group_start_play_times.pop(group_id, None)
         self.group_last_quit_times.pop(group_id, None)
         self.group_pending_logs.pop(group_id, None)
-        self.group_pending_quit.pop(group_id, None)
         self.session_service.discard_group(group_id)
         self.group_recent_games.pop(group_id, None)
         self.next_poll_time.pop(group_id, None)

@@ -103,7 +103,6 @@ class MonitorAdminService:
         state = self._state
         for mapping_name in (
             "group_last_states",
-            "group_start_play_times",
             "group_last_quit_times",
             "next_poll_time",
         ):
@@ -112,22 +111,16 @@ class MonitorAdminService:
                 mapping[group_id].pop(steam_id, None)
                 if not mapping[group_id]:
                     mapping.pop(group_id, None)
-        for mapping_name in ("group_pending_logs", "group_pending_quit"):
-            mapping = getattr(state, mapping_name, {})
-            for group_id in list(mapping):
-                mapping[group_id].pop(steam_id, None)
-                if not mapping[group_id]:
-                    mapping.pop(group_id, None)
+        mapping = getattr(state, "group_pending_logs", {})
+        for group_id in list(mapping):
+            mapping[group_id].pop(steam_id, None)
+            if not mapping[group_id]:
+                mapping.pop(group_id, None)
         pending = getattr(state, "pending_end_notifications", {})
         for group_id in list(pending):
             pending[group_id] = [item for item in pending[group_id] if str(item.get("sid", item.get("steamid", ""))) != steam_id]
             if not pending[group_id]:
                 pending.pop(group_id, None)
-        for key in list(getattr(state, "pending_quit_tasks", {})):
-            if len(key) >= 2 and str(key[1]) == steam_id:
-                task = state.pending_quit_tasks.pop(key, None)
-                if task:
-                    task.cancel()
         for attr in ("achievement_poll_tasks", "achievement_snapshots", "achievement_fail_count"):
             cache = getattr(self._plugin, attr, {})
             for key in list(cache):
@@ -174,10 +167,8 @@ class MonitorAdminService:
 
         self.groups.pop(group_id, None)
         self._state.group_last_states.pop(group_id, None)
-        self._state.group_start_play_times.pop(group_id, None)
         self._state.group_last_quit_times.pop(group_id, None)
         self._state.group_pending_logs.pop(group_id, None)
-        self._state.group_pending_quit.pop(group_id, None)
         self._plugin.session_service.discard_group(group_id)
         self._state.group_recent_games.pop(group_id, None)
         self._state.next_poll_time.pop(group_id, None)

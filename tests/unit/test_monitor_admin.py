@@ -118,7 +118,6 @@ def test_remove_player_from_primary_removes_all_routes_and_runtime_state():
     sid = "76561198000000001"
     plugin = PluginStub({"primary": [sid], "secondary": []}, {sid: ["secondary", "third"]})
     plugin.monitor_state.group_last_states = {"primary": {sid: {"gameid": "1"}}}
-    plugin.monitor_state.group_start_play_times = {"primary": {sid: {"1": 10}}}
     plugin.monitor_state.next_poll_time = {"primary": {sid: 20.0}}
     service = MonitorAdminService(plugin)
 
@@ -129,6 +128,5 @@ def test_remove_player_from_primary_removes_all_routes_and_runtime_state():
     assert plugin.group_steam_ids == {"secondary": []}
     assert plugin.push_groups == {}
     assert plugin.monitor_state.group_last_states == {}
-    assert plugin.monitor_state.group_start_play_times == {}
     assert plugin.monitor_state.next_poll_time == {}
     assert plugin.persistent_saves == 1

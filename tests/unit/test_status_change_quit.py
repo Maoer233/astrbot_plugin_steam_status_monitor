@@ -15,14 +15,11 @@ class FakePlugin(SessionQuitMixin, StatusChangeTrackingMixin):
         }
         self.group_steam_ids = {"g1": ["s1"]}
         self.group_last_states = {"g1": {}}
-        self.group_start_play_times = {}
         self.group_last_quit_times = {}
         self.group_recent_games = {}
-        self.group_pending_quit = {}
         self.playing_sessions = {}
         self._session_meta = {}
         self._pending_end_notifications = {}
-        self._pending_quit_tasks = {}
         self.achievement_poll_tasks = {}
         self.achievement_snapshots = {}
         self.achievement_monitor = None
@@ -65,8 +62,6 @@ class StatusChangeQuitTests(unittest.IsolatedAsyncioTestCase):
         with patch("src.application.services.status_change_tracking.time.time", return_value=1600):
             await plugin.check_status_change("g1", single_sid="s1")
         self.assertEqual([("s1", "A", "GameA", 10.0)], plugin.playtime)
-        self.assertEqual({}, plugin.group_pending_quit)
-        self.assertEqual({}, plugin._pending_quit_tasks)
         self.assertEqual("B", plugin.session_service.get("g1", "s1").gameid)
 
     async def test_exit_enters_confirming_exit_without_delayed_task(self):
@@ -76,7 +71,6 @@ class StatusChangeQuitTests(unittest.IsolatedAsyncioTestCase):
         with patch("src.application.services.status_change_tracking.time.time", return_value=1100):
             await plugin.check_status_change("g1", single_sid="s1")
         self.assertEqual([], plugin.playtime)
-        self.assertEqual({}, plugin._pending_quit_tasks)
         self.assertEqual("confirming_exit", plugin.session_service.get("g1", "s1").state)
 
 

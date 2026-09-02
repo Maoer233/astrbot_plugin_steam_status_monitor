@@ -16,6 +16,8 @@ class PersistenceMixin:
 
     def _load_persistent_data(self):
         # 分群加载各群的状态数据
+        legacy_start_play_times = {}
+        legacy_pending_quit = {}
         for group_id in self.group_steam_ids:
             try:
                 path = self._get_group_data_path(group_id, "states")
@@ -28,17 +30,9 @@ class PersistenceMixin:
                 path = self._get_group_data_path(group_id, "start_play_times")
                 if os.path.exists(path):
                     with open(path, "r", encoding="utf-8") as f:
-                        self.group_start_play_times[group_id] = json.load(f)
-                        # 数据迁移：旧格式 int → 新格式 {gameid: timestamp}
-                        migrated = 0
-                        for _sid, _val in list(self.group_start_play_times[group_id].items()):
-                            if not isinstance(_val, dict):
-                                self.group_start_play_times[group_id][_sid] = {}
-                                migrated += 1
-                        if migrated:
-                            logger.info(f"[数据迁移] group_id={group_id}: {migrated} 个玩家 start_play_times 从 int 迁移为 dict")
+                        legacy_start_play_times[group_id] = json.load(f)
             except Exception as e:
-                logger.warning(f"加载 group_start_play_times 失败: {e} (group_id={group_id})")
+                logger.warning(f"加载旧 start_play_times 失败: {e} (group_id={group_id})")
             try:
                 path = self._get_group_data_path(group_id, "last_quit_times")
                 if os.path.exists(path):
@@ -57,9 +51,9 @@ class PersistenceMixin:
                 path = self._get_group_data_path(group_id, "pending_quit")
                 if os.path.exists(path):
                     with open(path, "r", encoding="utf-8") as f:
-                        self.group_pending_quit[group_id] = json.load(f)
+                        legacy_pending_quit[group_id] = json.load(f)
             except Exception as e:
-                logger.warning(f"加载 group_pending_quit 失败: {e} (group_id={group_id})")
+                logger.warning(f"加载旧 pending_quit 失败: {e} (group_id={group_id})")
             try:
                 path = self._get_group_data_path(group_id, "recent_games")
                 if os.path.exists(path):
@@ -74,7 +68,11 @@ class PersistenceMixin:
                     self.session_service.load(json.load(f))
         except Exception as e:
             logger.warning(f"加载 playing_sessions 失败: {e}")
-        self.session_service.hydrate_from_legacy()
+        self.session_service.hydrate_from_legacy(
+            pending_all=legacy_pending_quit,
+            start_all=legacy_start_play_times,
+            last_all=self.group_last_states,
+        )
 
     def _save_persistent_data(self, force=False):
         '''分群保存各群的状态数据。
@@ -94,12 +92,6 @@ class PersistenceMixin:
             except Exception as e:
                 logger.warning(f"保存 group_last_states 失败: {e} (group_id={group_id})")
             try:
-                path = self._get_group_data_path(group_id, "start_play_times")
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(self.group_start_play_times.get(group_id, {}), f, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"保存 group_start_play_times 失败: {e} (group_id={group_id})")
-            try:
                 path = self._get_group_data_path(group_id, "last_quit_times")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(self.group_last_quit_times.get(group_id, {}), f, ensure_ascii=False)
@@ -111,12 +103,6 @@ class PersistenceMixin:
                     json.dump(self.group_pending_logs.get(group_id, {}), f, ensure_ascii=False)
             except Exception as e:
                 logger.warning(f"保存 group_pending_logs 失败: {e} (group_id={group_id})")
-            try:
-                path = self._get_group_data_path(group_id, "pending_quit")
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(self.group_pending_quit.get(group_id, {}), f, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"保存 group_pending_quit 失败: {e} (group_id={group_id})")
             try:
                 path = self._get_group_data_path(group_id, "recent_games")
                 with open(path, "w", encoding="utf-8") as f:

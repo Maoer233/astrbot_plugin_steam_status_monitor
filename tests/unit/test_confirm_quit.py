@@ -6,15 +6,12 @@ from src.application.services.session_quit import SessionQuitMixin
 class FakePlugin(SessionQuitMixin):
     def __init__(self):
         self.config = {"enable_game_end_notify": True, "enable_achievement_poll": False}
-        self.group_start_play_times = {}
         self.group_last_quit_times = {}
         self.group_last_states = {}
         self.group_recent_games = {}
-        self.group_pending_quit = {}
         self.playing_sessions = {}
         self._session_meta = {}
         self._pending_end_notifications = {}
-        self._pending_quit_tasks = {}
         self.achievement_poll_tasks = {}
         self.achievement_snapshots = {}
         self.achievement_monitor = None

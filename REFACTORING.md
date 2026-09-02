@@ -28,8 +28,8 @@
 
 - 分群 SteamID；
 - 上次玩家状态；
-- 游戏开始和退出时间；
-- 待确认退出（兼容旧数据）与 playing_sessions；
+- 游戏退出时间；
+- playing_sessions；启动时一次性 hydrate 旧 pending_quit / start_play_times 文件；
 - 下一次轮询时间；
 - 启动阶段状态和待发送通知。
 

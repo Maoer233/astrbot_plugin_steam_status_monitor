@@ -14,15 +14,12 @@ class FakePlugin(SessionQuitMixin, StatusChangeTrackingMixin):
             "enable_achievement_poll": False,
             "enable_network_fluctuation_notify": False,
         }
-        self.group_start_play_times = {}
         self.group_last_quit_times = {}
         self.group_last_states = {}
         self.group_recent_games = {}
-        self.group_pending_quit = {}
         self.playing_sessions = {}
         self._session_meta = {}
         self._pending_end_notifications = {}
-        self._pending_quit_tasks = {}
         self.achievement_poll_tasks = {}
         self.achievement_snapshots = {}
         self.achievement_monitor = None
@@ -106,39 +103,39 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
         plugin.fetch_player_status = fetch
         with patch("src.application.services.status_change_tracking.time.time", return_value=1100):
             await plugin.check_status_change("g1", single_sid="s1")
-        self.assertEqual({}, plugin._pending_quit_tasks)
         self.assertEqual("confirming_exit", plugin.session_service.get("g1", "s1").state)
-
-    async def test_restore_projection_keeps_started_at(self):
-        plugin = FakePlugin()
-        plugin.group_start_play_times = {"g1": {"s1": {"A": 1000}}}
-        session, events = await plugin.session_service.handle(
-            "g1", "s1", "A", 1600, player_name="P", current_game_name="GameA"
-        )
-        self.assertFalse(events)
-        self.assertEqual(1000, session.started_at)
-        self.assertEqual([], plugin._pending_end_notifications.get("g1", []))
 
     def test_hydrate_legacy_pending_quit(self):
         plugin = FakePlugin()
-        plugin.group_pending_quit = {
-            "g1": {
-                "s1": {
-                    "A": {
-                        "quit_time": 1100,
-                        "start_time": 1000,
-                        "name": "P",
-                        "game_name": "GameA",
-                        "notified": False,
+        plugin.session_service.hydrate_from_legacy(
+            pending_all={
+                "g1": {
+                    "s1": {
+                        "A": {
+                            "quit_time": 1100,
+                            "start_time": 1000,
+                            "name": "P",
+                            "game_name": "GameA",
+                            "notified": False,
+                        }
                     }
                 }
             }
-        }
-        plugin.session_service.hydrate_from_legacy()
+        )
         session = plugin.session_service.get("g1", "s1")
         self.assertEqual("confirming_exit", session.state)
         self.assertEqual(1280, session.exit_deadline)
-        self.assertEqual({}, plugin.group_pending_quit)
+
+    def test_hydrate_legacy_start_play_times(self):
+        plugin = FakePlugin()
+        plugin.group_last_states = {"g1": {"s1": {"gameid": "A", "name": "P", "gameextrainfo": "GameA"}}}
+        plugin.session_service.hydrate_from_legacy(
+            start_all={"g1": {"s1": {"A": 1000}}},
+            last_all=plugin.group_last_states,
+        )
+        session = plugin.session_service.get("g1", "s1")
+        self.assertEqual("playing", session.state)
+        self.assertEqual(1000, session.started_at)
 
     def test_dump_and_load_roundtrip(self):
         plugin = FakePlugin()
