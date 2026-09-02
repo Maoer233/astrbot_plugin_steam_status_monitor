@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 
-from astrbot.api import logger
+from ...shared.logging import logger
 
 from ...shared.paths import FONTS_DIR
 

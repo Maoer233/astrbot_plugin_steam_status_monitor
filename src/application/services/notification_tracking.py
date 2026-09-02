@@ -1,5 +1,4 @@
 from datetime import datetime
-import asyncio
 import tempfile
 import time
 
@@ -9,7 +8,6 @@ from astrbot.api.message_components import Plain, Image
 from ...shared.logging import logger
 from ...presentation.renderers.game_start import render_game_start
 from ...presentation.renderers.game_end import render_game_end
-from ...presentation.formatters.status import format_play_duration
 
 
 class NotificationTrackingMixin:
@@ -152,79 +150,3 @@ class NotificationTrackingMixin:
         for group_id, notifications in list(self._pending_end_notifications.items()):
             await self._send_merged_notification(group_id, notifications)
         self._pending_end_notifications.clear()
-
-    async def _delayed_quit_check(self, group_id, sid, gameid):
-        await asyncio.sleep(180)
-        info = self.group_pending_quit.get(group_id, {}).get(sid, {}).get(gameid)
-        if not info or info.get("notified"):
-            return
-        duration_min = info["duration_min"]
-        if duration_min == 0:
-            for _ in range(2):
-                start_time = info["start_time"]
-                if start_time and info["quit_time"]:
-                    duration_min = (info["quit_time"] - start_time) / 60
-                    if duration_min > 0:
-                        info["duration_min"] = duration_min
-                        break
-                await asyncio.sleep(1)
-        info["notified"] = True
-        self._record_playtime(sid, gameid, info.get("game_name", "未知游戏"), info.get("duration_min", 0))
-        self._record_session(
-            sid=sid, gameid=gameid, game_name=info.get("game_name", "未知游戏"),
-            start_time=info.get("start_time"), end_time=info.get("quit_time"),
-            duration_min=info.get("duration_min", 0), group_id=group_id,
-        )
-        key = (group_id, sid, gameid)
-        if not self.config.get("enable_game_end_notify", True):
-            poll_task = self.achievement_poll_tasks.pop(key, None)
-            if poll_task:
-                poll_task.cancel()
-            self.achievement_snapshots.pop(key, None)
-            self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
-            self.group_pending_quit.get(group_id, {}).get(sid, {}).pop(gameid, None)
-            return
-        duration_min = info["duration_min"]
-        time_str = format_play_duration(duration_min)
-        if duration_min < 5:
-            tip_text = "风扇都没转热，主人就结束了？"
-        elif duration_min < 10:
-            tip_text = "杂鱼杂鱼~主人你就这水平？"
-        elif duration_min < 30:
-            tip_text = "热身一下就结束了？"
-        elif duration_min < 60:
-            tip_text = "歇会儿再来，别太累了喵！"
-        elif duration_min < 120:
-            tip_text = "沉浸在游戏世界，时间过得飞快喵！"
-        elif duration_min < 300:
-            tip_text = "肝到手软了喵！主人不如陪陪咱~"
-        elif duration_min < 600:
-            tip_text = "你吃饭了吗？还是说你已经忘了吃饭这件事？"
-        elif duration_min < 1200:
-            tip_text = "家里电费都要被你玩光了喵！"
-        elif duration_min < 1800:
-            tip_text = "咱都要给你颁发'不眠猫'勋章了！"
-        elif duration_min < 2400:
-            tip_text = "主人你还活着喵？你是不是忘了关电脑呀~"
-        else:
-            tip_text = "你已经和椅子合为一体，成为传说中的'椅子精'了喵！"
-        last_state = self.group_last_states.get(group_id, {}).get(sid)
-        self._pending_end_notifications.setdefault(group_id, []).append({
-            "type": "end", "name": info["name"], "game": info["game_name"],
-            "duration_str": time_str, "sid": sid, "gameid": gameid,
-            "quit_time": info["quit_time"], "duration_min": duration_min,
-            "avatar_url": (last_state or {}).get("avatarfull") or (last_state or {}).get("avatar"),
-            "tip_text": tip_text,
-        })
-        poll_task = self.achievement_poll_tasks.pop(key, None)
-        if poll_task:
-            poll_task.cancel()
-        self.achievement_snapshots.pop(key, None)
-        self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
-        self.group_pending_quit.get(group_id, {}).get(sid, {}).pop(gameid, None)
-
-
-def format_play_duration(duration_min):
-    if duration_min < 60:
-        return f"{duration_min:.1f}分钟"
-    return f"{duration_min / 60:.1f}小时"

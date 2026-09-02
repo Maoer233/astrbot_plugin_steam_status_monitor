@@ -1,6 +1,9 @@
 import asyncio
 import time
 
+from astrbot.api.event import MessageChain
+from astrbot.api.message_components import Plain
+
 from ...domain.monitoring.polling import calculate_poll_schedule
 from ...domain.monitoring.transitions import classify_game_transition
 from ...presentation.formatters.status import format_player_status
@@ -46,9 +49,11 @@ class StatusChangeTrackingMixin:
                 pending_quit=pending_quit.get(sid),
                 now=now,
             )
-            # --- 退出游戏（缓冲3分钟） ---（含游戏切换：直接切到另一款游戏也会结算上一款时长）
+            # --- 退出游戏 ---
+            # exit：写 pending，180 秒缓冲（假退出/网络波动）
+            # switch：写 pending 后立刻 confirm，不进缓冲
             if transition.has_exit:
-                logger.info(f"[退出逻辑] {name} prev_gameid={prev_gameid} current_gameid={current_gameid}")
+                logger.info(f"[退出逻辑] {name} prev_gameid={prev_gameid} current_gameid={current_gameid} kind={transition.kind}")
                 zh_prev_game_name = await self.get_chinese_game_name(prev_gameid, prev.get('gameextrainfo') if prev else None) if prev_gameid else (prev.get('gameextrainfo') if prev else "未知游戏")
                 duration_min = 0
                 # 安全获取 sid_data，兼容旧格式 int → dict
@@ -88,16 +93,21 @@ class StatusChangeTrackingMixin:
                             asyncio.create_task(self.achievement_delayed_final_check(group_id, sid, prev_gameid, player_name, game_name))
                     except Exception as e:
                         logger.error(f"结算成就时异常: {e}")
-                    # 延迟退出任务必须包含群维度，避免同一玩家在多个群的任务互相取消。
-                    if not hasattr(self, '_pending_quit_tasks'):
-                        self._pending_quit_tasks = {}
-                    task_key = (group_id, sid, prev_gameid)
-                    old_task = self._pending_quit_tasks.get(task_key)
-                    if old_task:
-                        old_task.cancel()
-                    if not skip_push:
-                        task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
-                        self._pending_quit_tasks[task_key] = task
+                    if transition.kind == "switch":
+                        self._confirm_quit_immediately(
+                            group_id, sid, prev_gameid,
+                            notify=not skip_push,
+                        )
+                    else:
+                        if not hasattr(self, '_pending_quit_tasks'):
+                            self._pending_quit_tasks = {}
+                        task_key = (group_id, sid, prev_gameid)
+                        old_task = self._pending_quit_tasks.get(task_key)
+                        if old_task:
+                            old_task.cancel()
+                        if not skip_push:
+                            task = asyncio.create_task(self._delayed_quit_check(group_id, sid, prev_gameid))
+                            self._pending_quit_tasks[task_key] = task
                 else:
                     reason = "黑白名单过滤" if self._should_skip_game(prev_gameid) else "插件停止期间的遗留变化"
                     logger.info(f"[退出跳过] {name} 退出游戏 {zh_prev_game_name}({prev_gameid}) 被跳过（{reason}）")
@@ -109,6 +119,13 @@ class StatusChangeTrackingMixin:
 
             # --- 开始游戏/继续游戏（仅当 gameid 变更时推送） ---
             if current_gameid not in [None, "", "0"] and current_gameid != prev_gameid:
+                # confirming_exit(A) 时看到 B：立即结算 A，再开始 B
+                for pending_gameid in list(pending_quit.get(sid, {})):
+                    if pending_gameid != current_gameid:
+                        self._confirm_quit_immediately(
+                            group_id, sid, pending_gameid,
+                            notify=not skip_push and not state_stale,
+                        )
                 quit_info = pending_quit.setdefault(sid, {}).get(current_gameid)
                 # 网络波动已由领域层统一判定（3分钟内重启同一游戏）
                 if transition.is_network_fluctuation and quit_info:
@@ -211,38 +228,14 @@ class StatusChangeTrackingMixin:
                 ))
             last_states[sid] = status
 
-        for sid in pending_quit:
-            for gameid in list(pending_quit[sid].keys()):
+        for sid in list(pending_quit):
+            for gameid in list(pending_quit.get(sid, {})):
                 info = pending_quit[sid][gameid]
                 if now - info["quit_time"] >= 180 and not info.get("notified"):
-                    info["notified"] = True
-                    # 游戏结束通知开关：关闭则跳过推送，但仍清理 pending_quit
-                    if not self.config.get('enable_game_end_notify', True):
-                        if gameid in pending_quit[sid]:
-                            del pending_quit[sid][gameid]
-                        continue
-                    duration_min = info.get("duration_min", 0)
-                    # 优化时间显示
-                    time_str = format_play_duration(duration_min)
-                    # 收集到通知缓冲，由主轮询统一合并发送（兜底逻辑，正常由 _delayed_quit_check 处理）
-                    avatar_url = None
-                    ls = last_states.get(sid)
-                    if ls:
-                        avatar_url = ls.get("avatarfull") or ls.get("avatar")
-                    notifications.append({
-                        "type": "end",
-                        "name": info["name"],
-                        "game": info["game_name"],
-                        "duration_str": time_str,
-                        "sid": sid,
-                        "gameid": gameid,
-                        "quit_time": info["quit_time"],
-                        "duration_min": duration_min,
-                        "avatar_url": avatar_url,
-                        "tip_text": "你已经和椅子合为一体，成为传说中的'椅子精'了喵！",
-                    })
-                    if gameid in pending_quit[sid]:
-                        del pending_quit[sid][gameid]
+                    self._confirm_quit_immediately(
+                        group_id, sid, gameid,
+                        notify=not skip_push,
+                    )
 
         self._save_persistent_data()
         # 将本轮收集的开始/结束游戏通知提交到缓冲区，由主轮询统一 flush 合并发送

@@ -17,6 +17,7 @@ import re
 from ..application.services.achievement_monitor import AchievementMonitor
 from ..application.services.achievement_tracking import AchievementTrackingMixin
 from ..application.services.notification_tracking import NotificationTrackingMixin
+from ..application.services.session_quit import SessionQuitMixin
 from ..application.services.status_change_tracking import StatusChangeTrackingMixin
 from ..application.services.polling_tracking import PollingTrackingMixin
 from ..presentation.renderers.game_start import render_game_start
@@ -51,6 +52,7 @@ class SteamStatusMonitorV3(
     QQMenuManagementMixin,
     PollingTrackingMixin,
     StatusChangeTrackingMixin,
+    SessionQuitMixin,
     NotificationTrackingMixin,
     AchievementTrackingMixin,
     StateBackedMonitorMixin,
