@@ -15,6 +15,8 @@ class StatusChangeTrackingMixin:
         # 是插件停止期间累积的历史，跳过推送，只更新状态基线，避免重载后刷屏。
         if self._startup_stale_groups.get(group_id, False):
             skip_push = True
+        if not self.group_monitor_enabled.get(str(group_id), True):
+            skip_push = True
         steam_ids = [single_sid] if single_sid else self.group_steam_ids.get(group_id, [])
         last_states = self.group_last_states.setdefault(group_id, {})
         logs = []

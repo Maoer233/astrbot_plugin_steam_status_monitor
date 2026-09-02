@@ -297,6 +297,53 @@ class PersistenceMixin:
         except Exception as e:
             logger.warning(f"保存 push_groups.json 失败: {e}")
 
+    def _get_group_switches_path(self):
+        return os.path.join(self.data_dir, "group_switches.json")
+
+    def _load_group_switches(self):
+        """加载各群监控/成就开关。缺省为开启，避免旧数据把群误关。"""
+        path = self._get_group_switches_path()
+        monitor = {}
+        achievement = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f) or {}
+                monitor = {
+                    str(gid): bool(enabled)
+                    for gid, enabled in (payload.get("monitor") or {}).items()
+                    if is_valid_group_id(gid)
+                }
+                achievement = {
+                    str(gid): bool(enabled)
+                    for gid, enabled in (payload.get("achievement") or {}).items()
+                    if is_valid_group_id(gid)
+                }
+            except Exception as e:
+                logger.warning(f"加载 group_switches.json 失败: {e}")
+        self.group_monitor_enabled = monitor
+        self.group_achievement_enabled = achievement
+
+    def _save_group_switches(self):
+        path = self._get_group_switches_path()
+        payload = {
+            "monitor": {
+                str(gid): bool(enabled)
+                for gid, enabled in (getattr(self, "group_monitor_enabled", {}) or {}).items()
+                if is_valid_group_id(gid)
+            },
+            "achievement": {
+                str(gid): bool(enabled)
+                for gid, enabled in (getattr(self, "group_achievement_enabled", {}) or {}).items()
+                if is_valid_group_id(gid)
+            },
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存 group_switches.json 失败: {e}")
+
     # ========== 排行榜功能：游玩时长记录持久化 ==========
 
     def _load_play_records(self):

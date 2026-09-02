@@ -182,6 +182,7 @@ class SteamStatusMonitorV3(
         self.running_groups = set()  # 正在运行的群号集合
         self.group_monitor_enabled = {}      # {group_id: bool} 监控开关
         self.group_achievement_enabled = {}  # {group_id: bool} 成就推送开关
+        self._load_group_switches()
         self._qq_menu_lock = asyncio.Lock()
         self._platform_id = None  # 记录消息平台ID，用于WebUI自动补全通知目标
         # --- WebUI 群自动补全 notify_sessions ---
@@ -190,7 +191,7 @@ class SteamStatusMonitorV3(
         if hasattr(self, 'notify_sessions') and self.notify_sessions and self.API_KEY and self.group_steam_ids:
             logger.info(f"[SteamStatusMonitor] 检测到 notify_sessions={self.notify_sessions}，自动启动监控轮询")
             for group_id in self.notify_sessions:
-                if group_id in self.group_steam_ids:
+                if group_id in self.group_steam_ids and self.group_monitor_enabled.get(group_id, True):
                     self.running_groups.add(group_id)
         # --- 新增：全局日志收集与统一输出 ---
         self._last_round_logs = []  # [(group_id, logstr)]
@@ -311,6 +312,7 @@ class SteamStatusMonitorV3(
             yield event.plain_result("请在群聊中使用该命令，私聊无法启动群监控。")
             return
         self.group_monitor_enabled[group_id] = True
+        self._save_group_switches()
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
             return
@@ -834,6 +836,7 @@ class SteamStatusMonitorV3(
         self.group_monitor_enabled.clear()
         self.group_achievement_enabled.clear()
         self.notify_sessions = {}
+        self._save_group_switches()
         self._save_persistent_data(force=True)  # 清空后保存
         yield event.plain_result("Steam状态监控插件已重置，所有状态已清空。")
 
@@ -1309,6 +1312,7 @@ class SteamStatusMonitorV3(
         self.group_monitor_enabled[group_id] = False
         if group_id in self.running_groups:
             self.running_groups.remove(group_id)
+        self._save_group_switches()
         # 清除该群的轮询时间表，停止轮询（/steam on 后会重新初始化）
         self.next_poll_time.pop(group_id, None)
         # 停用后不再推送本群缓冲通知；会话仍保留，由 tick_due 到期结算时长
@@ -1327,6 +1331,7 @@ class SteamStatusMonitorV3(
         """开启本群Steam成就推送"""
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_achievement_enabled[group_id] = True
+        self._save_group_switches()
         yield event.plain_result(f"已为本群开启Steam成就推送。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1335,6 +1340,7 @@ class SteamStatusMonitorV3(
         """关闭本群Steam成就推送"""
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_achievement_enabled[group_id] = False
+        self._save_group_switches()
         yield event.plain_result(f"已为本群关闭Steam成就推送。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1493,6 +1499,7 @@ class SteamStatusMonitorV3(
         self.running_groups.clear()
         self.group_monitor_enabled.clear()
         self.group_achievement_enabled.clear()
+        self._save_group_switches()
         self.next_poll_time.clear()
         self.group_last_states.clear()
         self.group_last_quit_times.clear()

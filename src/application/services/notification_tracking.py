@@ -22,8 +22,13 @@ class NotificationTrackingMixin:
             str(key): value
             for key, value in (getattr(self, "notify_sessions", {}) or {}).items()
         }
+        enabled = getattr(self, "group_monitor_enabled", {}) or {}
+
+        def _group_enabled(gid):
+            return enabled.get(str(gid), True)
+
         primary_session = notify_sessions.get(normalized_group_id)
-        if primary_session:
+        if primary_session and _group_enabled(normalized_group_id):
             sessions.append(primary_session)
         monitored_groups = {
             str(gid)
@@ -43,7 +48,7 @@ class NotificationTrackingMixin:
         for push_gid in push_targets:
             normalized_push_gid = str(push_gid)
             push_session = notify_sessions.get(normalized_push_gid)
-            if push_session and push_session not in sessions:
+            if push_session and push_session not in sessions and _group_enabled(normalized_push_gid):
                 sessions.append(push_session)
         return [
             session
@@ -159,6 +164,9 @@ class NotificationTrackingMixin:
     async def _flush_pending_end_notifications(self):
         if not self._pending_end_notifications:
             return
-        for group_id, notifications in list(self._pending_end_notifications.items()):
+        pending = self._pending_end_notifications
+        self._pending_end_notifications = {}
+        for group_id, notifications in pending.items():
+            if not (getattr(self, "group_monitor_enabled", {}) or {}).get(str(group_id), True):
+                continue
             await self._send_merged_notification(group_id, notifications)
-        self._pending_end_notifications.clear()

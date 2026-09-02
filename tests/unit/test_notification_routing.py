@@ -76,6 +76,25 @@ class NotificationRoutingTests(unittest.TestCase):
             self.get_notify_sessions(plugin, "111", sid),
         )
 
+    def test_disabled_group_is_not_notified(self):
+        sid = "test-steam-id"
+        plugin = type("Plugin", (), {})()
+        plugin.notify_sessions = {
+            "111": "3640631607:GroupMessage:1_111",
+            "222": "3640631607:GroupMessage:1_222",
+        }
+        plugin.group_steam_ids = {"111": [sid], "222": []}
+        plugin.push_groups = {sid: ["222"]}
+        plugin.group_monitor_enabled = {"111": False, "222": True}
+
+        self.assertEqual(
+            ["3640631607:GroupMessage:1_222"],
+            self.get_notify_sessions(plugin, "111", sid),
+        )
+
+        plugin.group_monitor_enabled = {"111": False, "222": False}
+        self.assertEqual([], self.get_notify_sessions(plugin, "111", sid))
+
     def test_empty_group_session_is_skipped(self):
         sid = "test-steam-id"
         plugin = type("Plugin", (), {})()
