@@ -233,6 +233,12 @@ def get_font_path(font_name):
         return font_path2
     return font_name
 
+# 与开始卡一致：名字区按实测宽度拉长，上限 360px，再换行。
+_MAX_NAME_LINE_W = 360
+_MIN_NAME_LINE_W = 220
+_END_TITLE_SUFFIX = " 结束游戏"
+
+
 def text_wrap(text, font, max_width):
     lines = []
     if not text:
@@ -252,6 +258,32 @@ def text_wrap(text, font, max_width):
         lines.append(line)
     return lines
 
+
+def _measure_text_width(text, font):
+    dummy_img = Image.new("RGB", (10, 10))
+    draw = ImageDraw.Draw(dummy_img)
+    bbox = draw.textbbox((0, 0), text or "", font=font)
+    return bbox[2] - bbox[0]
+
+
+def fit_end_card_player_name(player_name, font, text_x, extra_right=0, default_w=IMG_W):
+    """与开始卡相同：28px 字号、按文字拉长画布、超过 360px 换行，保留「结束游戏」。"""
+    name = player_name or ""
+    suffix = _END_TITLE_SUFFIX
+    name_width = _measure_text_width(name, font)
+    name_line_w = min(max(name_width, _MIN_NAME_LINE_W), _MAX_NAME_LINE_W)
+    lines = text_wrap(name, font, _MAX_NAME_LINE_W)
+    last_with_suffix = (lines[-1] if lines else "") + suffix
+    last_w = _measure_text_width(last_with_suffix, font)
+    if last_w <= _MAX_NAME_LINE_W:
+        lines[-1] = last_with_suffix
+        content_w = max(name_line_w, last_w)
+    else:
+        lines.append(suffix.strip())
+        content_w = name_line_w
+    img_w = max(default_w, text_x + content_w + extra_right + 24)
+    return lines, img_w
+
 def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None, horizontal_cover_path=None):
     # 字体
     fonts_dir = str(FONTS_DIR)
@@ -270,7 +302,30 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
     except:
         font_title = font_game = font_tip = font_luck = font_time = ImageFont.load_default()
 
-    img = render_gradient_bg(IMG_W, IMG_H, BG_COLOR_TOP, BG_COLOR_BOTTOM).convert("RGBA")
+    # 先量封面宽度，再按长玩家名决定是否加宽画布。
+    cover_area_h = IMG_H
+    new_w = COVER_W
+    if cover_path and os.path.exists(cover_path):
+        try:
+            with Image.open(cover_path) as cover_src:
+                new_w = int(cover_src.width * (cover_area_h / cover_src.height))
+        except Exception as e:
+            print(f"[game_end_render] 封面尺寸获取失败: {e}")
+
+    avatar_x = new_w + 24
+    text_x = avatar_x + AVATAR_SIZE + 20
+    try:
+        from datetime import datetime
+        t = datetime.strptime(end_time_str, "%Y-%m-%d %H:%M")
+        time_str = t.strftime("%H:%M")
+    except Exception:
+        time_str = end_time_str[-5:] if end_time_str else ""
+    time_w = _measure_text_width(time_str, font_time) + 18
+    player_lines, img_w = fit_end_card_player_name(player_name, font_title, text_x, extra_right=time_w)
+    if new_w > img_w:
+        img_w = new_w
+
+    img = render_gradient_bg(img_w, IMG_H, BG_COLOR_TOP, BG_COLOR_BOTTOM).convert("RGBA")
     draw = ImageDraw.Draw(img)
 
     # 1. 背景星星横向平铺（等比例缩放高度，透明度30%）
@@ -278,20 +333,18 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
         star_bg = Image.open(STAR_BG_PATH).convert("RGBA")
         star_w, star_h = star_bg.size
         scale = IMG_H / star_h
-        new_w = int(star_w * scale)
+        star_tile_w = int(star_w * scale)
         new_h = IMG_H
-        star_bg_resized = star_bg.resize((new_w, new_h), Image.LANCZOS)
+        star_bg_resized = star_bg.resize((star_tile_w, new_h), Image.LANCZOS)
         # 设置透明度30%
         alpha = star_bg_resized.split()[-1].point(lambda p: int(p * 0.3))
         star_bg_resized.putalpha(alpha)
-        for x in range(0, IMG_W, new_w):
+        for x in range(0, img_w, star_tile_w):
             img.alpha_composite(star_bg_resized, (x, 0))
     except Exception as e:
         print(f"[game_end_render] 星星背景加载失败: {e}")
 
     # 2. 封面图左侧，等比例缩放高度，宽度自适应，不裁剪，左贴右留空
-    cover_area_h = IMG_H
-    new_w = COVER_W
     if cover_path and os.path.exists(cover_path):
         try:
             cover_src = Image.open(cover_path).convert("RGBA")
@@ -299,10 +352,9 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
             new_w = int(cover_src.width * scale)
             new_h = cover_area_h
             cover_resized = cover_src.resize((new_w, new_h), Image.LANCZOS)
-            # 修正：如果new_w大于画布宽度，限制最大宽度为画布宽度，防止超出
-            if new_w > IMG_W:
-                cover_resized = cover_resized.crop((0, 0, IMG_W, new_h))
-                new_w = IMG_W
+            if new_w > img_w:
+                cover_resized = cover_resized.crop((0, 0, img_w, new_h))
+                new_w = img_w
             img.paste(cover_resized, (0, 0), cover_resized)
             # 竖版封面缺失（missingcover）时，叠加横版header_image
             if os.path.basename(cover_path) == "missingcover.jpg" and horizontal_cover_path and os.path.exists(horizontal_cover_path):
@@ -319,10 +371,8 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
                     print(f"[game_end_render] 横版封面叠加失败: {e}")
         except Exception as e:
             print(f"[game_end_render] 封面加载失败: {e}")
-            new_w = COVER_W  # 渲染失败时使用默认宽度
 
     # 3. 头像（仅圆角，无柔光特效）
-    avatar_x = new_w + 24
     avatar_y = 16
     if avatar_path and os.path.exists(avatar_path):
         try:
@@ -357,44 +407,25 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
     draw.text((avatar_x, luck_font_y), luck_text, font=font_luck, fill=(200,220,255,220), stroke_width=1, stroke_fill=(0,0,0,255))
 
     # 当前时间叠加在最上方右上角，字号更小
-    try:
-        from datetime import datetime
-        t = datetime.strptime(end_time_str, "%Y-%m-%d %H:%M")
-        time_str = t.strftime("%H:%M")
-    except Exception:
-        time_str = end_time_str[-5:]
     bbox = draw.textbbox((0,0), time_str, font=font_time, stroke_width=2)
-    time_x = IMG_W - bbox[2] + bbox[0] - 18  # 右上角，留边距
+    time_x = img_w - bbox[2] + bbox[0] - 18  # 右上角，留边距
     time_y = 6
     draw.text((time_x, time_y), time_str, font=font_time, fill=(255,255,255,220), stroke_width=2, stroke_fill=(0,0,0,255))
 
-    # 4. 玩家名，顶部居左，自适应字号防止出界
-    title_text = f"{player_name} 结束游戏"
-    # 计算最大宽度（头像右侧到画布右侧，留24px边距）
-    max_title_w = IMG_W - (avatar_x + AVATAR_SIZE + 20) - 24
-    title_font_size = 28
-    for size in range(28, 15, -2):
-        try:
-            font_title_tmp = ImageFont.truetype(font_medium, size)
-        except:
-            font_title_tmp = ImageFont.load_default()
-        bbox = draw.textbbox((0, 0), title_text, font=font_title_tmp)
-        if bbox[2] - bbox[0] <= max_title_w:
-            title_font_size = size
-            break
-    try:
-        font_title = ImageFont.truetype(font_medium, title_font_size)
-    except:
-        font_title = ImageFont.load_default()
-    draw.text((avatar_x + AVATAR_SIZE + 20, 16), title_text, font=font_title, fill=(180,160,255,255), stroke_width=2, stroke_fill=(0,0,0,255))
+    # 4. 玩家名 + 「结束游戏」：与开始卡相同，按文字拉长画布，超宽换行。
+    title_x = text_x
+    title_y = 16
+    title_line_h = getattr(font_title, "size", 28) + 2
+    for idx, line in enumerate(player_lines):
+        draw.text((title_x, title_y + idx * title_line_h), line, font=font_title, fill=(180,160,255,255), stroke_width=2, stroke_fill=(0,0,0,255))
 
-    # 5. 游戏名，头像右侧居左，第二行，自动换行
-    game_name_y = 16 + font_title.size + 8
-    max_game_name_w = IMG_W - (avatar_x + AVATAR_SIZE + 20) - 24
+    # 5. 游戏名，头像右侧居左，玩家名下方自动换行
+    game_name_y = title_y + len(player_lines) * title_line_h + 6
+    max_game_name_w = img_w - title_x - 24
     game_name_lines = text_wrap(game_name, font_game, max_game_name_w)
     max_lines = 2
     for idx, line in enumerate(game_name_lines[:max_lines]):
-        draw.text((avatar_x + AVATAR_SIZE + 20, game_name_y + idx * (font_game.size + 2)), line, font=font_game, fill=(220,220,255,255), stroke_width=2, stroke_fill=(0,0,0,255))
+        draw.text((title_x, game_name_y + idx * (font_game.size + 2)), line, font=font_game, fill=(220,220,255,255), stroke_width=2, stroke_fill=(0,0,0,255))
 
     # 6. 空几行（间隔）
     tip_y = game_name_y + font_game.size + 28
@@ -410,7 +441,7 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
     draw.text((bar_x, bar_y-2), min_text, font=font_tip, fill=(180, 220, 255, 220), stroke_width=1, stroke_fill=(0,0,0,255))
     min_text_bbox = draw.textbbox((bar_x, bar_y-2), min_text, font=font_tip)
     bar_start_x = min_text_bbox[2] + 6
-    bar_w = IMG_W - bar_start_x - 18  # 进度条延伸到画布结尾，右侧留18px
+    bar_w = img_w - bar_start_x - 18  # 进度条延伸到画布结尾，右侧留18px
     bar_h = 6
     if bar_w > 0:
         draw_duration_bar(draw, bar_start_x, bar_y+6, bar_w, bar_h, duration_h)
