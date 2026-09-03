@@ -65,18 +65,28 @@ class PersistenceMixin:
                         self.group_recent_games[group_id] = json.load(f)
             except Exception as e:
                 logger.warning(f"加载 group_recent_games 失败: {e} (group_id={group_id})")
+        session_path = os.path.join(self.data_dir, "playing_sessions.json")
+        has_session_store = os.path.exists(session_path)
         try:
-            path = os.path.join(self.data_dir, "playing_sessions.json")
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as f:
+            if has_session_store:
+                with open(session_path, "r", encoding="utf-8") as f:
                     self.session_service.load(json.load(f))
         except Exception as e:
             logger.warning(f"加载 playing_sessions 失败: {e}")
-        self.session_service.hydrate_from_legacy(
-            pending_all=legacy_pending_quit,
-            start_all=legacy_start_play_times,
-            last_all=self.group_last_states,
-        )
+        # 旧 pending_quit/start_play_times 只允许在首次升级时迁移一次。
+        # playing_sessions.json 一旦存在就是唯一数据源，否则旧文件中的 notified=false
+        # 会在每次重启时把已结算会话重新复活并重复发送结束卡。
+        if not has_session_store:
+            self.session_service.hydrate_from_legacy(
+                pending_all=legacy_pending_quit,
+                start_all=legacy_start_play_times,
+                last_all=self.group_last_states,
+            )
+            try:
+                with open(session_path, "w", encoding="utf-8") as f:
+                    json.dump(self.session_service.dump(), f, ensure_ascii=False)
+            except Exception as e:
+                logger.warning(f"保存首次迁移的 playing_sessions 失败: {e}")
 
     def _save_persistent_data(self, force=False):
         '''分群保存各群的状态数据。
