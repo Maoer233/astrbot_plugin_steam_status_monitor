@@ -4,9 +4,13 @@ import os
 import shutil
 import time
 
-from astrbot.api import logger
-
+from ...shared.logging import logger
 from ...shared.paths import FONTS_DIR
+from ...shared.utils.notify_session import (
+    build_group_notify_session,
+    is_sendable_group_session,
+    is_valid_group_id,
+)
 
 
 class PersistenceMixin:
@@ -16,6 +20,8 @@ class PersistenceMixin:
 
     def _load_persistent_data(self):
         # 分群加载各群的状态数据
+        legacy_start_play_times = {}
+        legacy_pending_quit = {}
         for group_id in self.group_steam_ids:
             try:
                 path = self._get_group_data_path(group_id, "states")
@@ -28,17 +34,9 @@ class PersistenceMixin:
                 path = self._get_group_data_path(group_id, "start_play_times")
                 if os.path.exists(path):
                     with open(path, "r", encoding="utf-8") as f:
-                        self.group_start_play_times[group_id] = json.load(f)
-                        # 数据迁移：旧格式 int → 新格式 {gameid: timestamp}
-                        migrated = 0
-                        for _sid, _val in list(self.group_start_play_times[group_id].items()):
-                            if not isinstance(_val, dict):
-                                self.group_start_play_times[group_id][_sid] = {}
-                                migrated += 1
-                        if migrated:
-                            logger.info(f"[数据迁移] group_id={group_id}: {migrated} 个玩家 start_play_times 从 int 迁移为 dict")
+                        legacy_start_play_times[group_id] = json.load(f)
             except Exception as e:
-                logger.warning(f"加载 group_start_play_times 失败: {e} (group_id={group_id})")
+                logger.warning(f"加载旧 start_play_times 失败: {e} (group_id={group_id})")
             try:
                 path = self._get_group_data_path(group_id, "last_quit_times")
                 if os.path.exists(path):
@@ -57,9 +55,9 @@ class PersistenceMixin:
                 path = self._get_group_data_path(group_id, "pending_quit")
                 if os.path.exists(path):
                     with open(path, "r", encoding="utf-8") as f:
-                        self.group_pending_quit[group_id] = json.load(f)
+                        legacy_pending_quit[group_id] = json.load(f)
             except Exception as e:
-                logger.warning(f"加载 group_pending_quit 失败: {e} (group_id={group_id})")
+                logger.warning(f"加载旧 pending_quit 失败: {e} (group_id={group_id})")
             try:
                 path = self._get_group_data_path(group_id, "recent_games")
                 if os.path.exists(path):
@@ -67,7 +65,18 @@ class PersistenceMixin:
                         self.group_recent_games[group_id] = json.load(f)
             except Exception as e:
                 logger.warning(f"加载 group_recent_games 失败: {e} (group_id={group_id})")
-
+        try:
+            path = os.path.join(self.data_dir, "playing_sessions.json")
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    self.session_service.load(json.load(f))
+        except Exception as e:
+            logger.warning(f"加载 playing_sessions 失败: {e}")
+        self.session_service.hydrate_from_legacy(
+            pending_all=legacy_pending_quit,
+            start_all=legacy_start_play_times,
+            last_all=self.group_last_states,
+        )
 
     def _save_persistent_data(self, force=False):
         '''分群保存各群的状态数据。
@@ -87,12 +96,6 @@ class PersistenceMixin:
             except Exception as e:
                 logger.warning(f"保存 group_last_states 失败: {e} (group_id={group_id})")
             try:
-                path = self._get_group_data_path(group_id, "start_play_times")
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(self.group_start_play_times.get(group_id, {}), f, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"保存 group_start_play_times 失败: {e} (group_id={group_id})")
-            try:
                 path = self._get_group_data_path(group_id, "last_quit_times")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(self.group_last_quit_times.get(group_id, {}), f, ensure_ascii=False)
@@ -105,17 +108,17 @@ class PersistenceMixin:
             except Exception as e:
                 logger.warning(f"保存 group_pending_logs 失败: {e} (group_id={group_id})")
             try:
-                path = self._get_group_data_path(group_id, "pending_quit")
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(self.group_pending_quit.get(group_id, {}), f, ensure_ascii=False)
-            except Exception as e:
-                logger.warning(f"保存 group_pending_quit 失败: {e} (group_id={group_id})")
-            try:
                 path = self._get_group_data_path(group_id, "recent_games")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(self.group_recent_games.get(group_id, []), f, ensure_ascii=False)
             except Exception as e:
                 logger.warning(f"保存 group_recent_games 失败: {e} (group_id={group_id})")
+        try:
+            path = os.path.join(self.data_dir, "playing_sessions.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self.session_service.dump(), f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"保存 playing_sessions 失败: {e}")
         # 保存游玩时长记录（全局，不分群）
         try:
             self._save_play_records()
@@ -136,8 +139,10 @@ class PersistenceMixin:
                 logger.info(f"[SteamStatusMonitor] 已加载 notify_sessions: {self.notify_sessions}")
             except Exception as e:
                 logger.warning(f"加载 notify_sessions 失败: {e}")
+                self.notify_sessions = {}
         else:
             self.notify_sessions = {}
+        self._sanitize_notify_sessions()
 
     def _save_notify_session(self):
         if hasattr(self, 'notify_sessions'):
@@ -164,12 +169,44 @@ class PersistenceMixin:
             self.notify_sessions = {}
         filled = 0
         for gid in getattr(self, 'group_steam_ids', {}) or {}:
-            if gid not in self.notify_sessions or not self.notify_sessions[gid]:
-                self.notify_sessions[gid] = f"{self._platform_id}:GroupMessage:0_{gid}"
-                filled += 1
+            if not is_valid_group_id(gid):
+                continue
+            current = self.notify_sessions.get(gid)
+            if is_sendable_group_session(current):
+                continue
+            self.notify_sessions[gid] = build_group_notify_session(self._platform_id, gid)
+            filled += 1
         if filled:
             self._save_notify_session()
             logger.info(f"[WebUI自动投递] 已为 {filled} 个群补全通知目标")
+
+    def _sanitize_notify_sessions(self):
+        sessions = getattr(self, "notify_sessions", {}) or {}
+        cleaned = {}
+        dropped = []
+        for gid, session in sessions.items():
+            if is_valid_group_id(gid) and is_sendable_group_session(session):
+                cleaned[str(gid)] = session
+            else:
+                dropped.append(gid)
+        self.notify_sessions = cleaned
+        if dropped:
+            logger.warning("已丢弃无效 notify_sessions: %s", dropped)
+            self._save_notify_session()
+
+    def _sanitize_group_steam_ids(self):
+        groups = getattr(self, "group_steam_ids", {}) or {}
+        cleaned = {}
+        dropped = []
+        for gid, steam_ids in groups.items():
+            if is_valid_group_id(gid):
+                cleaned[str(gid)] = steam_ids
+            else:
+                dropped.append(gid)
+        if dropped:
+            self.monitor_state.group_steam_ids = cleaned
+            logger.warning("已丢弃无效监控群: %s", dropped)
+            self._save_group_steam_ids()
 
     def _ensure_fonts(self):
         """检测插件fonts目录是否有NotoSansHans系列字体，有则复制到缓存目录并缓存路径"""
@@ -222,6 +259,7 @@ class PersistenceMixin:
             except Exception as e:
                 logger.warning(f"加载 steam_groups.json 失败: {e}")
         self.monitor_state.group_steam_ids = groups
+        self._sanitize_group_steam_ids()
 
     def _save_group_steam_ids(self):
         """保存所有群的 SteamID 列表到 steam_groups.json"""
@@ -258,6 +296,53 @@ class PersistenceMixin:
                 json.dump(self.push_groups, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.warning(f"保存 push_groups.json 失败: {e}")
+
+    def _get_group_switches_path(self):
+        return os.path.join(self.data_dir, "group_switches.json")
+
+    def _load_group_switches(self):
+        """加载各群监控/成就开关。缺省为开启，避免旧数据把群误关。"""
+        path = self._get_group_switches_path()
+        monitor = {}
+        achievement = {}
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    payload = json.load(f) or {}
+                monitor = {
+                    str(gid): bool(enabled)
+                    for gid, enabled in (payload.get("monitor") or {}).items()
+                    if is_valid_group_id(gid)
+                }
+                achievement = {
+                    str(gid): bool(enabled)
+                    for gid, enabled in (payload.get("achievement") or {}).items()
+                    if is_valid_group_id(gid)
+                }
+            except Exception as e:
+                logger.warning(f"加载 group_switches.json 失败: {e}")
+        self.group_monitor_enabled = monitor
+        self.group_achievement_enabled = achievement
+
+    def _save_group_switches(self):
+        path = self._get_group_switches_path()
+        payload = {
+            "monitor": {
+                str(gid): bool(enabled)
+                for gid, enabled in (getattr(self, "group_monitor_enabled", {}) or {}).items()
+                if is_valid_group_id(gid)
+            },
+            "achievement": {
+                str(gid): bool(enabled)
+                for gid, enabled in (getattr(self, "group_achievement_enabled", {}) or {}).items()
+                if is_valid_group_id(gid)
+            },
+        }
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存 group_switches.json 失败: {e}")
 
     # ========== 排行榜功能：游玩时长记录持久化 ==========
 

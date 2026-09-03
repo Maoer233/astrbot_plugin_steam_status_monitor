@@ -18,6 +18,7 @@ from .qqofficial_settings import (
 from .response_cache import AsyncTTLCache
 from ...application.services.monitor_admin import MonitorAdminService
 from ...shared.network import configure_tls, httpx_client_kwargs
+from ...shared.utils.notify_session import is_valid_group_id
 from .statistics import (
     build_dashboard_stats,
     build_groups,
@@ -628,9 +629,9 @@ class WebAdminAPI:
             data = await request.json()
         except Exception:
             return json_response({"error": "invalid JSON"}, status_code=400)
-        gid = str(data.get("group_id", ""))
+        gid = str(data.get("group_id", "")).strip()
         sid = str(data.get("steamid", ""))
-        if not gid:
+        if not is_valid_group_id(gid):
             return json_response({"error": "invalid group_id"}, status_code=400)
         if not sid:
             return json_response({"error": "steamid required"}, status_code=400)
@@ -686,7 +687,7 @@ class WebAdminAPI:
         except Exception:
             return json_response({"error": "invalid JSON"}, status_code=400)
         gid = str(data.get("group_id", "")).strip()
-        if not gid:
+        if not is_valid_group_id(gid):
             return json_response({"error": "invalid group_id"}, status_code=400)
         result = self.admin.add_group(gid)
         if result.changed:
@@ -717,9 +718,9 @@ class WebAdminAPI:
             data = await request.json()
         except Exception:
             return json_response({"error": "invalid JSON"}, status_code=400)
-        gid = str(data.get("group_id", ""))
+        gid = str(data.get("group_id", "")).strip()
         text = str(data.get("text", ""))
-        if not gid:
+        if not is_valid_group_id(gid):
             return json_response({"error": "group_id required"}, status_code=400)
         if not text.strip():
             return json_response({"error": "text is empty"}, status_code=400)

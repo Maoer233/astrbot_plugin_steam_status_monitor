@@ -17,6 +17,7 @@ import re
 from ..application.services.achievement_monitor import AchievementMonitor
 from ..application.services.achievement_tracking import AchievementTrackingMixin
 from ..application.services.notification_tracking import NotificationTrackingMixin
+from ..application.services.session_quit import SessionQuitMixin
 from ..application.services.status_change_tracking import StatusChangeTrackingMixin
 from ..application.services.polling_tracking import PollingTrackingMixin
 from ..presentation.renderers.game_start import render_game_start
@@ -40,6 +41,7 @@ from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
 from ..shared.utils.price import summary_to_cny
+from ..shared.utils.notify_session import is_sendable_group_session, is_valid_group_id
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
 # 正常运行时 states.json 约每 5 分钟落盘一次（最慢轮询间隔 30 分钟 + 保存节流 5 分钟），
@@ -51,6 +53,7 @@ class SteamStatusMonitorV3(
     QQMenuManagementMixin,
     PollingTrackingMixin,
     StatusChangeTrackingMixin,
+    SessionQuitMixin,
     NotificationTrackingMixin,
     AchievementTrackingMixin,
     StateBackedMonitorMixin,
@@ -73,11 +76,10 @@ class SteamStatusMonitorV3(
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
         self.group_last_states = {}       # {group_id: {steamid: status}}
-        self.group_start_play_times = {}  # {group_id: {steamid: {gameid: start_time}}}
         self.group_last_quit_times = {}   # {group_id: {steamid: {gameid: quit_time}}}
         self.group_pending_logs = {}      # {group_id: {steamid: {gameid: log_dict}}}
         self.group_recent_games = {}      # {group_id: [gameid, ...]}
-        self.group_pending_quit = {}      # {group_id: {steamid: {gameid: {quit_time, name, game_name, duration_min, start_time, notified}}}}
+        self._session_meta = {}           # {(group_id, sid): {player_name, game_name, avatar_url}}
         # 超能力缓存和能力列表
         self._superpower_cache = {}  # {(steamid, date): superpower}
         self._abilities = None
@@ -180,6 +182,7 @@ class SteamStatusMonitorV3(
         self.running_groups = set()  # 正在运行的群号集合
         self.group_monitor_enabled = {}      # {group_id: bool} 监控开关
         self.group_achievement_enabled = {}  # {group_id: bool} 成就推送开关
+        self._load_group_switches()
         self._qq_menu_lock = asyncio.Lock()
         self._platform_id = None  # 记录消息平台ID，用于WebUI自动补全通知目标
         # --- WebUI 群自动补全 notify_sessions ---
@@ -188,7 +191,7 @@ class SteamStatusMonitorV3(
         if hasattr(self, 'notify_sessions') and self.notify_sessions and self.API_KEY and self.group_steam_ids:
             logger.info(f"[SteamStatusMonitor] 检测到 notify_sessions={self.notify_sessions}，自动启动监控轮询")
             for group_id in self.notify_sessions:
-                if group_id in self.group_steam_ids:
+                if group_id in self.group_steam_ids and self.group_monitor_enabled.get(group_id, True):
                     self.running_groups.add(group_id)
         # --- 新增：全局日志收集与统一输出 ---
         self._last_round_logs = []  # [(group_id, logstr)]
@@ -221,7 +224,7 @@ class SteamStatusMonitorV3(
         # QQ-SteamID 绑定数据
         self._bind_data = {}  # {qq: {sid, nickname}}
         self._load_bind_data()
-        # --- 通知合并缓冲区：_delayed_quit_check 到期后将通知写入此队列，由主轮询统一 flush ---
+        # --- 通知合并缓冲区：SessionService 将开始/结束通知写入此队列，由主轮询统一 flush ---
         self._pending_end_notifications = {}  # {group_id: [notification_dict, ...]}
         # --- AstrBot Plugin Pages 管理后台 ---
         self.web_api = WebAdminAPI(self)
@@ -251,15 +254,10 @@ class SteamStatusMonitorV3(
         for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None)):
             if t and not t.done():
                 t.cancel()
-        # 取消所有延迟退出检查任务
-        if hasattr(self, '_pending_quit_tasks'):
-            for task in self._pending_quit_tasks.values():
+        if hasattr(self, 'achievement_poll_tasks'):
+            for task in self.achievement_poll_tasks.values():
                 task.cancel()
-            self._pending_quit_tasks.clear()
-        # 停止所有成就定时任务
-        for task in self.achievement_poll_tasks.values():
-            task.cancel()
-        self.achievement_poll_tasks.clear()
+            self.achievement_poll_tasks.clear()
         self.achievement_snapshots.clear()
         # 保存持久化数据（强制落盘，不节流）
         self._save_persistent_data(force=True)
@@ -310,7 +308,11 @@ class SteamStatusMonitorV3(
     async def steam_on(self, event: AstrMessageEvent):
         '''手动启动Steam状态监控轮询（分群）'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        if not is_valid_group_id(group_id):
+            yield event.plain_result("请在群聊中使用该命令，私聊无法启动群监控。")
+            return
         self.group_monitor_enabled[group_id] = True
+        self._save_group_switches()
         if not self.API_KEY:
             yield event.plain_result("未配置 Steam API Key，请先在插件配置中填写 steam_api_key。")
             return
@@ -331,26 +333,26 @@ class SteamStatusMonitorV3(
         self._record_platform_id(event)
         self._save_notify_session()
         # 初始化状态
-        now = int(time.time())
         if group_id not in self.group_last_states:
             self.group_last_states[group_id] = {}
-        if group_id not in self.group_start_play_times:
-            self.group_start_play_times[group_id] = {}
         # 批量查询所有玩家状态，减少API调用
         status_map = await self.fetch_player_statuses_batch(steam_ids) if steam_ids else {}
+        now = int(time.time())
         for sid in steam_ids:
             status = status_map.get(sid)
-            if status:
-                self.group_last_states[group_id][sid] = status
-                if status.get('gameid'):
-                    prev = self.group_last_states[group_id].get(sid)
-                    prev_gameid = prev.get('gameid') if prev else None
-                    if prev_gameid and prev_gameid == status.get('gameid') and sid in self.group_start_play_times[group_id]:
-                        pass
-                    else:
-                        gid = status.get('gameid')
-                        if gid:
-                            self.group_start_play_times[group_id].setdefault(sid, {})[gid] = int(time.time())
+            if not status:
+                continue
+            self.group_last_states[group_id][sid] = status
+            await self.session_service.handle(
+                group_id,
+                sid,
+                status.get('gameid'),
+                now,
+                player_name=status.get('name') or sid,
+                current_game_name=status.get('gameextrainfo') or '未知游戏',
+                status=status,
+                skip_push=True,
+            )
         yield event.plain_result("本群Steam状态监控启动完成喔！ヾ(≧ω≦)ゞ")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -359,6 +361,9 @@ class SteamStatusMonitorV3(
         '''添加SteamID到本群监控列表（分群），支持逗号分隔多个ID，支持SteamID/个人资料链接/自定义ID/好友码
         末尾可加 @用户 [备注名] 绑定QQ与SteamID'''
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
+        if not is_valid_group_id(group_id):
+            yield event.plain_result("请在群聊中使用该命令，或到 WebUI 填写有效群号后再添加。")
+            return
         # 解析 @用户 [备注名] 后缀（多参数接收，兼容 AstrBot 参数分割）
         bind_qq = None
         bind_nickname = None
@@ -490,8 +495,6 @@ class SteamStatusMonitorV3(
             self._save_notify_session()
             if group_id not in self.group_last_states:
                 self.group_last_states[group_id] = {}
-            if group_id not in self.group_start_play_times:
-                self.group_start_play_times[group_id] = {}
             msg += "监控已自动启动。\n"
         yield event.plain_result(msg.strip() if msg else "未添加任何SteamID。")
 
@@ -820,10 +823,10 @@ class SteamStatusMonitorV3(
     async def steam_rs(self, event: AstrMessageEvent):
         '''清除所有状态并初始化（重启插件用）'''
         self.group_last_states.clear()
-        self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
-        self.group_pending_quit.clear()
+        self.playing_sessions.clear()
+        getattr(self, "_session_meta", {}).clear()
         self.group_recent_games.clear()
         self._superpower_cache.clear()
         self._game_name_cache.clear()
@@ -833,6 +836,7 @@ class SteamStatusMonitorV3(
         self.group_monitor_enabled.clear()
         self.group_achievement_enabled.clear()
         self.notify_sessions = {}
+        self._save_group_switches()
         self._save_persistent_data(force=True)  # 清空后保存
         yield event.plain_result("Steam状态监控插件已重置，所有状态已清空。")
 
@@ -965,9 +969,9 @@ class SteamStatusMonitorV3(
                     session = getattr(self, "notify_sessions", {}).get(
                         target_group_id
                     )
-                    if not session:
+                    if not is_sendable_group_session(session):
                         logger.warning(
-                            f"[排行榜] 群 {target_group_id} 未找到推送会话，跳过"
+                            f"[排行榜] 群 {target_group_id} 未找到有效推送会话，跳过"
                         )
                         continue
                     await self.context.send_message(
@@ -1145,6 +1149,9 @@ class SteamStatusMonitorV3(
         if param == "all":
             self.rank_push_all = True
             group_id = event.get_group_id() or "default"
+            if not is_valid_group_id(group_id):
+                yield event.plain_result("请在群聊中开启排行榜推送。")
+                return
             if group_id not in self.rank_push_groups:
                 self.rank_push_groups.append(group_id)
             self._save_rank_push_groups()
@@ -1152,6 +1159,9 @@ class SteamStatusMonitorV3(
         else:
             self.rank_push_all = False
             group_id = event.get_group_id() or "default"
+            if not is_valid_group_id(group_id):
+                yield event.plain_result("请在群聊中开启排行榜推送。")
+                return
             if group_id not in self.rank_push_groups:
                 self.rank_push_groups.append(group_id)
                 self._save_rank_push_groups()
@@ -1246,13 +1256,8 @@ class SteamStatusMonitorV3(
         # 构建单人 user_list
         now = int(time.time())
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
-        start_play_times = self.group_start_play_times.get(group_id, {}).get(sid, {})
         if gameid:
-            start_time = start_play_times.get(gameid) if isinstance(start_play_times, dict) else None
-            if not start_time and isinstance(start_play_times, dict) and start_play_times:
-                start_time = max(start_play_times.values())
-            if not start_time and not isinstance(start_play_times, dict):
-                start_time = start_play_times
+            start_time = self.session_service.started_at(group_id, sid, gameid)
             play_seconds = now - start_time if start_time else 0
             play_minutes = play_seconds / 60
             play_str = f"{play_minutes/60:.1f}小时" if play_minutes >= 60 else f"{play_minutes:.1f}分钟"
@@ -1307,10 +1312,11 @@ class SteamStatusMonitorV3(
         self.group_monitor_enabled[group_id] = False
         if group_id in self.running_groups:
             self.running_groups.remove(group_id)
+        self._save_group_switches()
         # 清除该群的轮询时间表，停止轮询（/steam on 后会重新初始化）
         self.next_poll_time.pop(group_id, None)
-        # 清除待推送的退出缓冲，避免残留延迟任务在停用后推送
-        self.group_pending_quit.pop(group_id, None)
+        # 停用后不再推送本群缓冲通知；会话仍保留，由 tick_due 到期结算时长
+        self._pending_end_notifications.pop(group_id, None)
         # 取消该群所有成就轮询任务，释放资源
         keys_to_cancel = [k for k in list(self.achievement_poll_tasks.keys()) if k[0] == group_id]
         for key in keys_to_cancel:
@@ -1325,6 +1331,7 @@ class SteamStatusMonitorV3(
         """开启本群Steam成就推送"""
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_achievement_enabled[group_id] = True
+        self._save_group_switches()
         yield event.plain_result(f"已为本群开启Steam成就推送。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1333,6 +1340,7 @@ class SteamStatusMonitorV3(
         """关闭本群Steam成就推送"""
         group_id = str(event.get_group_id()) if hasattr(event, 'get_group_id') else 'default'
         self.group_achievement_enabled[group_id] = False
+        self._save_group_switches()
         yield event.plain_result(f"已为本群关闭Steam成就推送。")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -1481,9 +1489,6 @@ class SteamStatusMonitorV3(
     @filter.command("steam clear_allids")
     async def steam_clear_allids(self, event: AstrMessageEvent):
         '''删除所有群聊的所有已监控SteamID，并清空相关状态数据'''
-        for task in self._pending_quit_tasks.values():
-            task.cancel()
-        self._pending_quit_tasks.clear()
         for task in self.achievement_poll_tasks.values():
             task.cancel()
         self.achievement_poll_tasks.clear()
@@ -1494,12 +1499,13 @@ class SteamStatusMonitorV3(
         self.running_groups.clear()
         self.group_monitor_enabled.clear()
         self.group_achievement_enabled.clear()
+        self._save_group_switches()
         self.next_poll_time.clear()
         self.group_last_states.clear()
-        self.group_start_play_times.clear()
         self.group_last_quit_times.clear()
         self.group_pending_logs.clear()
-        self.group_pending_quit.clear()
+        self.playing_sessions.clear()
+        getattr(self, "_session_meta", {}).clear()
         self.group_recent_games.clear()
         self._pending_end_notifications.clear()
         self.notify_sessions.clear()
@@ -1525,10 +1531,6 @@ class SteamStatusMonitorV3(
             yield event.plain_result(f"群聊 {group_id} 未绑定任何SteamID，无需清理。")
             return
 
-        for task_key in list(self._pending_quit_tasks):
-            if task_key[0] == group_id:
-                task = self._pending_quit_tasks.pop(task_key)
-                task.cancel()
         for sid in list(self.group_steam_ids.get(group_id, [])):
             self.push_groups.pop(sid, None)
         for sid in routed_sids:
@@ -1539,10 +1541,9 @@ class SteamStatusMonitorV3(
                 self.push_groups.pop(sid, None)
         self.group_steam_ids.pop(group_id, None)
         self.group_last_states.pop(group_id, None)
-        self.group_start_play_times.pop(group_id, None)
         self.group_last_quit_times.pop(group_id, None)
         self.group_pending_logs.pop(group_id, None)
-        self.group_pending_quit.pop(group_id, None)
+        self.session_service.discard_group(group_id)
         self.group_recent_games.pop(group_id, None)
         self.next_poll_time.pop(group_id, None)
         self.running_groups.discard(group_id)
@@ -1719,7 +1720,6 @@ class SteamStatusMonitorV3(
             all_sids.extend(self.group_steam_ids[gid_])
         status_map = await self.fetch_player_statuses_batch(all_sids) if all_sids else {}
         for group_id, steam_ids in self.group_steam_ids.items():
-            start_play_times = self.group_start_play_times.get(group_id, {})
             next_poll = self.next_poll_time.get(group_id, {})
             for sid in steam_ids:
                 nt = next_poll.get(sid, now)
@@ -1735,7 +1735,7 @@ class SteamStatusMonitorV3(
                 avatar_url = status.get('avatarfull') or status.get('avatar') or ''
                 zh_game_name = await self.get_chinese_game_name(gameid, game) if gameid else (game or "未知游戏")
                 if gameid:
-                    st = start_play_times.get(sid, {}).get(gameid) if isinstance(start_play_times.get(sid), dict) else start_play_times.get(sid)
+                    st = self.session_service.started_at(group_id, sid, gameid)
                     ps = now - st if st else 0
                     pm = ps / 60
                     ps_str = f"{pm:.1f}分钟" if pm < 60 else f"{pm/60:.1f}小时"

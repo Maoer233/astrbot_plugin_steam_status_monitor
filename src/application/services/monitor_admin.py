@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from ...domain.monitoring import MonitorStateStore
+from ...shared.utils.notify_session import is_valid_group_id
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,8 @@ class MonitorAdminService:
         return await self._plugin.resolve_steam_input(value)
 
     def add_player(self, group_id: str, steam_id: str) -> GroupMutationResult:
+        if not is_valid_group_id(group_id):
+            return GroupMutationResult(False, "invalid group_id")
         steam_ids = self.groups.setdefault(group_id, [])
         if steam_id in steam_ids:
             return GroupMutationResult(False, "already exists")
@@ -94,6 +97,7 @@ class MonitorAdminService:
         push_groups.pop(steam_id, None)
         self._plugin._save_group_steam_ids()
         self._plugin._save_push_groups()
+        self._plugin.session_service.discard_player(steam_id)
         self._clear_runtime_state(steam_id)
         self._remove_bindings(steam_id)
         return GroupMutationResult(True, "removed primary monitor and all push routes")
@@ -102,7 +106,6 @@ class MonitorAdminService:
         state = self._state
         for mapping_name in (
             "group_last_states",
-            "group_start_play_times",
             "group_last_quit_times",
             "next_poll_time",
         ):
@@ -111,22 +114,16 @@ class MonitorAdminService:
                 mapping[group_id].pop(steam_id, None)
                 if not mapping[group_id]:
                     mapping.pop(group_id, None)
-        for mapping_name in ("group_pending_logs", "group_pending_quit"):
-            mapping = getattr(state, mapping_name, {})
-            for group_id in list(mapping):
-                mapping[group_id].pop(steam_id, None)
-                if not mapping[group_id]:
-                    mapping.pop(group_id, None)
+        mapping = getattr(state, "group_pending_logs", {})
+        for group_id in list(mapping):
+            mapping[group_id].pop(steam_id, None)
+            if not mapping[group_id]:
+                mapping.pop(group_id, None)
         pending = getattr(state, "pending_end_notifications", {})
         for group_id in list(pending):
             pending[group_id] = [item for item in pending[group_id] if str(item.get("sid", item.get("steamid", ""))) != steam_id]
             if not pending[group_id]:
                 pending.pop(group_id, None)
-        for key in list(getattr(state, "pending_quit_tasks", {})):
-            if len(key) >= 2 and str(key[1]) == steam_id:
-                task = state.pending_quit_tasks.pop(key, None)
-                if task:
-                    task.cancel()
         for attr in ("achievement_poll_tasks", "achievement_snapshots", "achievement_fail_count"):
             cache = getattr(self._plugin, attr, {})
             for key in list(cache):
@@ -145,6 +142,8 @@ class MonitorAdminService:
             self._plugin._save_bind_data()
 
     def add_group(self, group_id: str) -> GroupMutationResult:
+        if not is_valid_group_id(group_id):
+            return GroupMutationResult(False, "invalid group_id")
         if group_id in self.groups:
             return GroupMutationResult(False, "already exists")
         self.groups[group_id] = []
@@ -173,10 +172,9 @@ class MonitorAdminService:
 
         self.groups.pop(group_id, None)
         self._state.group_last_states.pop(group_id, None)
-        self._state.group_start_play_times.pop(group_id, None)
         self._state.group_last_quit_times.pop(group_id, None)
         self._state.group_pending_logs.pop(group_id, None)
-        self._state.group_pending_quit.pop(group_id, None)
+        self._plugin.session_service.discard_group(group_id)
         self._state.group_recent_games.pop(group_id, None)
         self._state.next_poll_time.pop(group_id, None)
         self._plugin._save_group_steam_ids()

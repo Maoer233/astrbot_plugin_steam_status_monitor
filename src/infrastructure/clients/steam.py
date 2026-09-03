@@ -4,7 +4,7 @@ import time
 
 import httpx
 
-from ...shared.logging import logger
+from ...shared.logging import format_exception, logger
 from ...shared.network import httpx_client_kwargs
 
 
@@ -31,8 +31,8 @@ class SteamClientMixin:
                 players = response.json().get("response", {}).get("players", [])
                 return players[0] if players else None
         except Exception as exc:
-            logger.warning(f"获取 Steam 玩家摘要失败: {exc} (SteamID: {steam_id})")
-            raise SteamClientError(f"Steam API 请求失败: {exc}") from exc
+            logger.warning(f"获取 Steam 玩家摘要失败: {format_exception(exc)} (SteamID: {steam_id})")
+            raise SteamClientError(f"Steam API 请求失败: {format_exception(exc)}") from exc
 
     async def fetch_player_status(self, steam_id, retry=None):
         '''拉取单个玩家的 Steam 状态，失败自动重试多次并指数退避'''
@@ -69,7 +69,7 @@ class SteamClientMixin:
                         'avatar': player.get('avatar')
                     }
             except Exception as e:
-                logger.warning(f"拉取 Steam 状态失败: {e} (SteamID: {steam_id}, 第{attempt+1}次重试)")
+                logger.warning(f"拉取 Steam 状态失败: {format_exception(e)} (SteamID: {steam_id}, 第{attempt+1}次重试)")
                 if attempt < retry - 1:
                     await asyncio.sleep(delay)
                     delay *= 2
@@ -126,7 +126,7 @@ class SteamClientMixin:
                             logger.warning(f"[批量查询] 以下 SteamID 在响应中缺失（可能无效/隐私）: {missing}")
                         break
                 except Exception as e:
-                    logger.warning(f"[批量查询] 失败: {e} (本批 {len(batch)} 个 ID, 第{attempt+1}次重试)")
+                    logger.warning(f"[批量查询] 失败: {format_exception(e)} (本批 {len(batch)} 个 ID, 第{attempt+1}次重试)")
                     if attempt < retry - 1:
                         await asyncio.sleep(delay)
                         delay *= 2
@@ -140,7 +140,7 @@ class SteamClientMixin:
                                     if single:
                                         result[sid] = single
                                 except Exception as se:
-                                    logger.warning(f'[批量查询] 单查降级也失败 (SteamID={sid}): {se}')
+                                    logger.warning(f'[批量查询] 单查降级也失败 (SteamID={sid}): {format_exception(se)}')
         return result
 
     async def resolve_steam_input(self, raw):

@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.shared.logging import redact_sensitive, register_sensitive_values
+from src.shared.logging import format_exception, redact_sensitive, register_sensitive_values
 from src.shared.network import configure_tls, get_ssl_ca_file, httpx_client_kwargs, requests_verify
 
 
@@ -22,6 +22,11 @@ class LoggingTests(unittest.TestCase):
         self.assertNotIn("private-api-key", redacted)
         self.assertNotIn("token-value", redacted)
         self.assertIn("******", redacted)
+
+    def test_format_exception_keeps_type_when_message_is_empty(self):
+        empty_timeout = type("ConnectTimeout", (Exception,), {})("")
+        self.assertEqual("ConnectTimeout", format_exception(empty_timeout))
+        self.assertEqual("ValueError: boom", format_exception(ValueError("boom")))
 
 
 class NetworkConfigTests(unittest.TestCase):

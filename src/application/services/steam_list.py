@@ -40,9 +40,6 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
     # 批量查询所有玩家状态，减少API调用次数
     status_map = await self.fetch_player_statuses_batch(steam_ids) if steam_ids else {}
     for sid in steam_ids:
-        start_play_times = self.group_start_play_times.get(
-            primary_group_by_sid.get(sid, group_id), {}
-        )
         status = status_map.get(sid)
         if not status:
             user_list.append({
@@ -64,18 +61,9 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
         avatar_url = status.get('avatarfull') or status.get('avatar') or ''
         zh_game_name = await self.get_chinese_game_name(gameid, game) if gameid else (game or "未知游戏")
         if gameid:
-            # 修复: start_play_times[sid] 可能为 dict
-            start_time = None
-            if isinstance(start_play_times.get(sid), dict):
-                # 优先取当前游戏的开始时间
-                if gameid and gameid in start_play_times[sid]:
-                    start_time = start_play_times[sid][gameid]
-                else:
-                    # 如果没有当前游戏，取所有游戏的最晚开始时间
-                    if start_play_times[sid]:
-                        start_time = max(start_play_times[sid].values())
-            else:
-                start_time = start_play_times.get(sid)
+            start_time = self.session_service.started_at(
+                primary_group_by_sid.get(sid, group_id), sid, gameid
+            )
             play_seconds = now - start_time if start_time else 0
             play_minutes = play_seconds / 60
             if play_minutes < 60:

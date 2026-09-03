@@ -6,6 +6,7 @@ from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image
 
 from ...shared.logging import logger
+from ...shared.utils.notify_session import is_sendable_group_session
 
 
 class AchievementTrackingMixin:
@@ -102,6 +103,17 @@ class AchievementTrackingMixin:
             push_session = getattr(self, 'notify_sessions', {}).get(push_gid)
             if push_session and push_session not in notify_sessions:
                 notify_sessions.append(push_session)
+        notify_sessions = [
+            session for session in notify_sessions
+            if is_sendable_group_session(session)
+        ]
+        if not notify_sessions:
+            logger.warning(
+                "成就通知无有效会话，已跳过 (group_id=%s, steamid=%s)",
+                group_id,
+                steamid,
+            )
+            return
         tmp_path = None
         if self.config.get('notify_send_image', True) and details:
             unlocked_set = await self.achievement_monitor.get_player_achievements(

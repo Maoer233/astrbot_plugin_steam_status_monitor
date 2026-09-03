@@ -3,13 +3,17 @@ import asyncio
 from src.application.services.steam_list import handle_steam_list
 
 
+class _SessionService:
+    def started_at(self, group_id, sid, gameid):
+        if group_id == "primary" and sid == "sid-primary" and str(gameid) == "730":
+            return 100
+        return None
+
+
 class ListMonitor:
     group_steam_ids = {"primary": ["sid-primary"], "push": []}
     push_groups = {"sid-primary": ["push"]}
-    group_start_play_times = {
-        "primary": {"sid-primary": {"730": 100}},
-        "push": {},
-    }
+    session_service = _SessionService()
 
     async def fetch_player_statuses_batch(self, steam_ids):
         return {

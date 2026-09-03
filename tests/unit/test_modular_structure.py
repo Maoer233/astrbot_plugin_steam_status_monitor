@@ -34,6 +34,8 @@ class ModularStructureTests(unittest.TestCase):
             "src/infrastructure/clients/steam.py",
             "src/infrastructure/persistence/plugin_data.py",
             "src/application/services/achievement_monitor.py",
+            "src/application/services/session_service.py",
+            "src/domain/monitoring/session.py",
             "src/domain/ranking/push_scopes.py",
             "src/presentation/web/admin_api.py",
             "src/presentation/renderers/game_start.py",
@@ -58,6 +60,12 @@ class ModularStructureTests(unittest.TestCase):
         bases = {base.id for base in plugin_class.bases if isinstance(base, ast.Name)}
         self.assertEqual(
             {
+                "QQMenuManagementMixin",
+                "PollingTrackingMixin",
+                "StatusChangeTrackingMixin",
+                "SessionQuitMixin",
+                "NotificationTrackingMixin",
+                "AchievementTrackingMixin",
                 "StateBackedMonitorMixin",
                 "PersistenceMixin",
                 "SteamClientMixin",
@@ -71,9 +79,14 @@ class ModularStructureTests(unittest.TestCase):
 
         implementation_path = PROJECT_ROOT / "src/plugin/steam_status_monitor.py"
         tree = ast.parse(implementation_path.read_text(encoding="utf-8"))
+        plugin_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "SteamStatusMonitorV3"
+        )
         functions = {
             node.name: node
-            for node in tree.body
+            for node in plugin_class.body
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         }
 

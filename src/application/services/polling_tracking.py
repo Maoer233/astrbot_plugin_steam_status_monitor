@@ -23,11 +23,14 @@ class PollingTrackingMixin:
             # Steam 状态查询按 SID 去重，但状态基线必须按群分别建立。
             unique_sids = list(dict.fromkeys(
                 sid
-                for steam_ids in self.group_steam_ids.values()
+                for gid, steam_ids in self.group_steam_ids.items()
+                if self.group_monitor_enabled.get(gid, True)
                 for sid in steam_ids
             ))
-            status_map = await self.fetch_player_statuses_batch(unique_sids)
+            status_map = await self.fetch_player_statuses_batch(unique_sids) if unique_sids else {}
             for group_id in self.group_steam_ids:
+                if not self.group_monitor_enabled.get(group_id, True):
+                    continue
                 steam_ids = self.group_steam_ids[group_id]
                 group_lines = []
                 for sid in steam_ids:
@@ -90,14 +93,20 @@ class PollingTrackingMixin:
                         self._save_persistent_data(force=True)
                     except Exception as e:
                         logger.error(f"[SteamStatusMonitor] 节流保存失败: {e}")
+                # 离线玩家可能数十分钟才再入轮询，deadline 必须每分钟单独检查。
+                # 必须在 Steam 请求之前结算并立刻 flush，否则超时会把结束卡拖到下一局开始才发出。
+                self.session_service.tick_due(int(now2))
+                await self._flush_pending_end_notifications()
                 if not group_sids:
                     await asyncio.sleep(40)  # 本轮无到点，跳过
                     continue
                 # 一次批量查询所有到点SteamID（去重），大幅减少API调用
                 all_sids = list(all_sids_set)
-                global_status_map = await self.fetch_player_statuses_batch(all_sids)
+                global_status_map = await self._fetch_statuses_while_ticking(all_sids)
                 # 各群并行处理状态变更检测
                 async def query_one_group(gid, sids):
+                    if not self.group_monitor_enabled.get(gid, True):
+                        return
                     round_msg_lines = []
                     tasks = []
                     for sid in sids:
@@ -136,4 +145,21 @@ class PollingTrackingMixin:
                 # 其他异常：保留堆栈后继续循环，防止单次异常导致轮询彻底失效
                 logger.exception("[SteamStatusMonitor] 主轮询循环异常，5 秒后继续")
                 await asyncio.sleep(5)
+
+    async def _fetch_statuses_while_ticking(self, steam_ids, tick_interval=1.0):
+        """拉取 Steam 状态期间继续结算到期会话，避免超时把结束卡堵住。"""
+        if not steam_ids:
+            return {}
+        fetch_task = asyncio.create_task(self.fetch_player_statuses_batch(steam_ids))
+        try:
+            while not fetch_task.done():
+                try:
+                    return await asyncio.wait_for(asyncio.shield(fetch_task), timeout=tick_interval)
+                except asyncio.TimeoutError:
+                    self.session_service.tick_due(int(time.time()))
+                    await self._flush_pending_end_notifications()
+            return fetch_task.result()
+        except asyncio.CancelledError:
+            fetch_task.cancel()
+            raise
 

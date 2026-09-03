@@ -25,6 +25,13 @@ def register_sensitive_values(*values):
                 _registered_secrets.add(text)
 
 
+def format_exception(exc):
+    """把异常格式化成可读文本。httpx 超时等类型的 str() 经常为空。"""
+    name = type(exc).__name__
+    text = str(exc).strip()
+    return f"{name}: {text}" if text else name
+
+
 def redact_sensitive(value):
     """清理 URL 查询密钥、Bearer Token、代理认证及已注册密钥。"""
     text = str(value)
