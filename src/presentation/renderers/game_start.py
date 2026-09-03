@@ -427,7 +427,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     name_width = name_bbox[2] - name_bbox[0]
     max_name_line_w = 360
     name_line_w = min(max(name_width, 220), max_name_line_w)
-    img_w = max(IMG_W, text_x + name_line_w + online_text_w + avatar_margin)
+    img_w = max(IMG_W, text_x + name_line_w + avatar_margin)
     img_h = IMG_H
 
     img = render_gradient_bg(img_w, img_h, BG_COLOR_TOP, BG_COLOR_BOTTOM).convert("RGBA")
@@ -455,8 +455,8 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
             print(f"[render_game_start_image] 封面渲染失败: {e}")
             new_w = COVER_W
 
-    # 3. 文本区域扣除在线人数预留宽度，长玩家名自动换行。
-    text_area_w = img_w - text_x - avatar_margin - online_text_w
+    # 3. 文本区域不再为在线人数预留宽度（玩家人数叠于右上角空白处），长玩家名自动换行。
+    text_area_w = img_w - text_x - avatar_margin
     player_lines = text_wrap(player_name or "", player_font, max_name_line_w)
     game_name_padded = pad_game_name(game_name, min_cn_len=10)
     game_name_lines = text_wrap(game_name_padded, font, text_area_w)

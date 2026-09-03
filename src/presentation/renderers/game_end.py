@@ -267,21 +267,17 @@ def _measure_text_width(text, font):
 
 
 def fit_end_card_player_name(player_name, font, text_x, extra_right=0, default_w=IMG_W):
-    """与开始卡相同：28px 字号、按文字拉长画布、超过 360px 换行，保留「结束游戏」。"""
+    """与开始卡相同：28px 字号、按文字拉长画布、超过 360px 换行。
+    「结束游戏」作为独立一行紧跟玩家名（第一行玩家名、第二行结束游戏、第三行游戏名）；
+    时间文本作为右上角叠标，不撑宽画布（extra_right 保留为兼容参数）。"""
     name = player_name or ""
-    suffix = _END_TITLE_SUFFIX
     name_width = _measure_text_width(name, font)
     name_line_w = min(max(name_width, _MIN_NAME_LINE_W), _MAX_NAME_LINE_W)
     lines = text_wrap(name, font, _MAX_NAME_LINE_W)
-    last_with_suffix = (lines[-1] if lines else "") + suffix
-    last_w = _measure_text_width(last_with_suffix, font)
-    if last_w <= _MAX_NAME_LINE_W:
-        lines[-1] = last_with_suffix
-        content_w = max(name_line_w, last_w)
-    else:
-        lines.append(suffix.strip())
-        content_w = name_line_w
-    img_w = max(default_w, text_x + content_w + extra_right + 24)
+    suffix = (_END_TITLE_SUFFIX or "结束游戏").strip()
+    lines = lines + [suffix]
+    content_w = max(name_line_w, _measure_text_width(suffix, font))
+    img_w = max(default_w, text_x + content_w + 24)
     return lines, img_w
 
 def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None, horizontal_cover_path=None):

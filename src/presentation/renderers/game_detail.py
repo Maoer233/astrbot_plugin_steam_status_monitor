@@ -180,11 +180,6 @@ async def render_game_detail_image(
         history_low = itad_summary.get("lowest")
     history_text = _value_text(history_low, currency)
 
-    review = game.get("review") or {}
-    review_text = review.get("text") or review.get("review_score_desc") or "暂无评价"
-    review_percent = review.get("percent") or review.get("review_score_percent")
-    review_percent_text = f"{review_percent}%" if review_percent is not None else ""
-
     title = game.get("name") or "未知游戏"
     english_title = game.get("english_name") or game.get("original_name") or ""
     release_date = (game.get("release_date") or {}).get("date") or "未知"
@@ -261,13 +256,44 @@ async def render_game_detail_image(
         remaining_width = max(40, left_width - 24 - title_width - 10)
         english_font = _fit_font(draw, english_title, font_path, 15, 10, remaining_width)
         draw.text((left_x + 12 + title_width + 10, title_y + 7), english_title, font=english_font, fill=STEAM_MUTED)
-    review_y = section_top[0] + 70
-    draw.text((left_x + 12, review_y), review_text, font=body_font, fill=STEAM_BLUE)
-    if review_percent_text:
-        review_width = draw.textbbox((0, 0), review_text, font=body_font)[2]
-        draw.text((left_x + 12 + review_width + 10, review_y), review_percent_text, font=body_font, fill=STEAM_BLUE_SOFT)
-    draw.text((left_x + 12, section_top[0] + 108), "发行日期", font=small_font, fill=STEAM_MUTED)
-    draw.text((left_x + 80, section_top[0] + 108), release_date, font=small_font, fill=STEAM_TEXT)
+    review_all = game.get("review_all") or {}
+    review_zh = game.get("review_schinese") or {}
+
+    # 评分等级 → 颜色（好评绿 / 褒贬不一黄 / 差评红）
+    def _review_color(text):
+        if text == "好评如潮":
+            return (129, 173, 81)
+        if text in ("特别好评", "多半好评"):
+            return (130, 200, 90)
+        if text == "褒贬不一":
+            return (222, 180, 60)
+        if text in ("差评", "差评如潮"):
+            return (225, 80, 80)
+        return STEAM_BLUE
+
+    def _draw_review_row(y, label, r):
+        r = r or {}
+        text = r.get("text") or "暂无评价"
+        total = r.get("total")
+        pct = r.get("percent")
+        data = []
+        if pct is not None:
+            data.append(f"{pct}%")
+        if total is not None and total > 0:
+            data.append(f"({total:,})")
+        # 列1：类别（灰色小字）  列2：评分等级（着色）  列3：百分比/数量（灰色小字）
+        draw.text((left_x + 12, y), label, font=small_font, fill=STEAM_MUTED)
+        draw.text((left_x + 104, y), text, font=body_font, fill=_review_color(text))
+        if data:
+            draw.text((left_x + 200, y), " ".join(data), font=small_font, fill=STEAM_MUTED)
+
+    # 行1：全部评测
+    _draw_review_row(section_top[0] + 70, "全部评测", review_all)
+    # 行2：中文评测
+    _draw_review_row(section_top[0] + 92, "中文评测", review_zh)
+    # 发行日期（下移到两行评价之下）
+    draw.text((left_x + 12, section_top[0] + 128), "发行日期", font=small_font, fill=STEAM_MUTED)
+    draw.text((left_x + 80, section_top[0] + 128), release_date, font=small_font, fill=STEAM_TEXT)
 
     price_y = section_top[1] + 28
     draw.text((left_x + 12, price_y), current_text, font=price_font, fill=STEAM_WHITE)

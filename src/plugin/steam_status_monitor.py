@@ -70,7 +70,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.3.0"
+        self._plugin_version = "4.4.0"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -619,30 +619,27 @@ class SteamStatusMonitorV3(
             logger.warning("LLM 翻译游戏名失败，将使用原始查询: %s", exc)
         return query
 
-    @filter.permission_type(filter.PermissionType.MEMBER)
-    @filter.command("steam price")
-    async def steam_price(self, event: AstrMessageEvent, query: str):
-        """按中文名、英文名或 Steam 链接查询当前价格与历史最低价。"""
-        # 修复参数截断：AstrBot 的 command 注入参数会吞掉尾部数字（如“猫娘乐园 3”中的 3），
-        # 改用 event.message_str 手动剥离“steam price”前缀，保留含空格与数字的完整参数。
+    async def _steam_price(self, event: AstrMessageEvent, auto_first: bool, prefix: str):
+        """按中文名、英文名或 Steam 链接查询当前价格与历史最低价（px 为 auto_first 快捷版）。"""
+        # 剥离命令前缀，保留含空格与数字的完整参数（fix 参数截断）。
         raw_msg = getattr(event, "message_str", None)
         if raw_msg is None:
             getter = getattr(event, "get_message_str", None)
             raw_msg = getter() if callable(getter) else ""
         query = re.sub(
-            r"^[/.。／]*\s*steam\s*price\s*",
+            rf"^[/.。／]*\s*{re.escape(prefix)}\s*",
             "",
             str(raw_msg or ""),
             count=1,
             flags=re.IGNORECASE,
         ).strip()
         if not query:
-            yield event.plain_result("用法：/steam price <游戏名或 Steam 链接>")
+            yield event.plain_result(f"用法：/steam {prefix} <游戏名或 Steam 链接>")
             return
         session_key = self._steam_search_session_key(event)
         pending = self._steam_search_pending.get(session_key)
         selected_from_cache = False
-        if query.isdigit() and pending:
+        if not auto_first and query.isdigit() and pending:
             index = int(query) - 1
             games = self._steam_search_cache.get(session_key, [])
             if 0 <= index < len(games):
@@ -658,7 +655,7 @@ class SteamStatusMonitorV3(
                 yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
                 return
             game = games[0]
-        if not selected_from_cache and len(games) > 1:
+        if not auto_first and not selected_from_cache and len(games) > 1:
             self._steam_search_cache[session_key] = games
             self._steam_search_pending[session_key] = True
             lines = ["找到多个匹配游戏，请回复序号："]
@@ -688,9 +685,10 @@ class SteamStatusMonitorV3(
             }
         detail = await self.fetch_game_details(game.appid) if game.appid else None
         if detail and game.appid:
-            review = await self.fetch_game_reviews(game.appid)
-            if review:
-                detail['review'] = review
+            reviews = await self.fetch_game_reviews_both(game.appid)
+            if reviews:
+                detail['review_all'] = reviews.get('all') or {}
+                detail['review_schinese'] = reviews.get('schinese') or {}
         self._steam_search_pending.pop(session_key, None)
         self._steam_search_cache.pop(session_key, None)
         store_appid = (detail or {}).get('store_appid') or game.appid
@@ -704,7 +702,8 @@ class SteamStatusMonitorV3(
             'developers': [],
             'release_date': {'date': '未知'},
             'price_overview': {},
-            'review': {},
+            'review_all': {},
+            'review_schinese': {},
         }
         try:
             img_bytes = await render_game_detail_image(
@@ -731,6 +730,20 @@ class SteamStatusMonitorV3(
             yield event.plain_result(store_url)
         else:
             yield event.plain_result("未找到对应的 Steam 商店链接。")
+
+    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.command("steam price")
+    async def steam_price(self, event: AstrMessageEvent, query: str):
+        """价格查询（多个匹配时列出候选并等待回复序号）。"""
+        async for result in self._steam_price(event, False, "price"):
+            yield result
+
+    @filter.permission_type(filter.PermissionType.MEMBER)
+    @filter.command("steam px")
+    async def steam_px(self, event: AstrMessageEvent, query: str):
+        """价格查询快捷版（price 缩写）：无需回复序号，直接返回第一条匹配游戏的价格。"""
+        async for result in self._steam_price(event, True, "px"):
+            yield result
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steam list")

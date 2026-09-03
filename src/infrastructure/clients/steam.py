@@ -217,22 +217,26 @@ class SteamClientMixin:
             logger.warning(f"[vanity解析] 异常: {e} (vanity={vanity})")
             return None
 
-    async def fetch_game_reviews(self, appid, language="schinese"):
-        """获取 Steam 商店评价摘要。"""
+    async def _review_summary(self, appid, language=None):
+        """获取 Steam 商店评价摘要。language=None 表示全部语言；否则为指定语言。
+        返回 {"text","percent","total"} 或 None。"""
         gid = str(appid).strip()
         if not gid.isdigit():
             return None
         url = f"{self.STEAM_STORE_BASE}/appreviews/{gid}"
+        params = {"json": 1, "filter": "summary"}
+        if language:
+            params["language"] = language
         try:
             async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
-                response = await client.get(url, params={"json": 1, "language": language, "filter": "summary"})
+                response = await client.get(url, params=params)
                 response.raise_for_status()
                 payload = response.json()
                 summary = payload.get("query_summary") or payload.get("querySummary") or {}
                 total = int(summary.get("total_reviews") or summary.get("totalReviews") or 0)
                 positive = int(summary.get("total_positive") or summary.get("totalPositive") or 0)
                 if total <= 0:
-                    return {"text": "暂无评价"}
+                    return {"text": "暂无评价", "percent": None, "total": 0}
                 percent = round(positive * 100 / total)
                 if percent >= 95:
                     label = "好评如潮"
@@ -248,6 +252,18 @@ class SteamClientMixin:
         except Exception as exc:
             logger.warning(f"获取 Steam 评价摘要失败: {exc} (appid={gid})")
             return None
+
+    async def fetch_game_reviews(self, appid, language="schinese"):
+        """获取 Steam 商店评价摘要（默认简体中文；language=None 表示全部语言）。"""
+        return await self._review_summary(appid, language)
+
+    async def fetch_game_reviews_both(self, appid):
+        """同时获取「全部语言」与「简体中文」两份评价摘要，供卡片并列显示。"""
+        all_review, zh_review = await asyncio.gather(
+            self._review_summary(appid, None),
+            self._review_summary(appid, "schinese"),
+        )
+        return {"all": all_review, "schinese": zh_review}
 
     async def fetch_game_details(self, appid, language="schinese"):
         """获取 Steam 商店游戏详情。"""
