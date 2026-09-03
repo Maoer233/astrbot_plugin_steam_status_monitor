@@ -267,6 +267,8 @@ async def render_game_detail_image(
             return (130, 200, 90)
         if text == "褒贬不一":
             return (222, 180, 60)
+        if text == "多半差评":
+            return (225, 120, 70)
         if text in ("差评", "差评如潮"):
             return (225, 80, 80)
         return STEAM_BLUE

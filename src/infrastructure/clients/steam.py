@@ -217,16 +217,16 @@ class SteamClientMixin:
             logger.warning(f"[vanity解析] 异常: {e} (vanity={vanity})")
             return None
 
-    async def _review_summary(self, appid, language=None):
-        """获取 Steam 商店评价摘要。language=None 表示全部语言；否则为指定语言。
+    async def _review_summary(self, appid, language="all"):
+        """获取 Steam 商店评价摘要。language 传 'all' 表示所有语言（缺省），否则为指定语言。
         返回 {"text","percent","total"} 或 None。"""
         gid = str(appid).strip()
         if not gid.isdigit():
             return None
         url = f"{self.STEAM_STORE_BASE}/appreviews/{gid}"
         params = {"json": 1, "filter": "summary"}
-        if language:
-            params["language"] = language
+        language = language or "all"
+        params["language"] = language
         try:
             async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                 response = await client.get(url, params=params)
@@ -246,6 +246,8 @@ class SteamClientMixin:
                     label = "多半好评"
                 elif percent >= 40:
                     label = "褒贬不一"
+                elif percent >= 20:
+                    label = "多半差评"
                 else:
                     label = "差评"
                 return {"text": label, "percent": percent, "total": total}
