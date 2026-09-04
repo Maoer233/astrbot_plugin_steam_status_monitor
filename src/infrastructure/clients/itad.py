@@ -77,7 +77,8 @@ class ITADClient:
                 result.append(ITADGame(game_id, title, item.get("url", ""), item.get("slug", ""), image))
         return result
 
-    async def _steam_search(self, query: str, language: str = "english", limit: int = 6):
+    async def _steam_storesearch(self, query: str, language: str = "english", limit: int = 6):
+        """只走 storesearch API，避免空结果时被 HTML 页的无关条目顶掉。"""
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
                 response = await client.get(
@@ -89,8 +90,15 @@ class ITADClient:
                 items = payload.get("items", []) if isinstance(payload, dict) else []
                 if isinstance(items, list) and items:
                     return items[:limit]
+                return []
+        except Exception as exc:
+            logger.warning("Steam storesearch 失败: %s", exc)
+            return []
 
-                # 商店客户端使用的搜索页索引有时比 storesearch API 更完整。
+    async def _steam_search_html(self, query: str, language: str = "english", limit: int = 6):
+        """商店搜索页兜底；国区成人内容经常被过滤，调用方需再做标题相关度校验。"""
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
                 page = await client.get(
                     "https://store.steampowered.com/search/results/",
                     params={"term": query, "l": language, "cc": "cn", "count": limit, "json": 1},
@@ -103,7 +111,6 @@ class ITADClient:
                 if results:
                     return results
 
-                # JSON 搜索接口可能返回空壳响应，再请求普通搜索页 HTML。
                 page = await client.get(
                     "https://store.steampowered.com/search/",
                     params={"term": query, "l": language, "cc": "cn"},
@@ -112,8 +119,14 @@ class ITADClient:
                 page.raise_for_status()
                 return self._parse_steam_search_html(page.text, limit)
         except Exception as exc:
-            logger.warning("Steam 搜索失败: %s", exc)
+            logger.warning("Steam 搜索页失败: %s", exc)
             return []
+
+    async def _steam_search(self, query: str, language: str = "english", limit: int = 6):
+        items = await self._steam_storesearch(query, language, limit)
+        if items:
+            return items
+        return await self._steam_search_html(query, language, limit)
 
     @staticmethod
     def _parse_steam_search_html(html: str, limit: int) -> list[dict[str, str]]:
@@ -175,53 +188,118 @@ class ITADClient:
             logger.warning("Steam 英文标题获取失败 appid=%s: %s", appid, exc)
             return ""
 
+    @staticmethod
+    def _query_tokens(query: str) -> list[str]:
+        tokens = re.findall(r"[0-9a-zA-Z]+|[\u4e00-\u9fff]+", str(query or "").casefold())
+        return [token for token in tokens if len(token) >= 2 or token.isdigit()]
+
+    @staticmethod
+    def _token_in_title(token: str, haystack: str) -> bool:
+        if re.fullmatch(r"[0-9a-z]+", token):
+            return re.search(rf"(?<![0-9a-z]){re.escape(token)}(?![0-9a-z])", haystack) is not None
+        return token in haystack
+
+    @classmethod
+    def _title_matches_query(cls, title: str, query: str) -> bool:
+        """标题需覆盖查询词中足够多的有效 token，避免 Steamy 糊到 steam。"""
+        tokens = cls._query_tokens(query)
+        if not tokens:
+            return bool(str(title or "").strip())
+        haystack = str(title or "").casefold()
+        if not haystack:
+            return False
+        if haystack == str(query or "").casefold().strip():
+            return True
+        matched = sum(1 for token in tokens if cls._token_in_title(token, haystack))
+        if len(tokens) == 1:
+            return matched == 1
+        return matched >= max(2, (len(tokens) + 1) // 2)
+
+    def _filter_steam_items(self, items, query: str, limit: int) -> list[dict]:
+        result = []
+        seen: set[str] = set()
+        for item in items or []:
+            if not isinstance(item, dict):
+                continue
+            appid = str(item.get("id") or "")
+            title = str(item.get("name") or "").strip()
+            if not appid or appid in seen or not title:
+                continue
+            if not self._title_matches_query(title, query):
+                continue
+            seen.add(appid)
+            result.append(item)
+            if len(result) >= limit:
+                break
+        return result
+
+    async def _lookup_steam_items(self, query: str, limit: int) -> list[dict]:
+        """优先 storesearch；HTML 页只在过滤后仍有相关标题时才采用。"""
+        for language in ("schinese", "english"):
+            items = self._filter_steam_items(
+                await self._steam_storesearch(query, language, limit), query, limit
+            )
+            if items:
+                return items
+        for language in ("schinese", "english"):
+            items = self._filter_steam_items(
+                await self._steam_search_html(query, language, limit), query, limit
+            )
+            if items:
+                return items
+        return []
+
     async def search_games(self, query: str, limit: int = 6) -> list[ITADGame]:
         """先通过 Steam 商店解析本地化名称，再用英文标题查询 ITAD。"""
-        steam_items = await self._steam_search(query, "schinese", limit)
-        if not steam_items:
-            steam_items = await self._steam_search(query, "english", limit)
+        steam_items = await self._lookup_steam_items(query, limit)
 
         # Steam 中文索引可能暂时没有结果；保留 ITAD 直搜作为兜底，避免中文查询完全失败。
         if not steam_items:
             fallback = await self._parse_search_payload(
                 await self._get("/games/search/v1", {"title": query, "results": limit}), limit
             )
-            for game in fallback:
-                candidates = await self._steam_search(game.title, "english", 3)
+            matched = [game for game in fallback if self._title_matches_query(game.title, query)]
+            for game in matched:
+                candidates = self._filter_steam_items(
+                    await self._steam_search(game.title, "english", 3), game.title, 3
+                )
                 if candidates:
                     game.appid = str(candidates[0].get("id") or "")
                     game.image = game.image or candidates[0].get("tiny_image", "")
-            return fallback
+            return matched[:limit]
 
         result: list[ITADGame] = []
-        seen_itad_ids: set[str] = set()
+        seen_keys: set[str] = set()
         for item in steam_items:
-            if not isinstance(item, dict):
-                continue
             appid = str(item.get("id") or "")
-            if not appid:
-                continue
             english_title = await self._steam_english_title(appid)
-            search_title = english_title or str(item.get("name") or "").strip()
+            local_title = str(item.get("name") or "").strip()
+            search_title = english_title or local_title
             if not search_title:
+                continue
+            if english_title and not (
+                self._title_matches_query(english_title, query)
+                or self._title_matches_query(local_title, query)
+            ):
                 continue
             itad_games = await self._parse_search_payload(
                 await self._get("/games/search/v1", {"title": search_title, "results": 3}), 3
             )
-            if not itad_games:
-                continue
             normalized_title = search_title.casefold()
             game = next(
                 (candidate for candidate in itad_games
                  if candidate.title.casefold().strip() == normalized_title),
-                itad_games[0],
+                None,
             )
-            if game.id in seen_itad_ids:
+            if game is None:
+                game = ITADGame(f"steam:{appid}", search_title)
+            dedupe_key = game.id or f"steam:{appid}"
+            if dedupe_key in seen_keys:
                 continue
             game.appid = appid
             game.title = english_title or game.title
             game.image = game.image or item.get("tiny_image", "")
-            seen_itad_ids.add(game.id)
+            seen_keys.add(dedupe_key)
             result.append(game)
             if len(result) >= limit:
                 break

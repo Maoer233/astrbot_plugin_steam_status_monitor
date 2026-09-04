@@ -1,6 +1,7 @@
 # 价格折算工具：将 ITAD/Steam 返回的各地区货币统一折算为人民币(CNY)，用于同币种比较与显示。
 # 汇率表为 open.er-api.com 与 frankfurter.app 双源交叉核验值（差异 <0.4%，UTC 2026-08-30）；
 # 可直接修改 RATES 维护。
+import re
 
 RATES = {
     "CNY": 1.0,     # 人民币
@@ -16,6 +17,17 @@ RATES = {
     "BRL": 1.3063,  # 巴西雷亚尔
     "INR": 0.0705,  # 印度卢比
 }
+
+
+def extract_price_query(raw_msg: str, prefix: str) -> str:
+    """从完整消息中剥掉 /steam price（或 px）前缀，保留含空格的游戏名。"""
+    return re.sub(
+        rf"^[/.。／]*\s*(?:steam\s+)?{re.escape(prefix)}\s*",
+        "",
+        str(raw_msg or "").strip(),
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
 
 
 def to_cny(price, currency, rates=None):
