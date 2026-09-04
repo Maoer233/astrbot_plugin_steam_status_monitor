@@ -309,7 +309,7 @@ class SessionService:
             achievement_monitor.clear_game_achievements(session.group_id, session.sid, session.gameid)
 
         monitor_on = getattr(plugin, "group_monitor_enabled", {}).get(session.group_id, True)
-        if not skip_push and monitor_on and plugin.config.get("enable_game_end_notify", True):
+        if not skip_push and monitor_on and not getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid) and plugin.config.get("enable_game_end_notify", True):
             last_state = plugin.group_last_states.get(session.group_id, {}).get(session.sid) or {}
             plugin._pending_end_notifications.setdefault(session.group_id, []).append({
                 "type": "end",
@@ -343,7 +343,7 @@ class SessionService:
             if len(recent) > 8:
                 recent.pop(0)
         monitor_on = getattr(plugin, "group_monitor_enabled", {}).get(session.group_id, True)
-        if not skip_push and monitor_on and plugin.config.get("enable_game_start_notify", True):
+        if not skip_push and monitor_on and not getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid) and plugin.config.get("enable_game_start_notify", True):
             plugin._pending_end_notifications.setdefault(session.group_id, []).append({
                 "type": "start",
                 "name": player_name or session.sid,
