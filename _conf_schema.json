@@ -122,20 +122,20 @@
   "font_download_enabled": {
     "description": "启动后自动下载 CJK 字体包",
     "type": "bool",
-    "hint": "商店包不含字体。开启后插件会在后台从 GitHub Release 下载 fonts-bundle；关闭则仅使用本地已缓存或系统字体（修改后重启AstrBot生效）",
+    "hint": "商店包不含字体。开启后插件会在后台优先经国内镜像下载 fonts-bundle，失败再回退 GitHub；关闭则仅使用本地已缓存或系统字体（修改后重启AstrBot生效）",
     "default": true
   },
   "font_pack_url": {
     "description": "自定义字体包下载地址",
     "type": "string",
-    "hint": "留空使用官方 fonts-bundle。填写后仍按清单 SHA256 校验，且必须是 https（修改后重启AstrBot生效）",
+    "hint": "留空则按 GitHub Release 走国内镜像并回退官方地址。填写后只使用该 https 地址，仍按清单 SHA256 校验（修改后重启AstrBot生效）",
     "default": ""
   },
   "font_download_timeout_sec": {
     "description": "字体包下载超时（秒）",
     "type": "int",
-    "hint": "整包下载超时时间，默认 120 秒（修改后重启AstrBot生效）",
-    "default": 120
+    "hint": "单个下载源的读取超时，默认 600 秒（10 分钟）。连接超时固定约 15 秒以便快速换源（修改后重启AstrBot生效）",
+    "default": 600
   },
   "steam_api_base": {
     "description": "Steam Web API 代理地址",

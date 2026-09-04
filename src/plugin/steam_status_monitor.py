@@ -173,7 +173,7 @@ class SteamStatusMonitorV3(
             proxy=self.proxy,
             enabled=bool(self.config.get("font_download_enabled", True)),
             pack_url=str(self.config.get("font_pack_url", "") or ""),
-            timeout_sec=int(self.config.get("font_download_timeout_sec", 120) or 120),
+            timeout_sec=int(self.config.get("font_download_timeout_sec", 600) or 600),
         )
         self._font_pack_task = self.font_pack.ensure_ready()
         self._load_group_steam_ids()  # 新增：优先从 steam_groups.json 加载

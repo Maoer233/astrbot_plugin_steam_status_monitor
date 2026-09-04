@@ -71,7 +71,7 @@
 | `proxy_url` | 代理链接（如 `http://127.0.0.1:7890`） | 空 |
 | `font_download_enabled` | 启动后自动下载 CJK 字体包 | true |
 | `font_pack_url` | 自定义字体包 URL（须 https，仍按清单校验） | 空 |
-| `font_download_timeout_sec` | 字体包下载超时（秒） | 120 |
+| `font_download_timeout_sec` | 字体包下载超时（秒） | 600 |
 
 > 带「修改后重启AstrBot生效」标注的配置项需重启后生效。
 
@@ -84,7 +84,7 @@
 - Steam 查询出现 `ConnectTimeout` / `ReadTimeout` 时，结束卡仍会按时发出，不会等到下次开局才补发。网络不稳定时建议开启代理。
 - 监控人数较多时，建议适当调高 `max_group_size` 并保持智能轮询，以兼顾时效与 Steam 限流。
 - Steam 摘要同一时刻只有一个 `gameid`，插件不能识别「同时玩多款游戏」，A→B 会视为切换并立即结算 A。
-- 商店安装后首次启动会在后台下载 CJK 字体（约 39MB）。可用 `/steam fonts` 查看状态，`/steam fonts download` 立即下载并显示进度，`/steam fonts clean` 清理缓存。开发克隆若 `assets/fonts` 已有字体则跳过下载。
+- 商店安装后首次启动会在后台下载 CJK 字体（约 39MB）。默认先走国内 GitHub 镜像（`gh-proxy.com` / `ghproxy.net` / `github.akams.cn`），失败再回退官方 Release；单个源超时默认 10 分钟。可用 `/steam fonts` 查看状态，`/steam fonts download` 立即下载并显示进度，`/steam fonts clean` 清理缓存。填写 `font_pack_url` 则只用自定义地址。开发克隆若 `assets/fonts` 已有字体则跳过下载。
 
 ## 演示截图
 ![开始游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/assets/images/str.png)

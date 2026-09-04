@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 from src.infrastructure.fonts.pack_service import (
     FontPackError,
     FontPackService,
+    candidate_download_urls,
     load_manifest,
 )
 from src.shared.fonts import configure_font_resolver, invalidate, load_truetype, resolve_font_path
@@ -70,6 +71,30 @@ def _download_writer(zip_bytes: bytes):
     return _write
 
 
+GITHUB_ZIP = (
+    "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor"
+    "/releases/download/fonts-bundle/astrbot_plugin_steam_status_monitor-fonts.zip"
+)
+
+
+class CandidateUrlTests(unittest.TestCase):
+    def test_github_release_uses_mirrors_then_official(self):
+        candidates = candidate_download_urls(GITHUB_ZIP)
+        self.assertEqual(4, len(candidates))
+        self.assertTrue(candidates[0].startswith("https://gh-proxy.com/"))
+        self.assertTrue(candidates[1].startswith("https://ghproxy.net/"))
+        self.assertTrue(candidates[2].startswith("https://github.akams.cn/"))
+        self.assertEqual(GITHUB_ZIP, candidates[-1])
+        self.assertTrue(all(GITHUB_ZIP in item for item in candidates[:-1]))
+
+    def test_non_github_url_is_not_wrapped(self):
+        url = "https://example.com/fonts.zip"
+        self.assertEqual([url], candidate_download_urls(url))
+
+    def test_mirrors_can_be_disabled(self):
+        self.assertEqual([GITHUB_ZIP], candidate_download_urls(GITHUB_ZIP, use_mirrors=False))
+
+
 class ManifestTests(unittest.TestCase):
     def test_rejects_missing_and_invalid_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -120,15 +145,30 @@ class FontResolverTests(unittest.TestCase):
     def test_load_truetype_does_not_raise_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             configure_font_resolver(str(Path(tmp) / "data"), str(Path(tmp) / "bundled"))
-            font = load_truetype("definitely-missing.otf", 12)
-            self.assertIsNotNone(font)
+            with patch("src.shared.fonts.logger.error") as error:
+                font = load_truetype("definitely-missing.otf", 12)
+                self.assertIsNotNone(font)
+                messages = [" ".join(str(arg) for arg in call.args) for call in error.call_args_list]
+                self.assertTrue(any("definitely-missing.otf" in msg for msg in messages))
+                self.assertTrue(any("找不到字体文件" in msg for msg in messages))
+                first_count = error.call_count
+                load_truetype("definitely-missing.otf", 16)
+                self.assertEqual(first_count, error.call_count)
 
 
 class FontPackServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         invalidate()
 
-    def _service(self, tmp: str, manifest_path: str, bundled: str | None = None, enabled: bool = True) -> FontPackService:
+    def _service(
+        self,
+        tmp: str,
+        manifest_path: str,
+        bundled: str | None = None,
+        enabled: bool = True,
+        pack_url: str = "",
+        proxy: str | None = None,
+    ) -> FontPackService:
         data_dir = os.path.join(tmp, "data")
         os.makedirs(data_dir, exist_ok=True)
         bundled_dir = bundled or os.path.join(tmp, "bundled")
@@ -136,6 +176,8 @@ class FontPackServiceTests(unittest.IsolatedAsyncioTestCase):
         return FontPackService(
             data_dir,
             enabled=enabled,
+            pack_url=pack_url,
+            proxy=proxy,
             timeout_sec=5,
             bundled_dir=bundled_dir,
             manifest_path=manifest_path,
@@ -237,6 +279,68 @@ class FontPackServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn(service.status, ("FAILED", "BACKOFF"))
             self.assertFalse(os.path.exists(service.download_dir))
             self.assertFalse(any((Path(service.fonts_dir) / name).exists() for name in REQUIRED))
+
+    async def test_falls_back_to_next_mirror(self):
+        payloads = _payloads()
+        zip_bytes = _make_zip(payloads)
+        files = [_file_spec(name, payloads[name]) for name in REQUIRED]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            _write_manifest(manifest_path, zip_bytes, files, url=GITHUB_ZIP)
+            service = self._service(tmp, str(manifest_path))
+            seen: list[str] = []
+
+            async def _write(self, url, dest, max_bytes):
+                seen.append(url)
+                if len(seen) == 1:
+                    raise FontPackError("下载字体包网络错误: ConnectTimeout", retryable=True, kind="http")
+                return await _download_writer(zip_bytes)(self, url, dest, max_bytes)
+
+            with patch.object(FontPackService, "_stream_download", new=_write):
+                await service._install_once()
+            self.assertEqual("READY", service.status)
+            self.assertEqual(2, len(seen))
+            self.assertTrue(seen[0].startswith("https://gh-proxy.com/"))
+            self.assertTrue(seen[1].startswith("https://ghproxy.net/"))
+
+    async def test_custom_pack_url_skips_mirrors(self):
+        payloads = _payloads()
+        zip_bytes = _make_zip(payloads)
+        files = [_file_spec(name, payloads[name]) for name in REQUIRED]
+        custom = "https://cdn.example.com/fonts.zip"
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            _write_manifest(manifest_path, zip_bytes, files, url=GITHUB_ZIP)
+            service = self._service(tmp, str(manifest_path), pack_url=custom)
+            seen: list[str] = []
+
+            async def _write(self, url, dest, max_bytes):
+                seen.append(url)
+                return await _download_writer(zip_bytes)(self, url, dest, max_bytes)
+
+            with patch.object(FontPackService, "_stream_download", new=_write):
+                await service._install_once()
+            self.assertEqual("READY", service.status)
+            self.assertEqual([custom], seen)
+
+    async def test_proxy_skips_mirrors(self):
+        payloads = _payloads()
+        zip_bytes = _make_zip(payloads)
+        files = [_file_spec(name, payloads[name]) for name in REQUIRED]
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_path = Path(tmp) / "manifest.json"
+            _write_manifest(manifest_path, zip_bytes, files, url=GITHUB_ZIP)
+            service = self._service(tmp, str(manifest_path), proxy="http://127.0.0.1:7890")
+            seen: list[str] = []
+
+            async def _write(self, url, dest, max_bytes):
+                seen.append(url)
+                return await _download_writer(zip_bytes)(self, url, dest, max_bytes)
+
+            with patch.object(FontPackService, "_stream_download", new=_write):
+                await service._install_once()
+            self.assertEqual("READY", service.status)
+            self.assertEqual([GITHUB_ZIP], seen)
 
     async def test_cancel_cleans_download_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
