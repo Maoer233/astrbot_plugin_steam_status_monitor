@@ -41,7 +41,7 @@ from ..infrastructure.clients.steam import SteamClientMixin
 from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
-from ..shared.utils.price import summary_to_cny
+from ..shared.utils.price import extract_price_query, summary_to_cny
 from ..shared.utils.notify_session import is_sendable_group_session, is_valid_group_id
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
@@ -637,13 +637,7 @@ class SteamStatusMonitorV3(
         if raw_msg is None:
             getter = getattr(event, "get_message_str", None)
             raw_msg = getter() if callable(getter) else ""
-        query = re.sub(
-            rf"^[/.。／]*\s*{re.escape(prefix)}\s*",
-            "",
-            str(raw_msg or ""),
-            count=1,
-            flags=re.IGNORECASE,
-        ).strip()
+        query = extract_price_query(str(raw_msg or ""), prefix)
         if not query:
             yield event.plain_result(f"用法：/steam {prefix} <游戏名或 Steam 链接>")
             return
