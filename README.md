@@ -188,8 +188,11 @@ pip install httpx pillow
 
 ## 更新记录
 - V4.5.0（2026/09/04）
-  - **字体资源包**（#42，#43，感谢 @OLRainM）：商店包改为运行时下载 CJK 字体，主包体积大幅减小；字体下载优先走国内镜像，并按文件名报告缺字；新增 `src/infrastructure/fonts/pack_service.py`、`src/shared/fonts.py` 与 `assets/fonts/manifest.json`。
-  - **网络波动文案**：网络波动通知更新为“在游玩 游戏名 时重启游戏/网络波动了”，信息更明确。
+  - **字体资源包**（#42，#43，感谢 @OLRainM）：商店包改为运行时下载 CJK 字体，主包体积大幅减小；新增 `src/infrastructure/fonts/pack_service.py`、`src/shared/fonts.py` 与 `assets/fonts/manifest.json`；字体下载优先走国内镜像，并按文件名报告缺字；从仓库跟踪中移除字体设计文档。
+  - **成就图标**：成就图标下载失败时回退 `unknown_avatar` 占位，并增强下载健壮性（备选域名 / 灰图回退 / 失败日志）。
+  - **列表封面**：修复 `/steam list`、`/steam alllist` 等列表类封面缺失——补传 SGDB `api_key`、`appid`、`api_base`。
+  - **会话修复**：阻止插件重启时复活旧版会话。
+  - **网络波动文案**：网络波动通知更新为“在游玩 游戏名 时重启游戏/网络波动了”。
 
 - V4.4.4（2026/09/04）
   - **优化**：开始游戏卡片右上角玩家人数不再与玩家名重叠（玩家人数字体减小、顶部间距调整）。
