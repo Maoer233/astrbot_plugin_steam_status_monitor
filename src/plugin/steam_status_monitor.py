@@ -1217,6 +1217,8 @@ class SteamStatusMonitorV3(
             "Steam状态监控插件指令：\n"
             "/steam on - 启动监控\n"
             "/steam off - 停止监控\n"
+            "/steam price [游戏名或Steam链接] - 查询游戏价格、史低与地区对比\n"
+            "/steam px [游戏名] - 价格查询快捷版，直接返回第一条匹配\n"
             "/steam list - 列出所有玩家状态\n"
             "/steam config - 查看当前配置\n"
             "/steam set [参数] [值] - 设置配置参数\n"
@@ -1233,10 +1235,11 @@ class SteamStatusMonitorV3(
             "/steam rank_on [all|list|test|del] - 管理每日排行榜推送（可配置时间）\n"
             "/steam rank_on list - 查看推送状态\n"
             "/steam rank_on del [群号] - 删除指定群推送（默认本群）\n"
-            "/steam fonts - 查看字体包状态\n"
+            "/steam fonts - 查看字体包状态（检测CJK字体是否就绪）\n"
             "/steam fonts download - 立即下载字体包\n"
             "/steam fonts clean - 清理已下载字体缓存\n"
             "/steam rs - 清除状态并初始化\n"
+            "/steamwho @用户 / 在干嘛 @用户 - 即时查询绑定玩家的Steam状态\n"
             "/steam help - 显示本帮助\n"
         )
         yield event.plain_result(help_text)

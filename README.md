@@ -92,6 +92,7 @@
 ![成就推送示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/assets/images/achievement.png)
 ![WebUI 管理后台](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/assets/images/webui.png)
 ![List 玩家列表](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/assets/images/list.png)
+![价格查询示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/assets/images/price.png)
 
 
 ## QQ 官方机器人后台配置面板
@@ -145,6 +146,10 @@
 - `/steam on` 启动本群Steam状态监控（开关会落盘，重启后仍开启）
 - `/steam off` 停止本群Steam状态监控（开关会落盘，重启后仍关闭；本群不再接收开始/结束卡）
 - `/steam price [游戏名或 Steam 链接]` 查询游戏价格、史低与地区对比
+- `/steam px [游戏名]` 价格查询快捷版，无需回复序号，直接返回第一条匹配游戏的价格
+- `/steam fonts` 查看字体包下载状态（检测 CJK 字体是否就绪，缺字时卡片可能暂缺文字）
+- `/steam fonts download` 立即下载字体包并显示进度
+- `/steam fonts clean` 清理已下载的字体缓存
 - `/steam list` 列出本群所有玩家当前状态
 - `/steam alllist [img|text]` 列出所有群聊玩家状态（默认图片，`text` 纯文本输出）
 - `/steam config` 查看当前插件配置
