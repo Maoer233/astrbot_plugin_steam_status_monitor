@@ -390,6 +390,9 @@ class SessionService:
         notify_sessions = plugin._get_notify_sessions(session.group_id, session.sid)
         if not notify_sessions:
             return
+        # 取当前游戏名（来自开始会话时缓存的 meta）
+        _meta = self._meta().get(self._key(session.group_id, session.sid), {}) or {}
+        game_name = _meta.get("game_name") or session.gameid
 
         async def _notify():
             from astrbot.api.event import MessageChain
@@ -400,7 +403,7 @@ class SessionService:
                 try:
                     await plugin.context.send_message(
                         session_key,
-                        MessageChain([Plain(f"📡 网络波动：{name} 的游戏状态已恢复")]),
+                        MessageChain([Plain(f"📡 网络波动：{name} 在游玩 {game_name} 时重启游戏/网络波动了")]),
                     )
                 except Exception:
                     pass
