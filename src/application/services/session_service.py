@@ -303,6 +303,8 @@ class SessionService:
         poll_task = getattr(plugin, "achievement_poll_tasks", {}).pop(task_key, None)
         if poll_task:
             poll_task.cancel()
+        # 结束瞬间捕获旧成就快照，传给延迟补偿作为对比基准（不被下面的 pop 清掉）
+        snap = getattr(plugin, "achievement_snapshots", {}).get(task_key)
         getattr(plugin, "achievement_snapshots", {}).pop(task_key, None)
         achievement_monitor = getattr(plugin, "achievement_monitor", None)
         if achievement_monitor is not None:
@@ -326,7 +328,7 @@ class SessionService:
         if not skip_push and monitor_on:
             delayed = getattr(plugin, "achievement_delayed_final_check", None)
             if delayed is not None:
-                result = delayed(session.group_id, session.sid, session.gameid, player_name, game_name)
+                result = delayed(session.group_id, session.sid, session.gameid, player_name, game_name, achievements_a=snap)
                 if asyncio.iscoroutine(result):
                     try:
                         asyncio.get_running_loop()

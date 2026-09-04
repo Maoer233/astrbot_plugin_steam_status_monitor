@@ -47,13 +47,15 @@ class AchievementTrackingMixin:
         except Exception as e:
             logger.error(f"[成就定时对比] group_id={group_id} sid={sid} gameid={gameid} 异常: {e}")
 
-    async def achievement_delayed_final_check(self, group_id, sid, gameid, player_name, game_name):
+    async def achievement_delayed_final_check(self, group_id, sid, gameid, player_name, game_name, achievements_a=None):
         key = (group_id, sid, gameid)
         await asyncio.sleep(300)
         if gameid in self.achievement_blacklist:
             logger.info(f"[成就结束冗余对比] 游戏 {gameid} 已在黑名单，跳过轮询")
             return
-        achievements_a = self.achievement_snapshots.get(key)
+        # 优先使用结束瞬间捕获的基准；未传（兼容旧调用）则读全局快照
+        if achievements_a is None:
+            achievements_a = self.achievement_snapshots.get(key)
         achievements_b = await self.achievement_monitor.get_player_achievements(
             self.API_KEY, group_id, sid, gameid
         )
@@ -72,6 +74,9 @@ class AchievementTrackingMixin:
                 await self.notify_new_achievements(group_id, sid, player_name, gameid, game_name, new_achievements)
             else:
                 logger.info(f"[成就结束冗余对比] {player_name} 在 {game_name} 未发现新成就")
+        # 若该 key 已被新的成就轮询/会话占用（如重开同游戏或 A→B→A 切回），则跳过清理，避免误清新局数据
+        if key in getattr(self, "achievement_poll_tasks", {}):
+            return
         self.achievement_snapshots.pop(key, None)
         self.achievement_poll_tasks.pop(key, None)
         self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
