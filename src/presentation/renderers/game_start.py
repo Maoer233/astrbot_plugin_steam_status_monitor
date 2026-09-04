@@ -396,7 +396,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     online_text_w = 0
     if online_count is not None:
         try:
-            font_online = ImageFont.truetype(font_regular, 14)
+            font_online = ImageFont.truetype(font_regular, 7)
         except:
             font_online = ImageFont.load_default()
         online_text = f"\u25CF玩家人数{online_count}"
@@ -462,7 +462,9 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     game_name_lines = text_wrap(game_name_padded, font, text_area_w)
     line_height = 36
     block_height = line_height * (1 + len(player_lines) + len(game_name_lines)) + 10 + font_small.size + 4
-    text_y = max(8, (img_h - block_height) // 2)
+    # 有玩家人数时，为右上角玩家人数预留少量顶部空间，避免玩家名与它重叠
+    top_pad = 15 if online_text else 8
+    text_y = max(top_pad, (img_h - block_height) // 2)
 
     # 将头像Y坐标与玩家名对齐，并下移10像素
     avatar_y = text_y + 10
