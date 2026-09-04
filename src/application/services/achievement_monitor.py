@@ -7,7 +7,8 @@ import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 from typing import Set, Optional, Dict, Any
 
-from ...shared.paths import FONTS_DIR, IMAGES_DIR
+from ...shared.fonts import load_truetype
+from ...shared.paths import IMAGES_DIR
 from ...shared.logging import logger
 from ...shared.network import aiohttp_connector, httpx_client_kwargs
 
@@ -302,30 +303,14 @@ class AchievementMonitor:
         text_margin_top = 10
         max_text_width = width - padding_h * 2 - icon_size - icon_margin_right - 18
 
-        # 字体路径
-        fonts_dir = str(FONTS_DIR)
-        # 优先使用传入 font_path
-        font_regular = font_path or os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
-        font_medium = font_regular.replace('Regular', 'Medium') if 'Regular' in font_regular else os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
-        # 修正：确保字体路径为绝对路径
-        if not os.path.isabs(font_regular):
-            font_regular = os.path.join(fonts_dir, os.path.basename(font_regular))
-        if not os.path.isabs(font_medium):
-            font_medium = os.path.join(fonts_dir, os.path.basename(font_medium))
-        if not os.path.exists(font_regular):
-            font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
-        if not os.path.exists(font_medium):
-            font_medium = os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
-        try:
-            font_title = ImageFont.truetype(font_medium, 20)
-            font_game = ImageFont.truetype(font_regular, 15)
-            font_name = ImageFont.truetype(font_medium, 16)
-            font_desc = ImageFont.truetype(font_regular, 13)
-            font_percent = ImageFont.truetype(font_regular, 12)
-            font_game_small = ImageFont.truetype(font_regular, 12)
-            font_time = ImageFont.truetype(font_regular, 10)
-        except Exception:
-            font_title = font_game = font_name = font_desc = font_percent = font_game_small = font_time = ImageFont.load_default()
+        extra = (font_path,) if font_path else ()
+        font_title = load_truetype("NotoSansHans-Medium.otf", 20, fallbacks=extra)
+        font_game = load_truetype("NotoSansHans-Regular.otf", 15, fallbacks=extra)
+        font_name = load_truetype("NotoSansHans-Medium.otf", 16, fallbacks=extra)
+        font_desc = load_truetype("NotoSansHans-Regular.otf", 13, fallbacks=extra)
+        font_percent = load_truetype("NotoSansHans-Regular.otf", 12, fallbacks=extra)
+        font_game_small = load_truetype("NotoSansHans-Regular.otf", 12, fallbacks=extra)
+        font_time = load_truetype("NotoSansHans-Regular.otf", 10, fallbacks=extra)
 
         # 1. 统计全成就进度（总进度，和本次解锁无关）
         if unlocked_set is None:

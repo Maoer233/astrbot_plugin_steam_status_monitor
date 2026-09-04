@@ -40,6 +40,59 @@ class PollingLoopTests(unittest.IsolatedAsyncioTestCase):
 
 
 class GroupSwitchPersistenceTests(unittest.TestCase):
+    @staticmethod
+    def _persistence_plugin(tmp):
+        plugin = PersistenceMixin()
+        plugin.data_dir = tmp
+        plugin.group_steam_ids = {"g1": ["s1"]}
+        plugin.group_last_states = {}
+        plugin.group_last_quit_times = {}
+        plugin.group_pending_logs = {}
+        plugin.group_recent_games = {}
+        plugin.playing_sessions = {}
+        plugin._session_meta = {}
+        return plugin
+
+    def test_existing_session_store_prevents_reimporting_legacy_pending_quit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "playing_sessions.json").write_text("{}", encoding="utf-8")
+            Path(tmp, "group_g1_pending_quit.json").write_text(json.dumps({
+                "s1": {
+                    "A": {
+                        "quit_time": 1100,
+                        "start_time": 1000,
+                        "name": "P",
+                        "game_name": "GameA",
+                        "notified": False,
+                    }
+                }
+            }), encoding="utf-8")
+            plugin = self._persistence_plugin(tmp)
+
+            plugin._load_persistent_data()
+
+            self.assertIsNone(plugin.session_service.get("g1", "s1"))
+
+    def test_first_upgrade_migrates_legacy_sessions_and_creates_store(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "group_g1_pending_quit.json").write_text(json.dumps({
+                "s1": {
+                    "A": {
+                        "quit_time": 1100,
+                        "start_time": 1000,
+                        "name": "P",
+                        "game_name": "GameA",
+                        "notified": False,
+                    }
+                }
+            }), encoding="utf-8")
+            plugin = self._persistence_plugin(tmp)
+
+            plugin._load_persistent_data()
+
+            self.assertEqual("confirming_exit", plugin.session_service.get("g1", "s1").state)
+            self.assertTrue(Path(tmp, "playing_sessions.json").exists())
+
     def test_monitor_switch_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
             plugin = PersistenceMixin()

@@ -7,7 +7,8 @@ import httpx
 from PIL import Image, ImageDraw, ImageFont
 from .game_start import get_avatar_frame_url, get_avatar_frame_path, _cache_config, get_horizontal_cover_path
 from .steam_cover import get_steam_library_cover_url
-from ...shared.paths import FONTS_DIR, IMAGES_DIR
+from ...shared.fonts import load_truetype, resolve_font_path
+from ...shared.paths import IMAGES_DIR
 
 # 更深的蓝紫色到黑色渐变
 BG_COLOR_TOP = (24, 18, 48)   # 顶部深蓝紫
@@ -224,14 +225,7 @@ def draw_duration_bar(draw, x, y, width, height, duration_h):
                 draw.text((center_x, center_y), text, font=font, fill=color, stroke_width=2, stroke_fill=(0,0,0,180))
 
 def get_font_path(font_name):
-    fonts_dir = str(FONTS_DIR)
-    font_path = os.path.join(fonts_dir, font_name)
-    if (os.path.exists(font_path)):
-        return font_path
-    font_path2 = os.path.join(os.path.dirname(__file__), font_name)
-    if (os.path.exists(font_path2)):
-        return font_path2
-    return font_name
+    return resolve_font_path(font_name) or font_name
 
 # 与开始卡一致：名字区按实测宽度拉长，上限 360px，再换行。
 _MAX_NAME_LINE_W = 360
@@ -282,21 +276,11 @@ def fit_end_card_player_name(player_name, font, text_x, extra_right=0, default_w
 
 def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=None, avatar_frame_path=None, horizontal_cover_path=None):
     # 字体
-    fonts_dir = str(FONTS_DIR)
-    font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
-    font_medium = os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
-    if not os.path.exists(font_regular):
-        font_regular = os.path.join(os.path.dirname(__file__), 'NotoSansHans-Regular.otf')
-    if not os.path.exists(font_medium):
-        font_medium = os.path.join(os.path.dirname(__file__), 'NotoSansHans-Medium.otf')
-    try:
-        font_title = ImageFont.truetype(font_medium, 28)
-        font_game = ImageFont.truetype(font_regular, 22)
-        font_tip = ImageFont.truetype(font_regular, 16)
-        font_luck = ImageFont.truetype(font_regular, 14)
-        font_time = ImageFont.truetype(font_regular, 8)
-    except:
-        font_title = font_game = font_tip = font_luck = font_time = ImageFont.load_default()
+    font_title = load_truetype("NotoSansHans-Medium.otf", 28)
+    font_game = load_truetype("NotoSansHans-Regular.otf", 22)
+    font_tip = load_truetype("NotoSansHans-Regular.otf", 16)
+    font_luck = load_truetype("NotoSansHans-Regular.otf", 14)
+    font_time = load_truetype("NotoSansHans-Regular.otf", 8)
 
     # 先量封面宽度，再按长玩家名决定是否加宽画布。
     cover_area_h = IMG_H

@@ -348,15 +348,12 @@ class WebAdminAPI:
 
         font_path = None
         try:
+            from ...shared.fonts import resolve_font_path
             fp = getattr(p, "get_font_path", None)
             if fp:
                 font_path = fp("NotoSansHans-Regular.otf")
             if not font_path:
-                font_path = os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)),
-                    "fonts",
-                    "NotoSansHans-Regular.otf",
-                )
+                font_path = resolve_font_path("NotoSansHans-Regular.otf")
         except Exception:
             pass
 
