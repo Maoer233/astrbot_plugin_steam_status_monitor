@@ -8,6 +8,7 @@ from html import unescape
 import httpx
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from ...shared.fonts import load_truetype
 from ...shared.network import httpx_client_kwargs
 
 
@@ -52,9 +53,8 @@ COUNTRY_LABEL = {
 
 
 def _font(path, size):
-    if path and os.path.exists(path):
-        return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+    extra = (path,) if path else ()
+    return load_truetype("NotoSansHans-Regular.otf", size, fallbacks=extra)
 
 
 def _fit_font(draw, value, path, max_size, min_size, max_width):

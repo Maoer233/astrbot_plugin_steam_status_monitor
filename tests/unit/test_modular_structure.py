@@ -41,7 +41,10 @@ class ModularStructureTests(unittest.TestCase):
             "src/presentation/renderers/game_start.py",
             "src/shared/paths.py",
             "assets/abilities.txt",
-            "assets/fonts/NotoSansHans-Regular.otf",
+            "assets/fonts/manifest.json",
+            "assets/fonts/.gitkeep",
+            "src/shared/fonts.py",
+            "src/infrastructure/fonts/pack_service.py",
             "assets/images/missingcover.jpg",
         )
 

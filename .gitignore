@@ -6,3 +6,8 @@ venv/
 *.lnk
 test_line.txt
 /data/steam_status_monitor/
+
+# 运行时下载的 CJK 字体（商店包 / Git 不跟踪）
+assets/fonts/*.otf
+assets/fonts/*.ttf
+assets/fonts/*.ttc

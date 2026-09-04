@@ -5,7 +5,8 @@ import asyncio
 import logging
 import httpx
 from PIL import Image, ImageDraw, ImageFont
-from ...shared.paths import FONTS_DIR, IMAGES_DIR
+from ...shared.fonts import load_truetype
+from ...shared.paths import IMAGES_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -146,23 +147,13 @@ def load_font(size, weight='regular', font_path=None):
     if key in _font_cache:
         return _font_cache[key]
     if weight == 'bold':
-        candidates = ['MiSans-Bold.ttf', 'NotoSansHans-Medium.otf', 'msyhbd.ttc']
+        primary, fallbacks = 'MiSans-Bold.ttf', ('NotoSansHans-Medium.otf',)
     elif weight == 'light':
-        candidates = ['MiSans-Light.ttf', 'NotoSansHans-Regular.otf', 'msyh.ttc']
+        primary, fallbacks = 'MiSans-Light.ttf', ('NotoSansHans-Regular.otf',)
     else:
-        candidates = ['MiSans-Regular.ttf', 'NotoSansHans-Regular.otf', 'msyh.ttc']
-    if font_path:
-        candidates.append(font_path)
-    font = ImageFont.load_default()
-    for name in candidates:
-        p = os.path.join(FONTS_DIR, name)
-        if os.path.exists(p):
-            name = p
-        try:
-            font = ImageFont.truetype(name, size)
-            break
-        except Exception:
-            continue
+        primary, fallbacks = 'MiSans-Regular.ttf', ('NotoSansHans-Regular.otf',)
+    extra = (font_path,) if font_path else ()
+    font = load_truetype(primary, size, fallbacks=(*fallbacks, *extra))
     _font_cache[key] = font
     return font
 
@@ -414,24 +405,12 @@ def make_status_gradient(card_w, card_h, status_color, status):
 async def _render_card_style(data_dir, user_list, font_path=None, proxy=None,
                              avatar_frame_paths=None, covers=None):
     """旧版卡片风格渲染（原 render_steam_list_image 实现）"""
-    # 字体
-    if font_path is None:
-        font_path = os.path.join(str(FONTS_DIR), 'NotoSansHans-Regular.otf')
-    logger.info(f"[Font] render_steam_list_image 使用字体路径: {font_path}")
-    try:
-        font_title = ImageFont.truetype(font_path, 28)
-        font_name = ImageFont.truetype(font_path, 22)
-        font_game = ImageFont.truetype(font_path, 18)
-        # 加粗用 Medium
-        font_bold_path = font_path.replace('Regular', 'Medium')
-        if os.path.exists(font_bold_path):
-            font_status = ImageFont.truetype(font_bold_path, 16)
-        else:
-            font_status = ImageFont.truetype(font_path, 16)
-        font_small = ImageFont.truetype(font_path, 14)
-    except Exception as e:
-        logger.warning(f"[Font] 加载字体失败: {e}")
-        font_title = font_name = font_game = font_status = font_small = ImageFont.load_default()
+    extra = (font_path,) if font_path else ()
+    font_title = load_truetype("NotoSansHans-Regular.otf", 28, fallbacks=extra)
+    font_name = load_truetype("NotoSansHans-Regular.otf", 22, fallbacks=extra)
+    font_game = load_truetype("NotoSansHans-Regular.otf", 18, fallbacks=extra)
+    font_status = load_truetype("NotoSansHans-Medium.otf", 16, fallbacks=extra)
+    font_small = load_truetype("NotoSansHans-Regular.otf", 14, fallbacks=extra)
 
     n = len(user_list)
     width = 600

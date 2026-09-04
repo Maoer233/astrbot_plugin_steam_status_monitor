@@ -1,11 +1,10 @@
 from datetime import datetime, timedelta
 import json
 import os
-import shutil
 import time
 
+from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
-from ...shared.paths import FONTS_DIR
 from ...shared.utils.notify_session import (
     build_group_notify_session,
     is_sendable_group_session,
@@ -218,40 +217,11 @@ class PersistenceMixin:
             logger.warning("已丢弃无效监控群: %s", dropped)
             self._save_group_steam_ids()
 
-    def _ensure_fonts(self):
-        """检测插件fonts目录是否有NotoSansHans系列字体，有则复制到缓存目录并缓存路径"""
-        plugin_fonts_dir = str(FONTS_DIR)
-        cache_fonts_dir = os.path.join('data', 'steam_status_monitor', 'fonts')
-        os.makedirs(plugin_fonts_dir, exist_ok=True)
-        os.makedirs(cache_fonts_dir, exist_ok=True)
-        font_candidates = [
-            'NotoSansHans-Regular.otf',
-            'NotoSansHans-Medium.otf'
-        ]
-        self.font_paths = {}
-        for font_name in font_candidates:
-            plugin_font_path = os.path.join(plugin_fonts_dir, font_name)
-            cache_font_path = os.path.join(cache_fonts_dir, font_name)
-            if os.path.exists(plugin_font_path):
-                shutil.copy(plugin_font_path, cache_font_path)
-                self.font_paths[font_name] = cache_font_path
-            elif os.path.exists(cache_font_path):
-                self.font_paths[font_name] = cache_font_path
-            else:
-                self.font_paths[font_name] = None
-        # 详细日志
-        for font_name in font_candidates:
-            logger.info(f"[Font] {font_name} 路径: {self.font_paths.get(font_name)}")
-        if not all(self.font_paths.values()):
-            logger.warning("[Font] 未检测到全部NotoSansHans字体，渲染可能会出现乱码！")
-
     def get_font_path(self, font_name=None, bold=False):
-        """优先返回缓存fonts目录下NotoSansHans字体路径"""
+        """统一解析 CJK 字体路径：bundled → 数据目录 → 系统字体。"""
         if not font_name:
-            font_name = 'NotoSansHans-Regular.otf'
-        if bold:
-            font_name = 'NotoSansHans-Medium.otf'
-        return self.font_paths.get(font_name) or font_name
+            font_name = "NotoSansHans-Regular.otf"
+        return resolve_font_path(font_name, bold=bold) or font_name
 
     def _get_groups_file_path(self):
         """获取 steam_groups.json 文件路径"""

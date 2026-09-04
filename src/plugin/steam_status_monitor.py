@@ -36,6 +36,7 @@ import traceback
 import shutil
 from ..presentation.web.admin_api import WebAdminAPI
 from ..infrastructure.persistence.plugin_data import PersistenceMixin
+from ..infrastructure.fonts import FontPackService
 from ..infrastructure.clients.steam import SteamClientMixin
 from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
@@ -71,7 +72,6 @@ class SteamStatusMonitorV3(
             return
         self._ssm_running = True
         self._plugin_version = "4.4.4"
-        self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -168,6 +168,14 @@ class SteamStatusMonitorV3(
         # 数据持久化目录
         self.data_dir = os.path.join("data", "steam_status_monitor")
         os.makedirs(self.data_dir, exist_ok=True)
+        self.font_pack = FontPackService(
+            self.data_dir,
+            proxy=self.proxy,
+            enabled=bool(self.config.get("font_download_enabled", True)),
+            pack_url=str(self.config.get("font_pack_url", "") or ""),
+            timeout_sec=int(self.config.get("font_download_timeout_sec", 120) or 120),
+        )
+        self._font_pack_task = self.font_pack.ensure_ready()
         self._load_group_steam_ids()  # 新增：优先从 steam_groups.json 加载
         self._load_persistent_data()
         self._load_notify_session()
@@ -251,9 +259,12 @@ class SteamStatusMonitorV3(
     async def terminate(self):
         '''插件被卸载/停用时取消所有后台任务并保存持久化数据'''
         # 取消主轮询循环和初始化任务，防止重载/禁用后残留多实例并发
-        for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None)):
+        for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None), getattr(self, '_font_pack_task', None)):
             if t and not t.done():
                 t.cancel()
+        font_pack = getattr(self, 'font_pack', None)
+        if font_pack:
+            await font_pack.aclose()
         if hasattr(self, 'achievement_poll_tasks'):
             for task in self.achievement_poll_tasks.values():
                 task.cancel()
@@ -1222,6 +1233,9 @@ class SteamStatusMonitorV3(
             "/steam rank_on [all|list|test|del] - 管理每日排行榜推送（可配置时间）\n"
             "/steam rank_on list - 查看推送状态\n"
             "/steam rank_on del [群号] - 删除指定群推送（默认本群）\n"
+            "/steam fonts - 查看字体包状态\n"
+            "/steam fonts download - 立即下载字体包\n"
+            "/steam fonts clean - 清理已下载字体缓存\n"
             "/steam rs - 清除状态并初始化\n"
             "/steam help - 显示本帮助\n"
         )
@@ -1483,6 +1497,46 @@ class SteamStatusMonitorV3(
             import traceback
             logger.error(f"测试游戏结束图片渲染失败: {e}\n{traceback.format_exc()}")
             yield event.plain_result(f"渲染异常: {e}")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("steam fonts")
+    async def steam_fonts(self, event: AstrMessageEvent, param: str = ""):
+        '''字体包管理；参数: download=立即下载, clean=清理缓存'''
+        service = getattr(self, "font_pack", None)
+        if service is None:
+            yield event.plain_result("字体服务未初始化。")
+            return
+        action = (param or "").strip().lower()
+        if action in ("", "status"):
+            yield event.plain_result(service.format_status_text())
+            return
+        if action == "clean":
+            yield event.plain_result(service.clean())
+            return
+        if action in ("download", "update"):
+            last_sent = 0.0
+
+            async def progress_cb(payload):
+                nonlocal last_sent
+                now = time.time()
+                if not payload.get("force") and now - last_sent < 2:
+                    return
+                last_sent = now
+                text = (
+                    "正在下载字体包...\n"
+                    f"{payload['bar']}\n"
+                    f"预计剩余：{payload['eta_text']}"
+                )
+                try:
+                    await event.send(event.plain_result(text))
+                except Exception:
+                    logger.info("[Font] %s", text.replace("\n", " "))
+
+            yield event.plain_result("开始下载字体包，完成后会更新状态。")
+            result = await service.download_now(progress_cb=progress_cb)
+            yield event.plain_result(result)
+            return
+        yield event.plain_result("用法：/steam fonts、/steam fonts download、/steam fonts clean")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam清除缓存")

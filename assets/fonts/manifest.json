@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "pack_version": "fonts-bundle",
+  "zip": {
+    "url": "https://github.com/Maoer233/astrbot_plugin_steam_status_monitor/releases/download/fonts-bundle/astrbot_plugin_steam_status_monitor-fonts.zip",
+    "sha256": "7383616aeb3b23a0450540006becb083b6dcd1902d51590c75140fec1b6a59d6",
+    "max_bytes": 83886080
+  },
+  "files": [
+    {
+      "name": "NotoSansHans-Regular.otf",
+      "sha256": "7db3c634bbd0301b3082a80ffcac2f422e8ef9ce0730f8b279c3e8f756598f68",
+      "size": 8364644
+    },
+    {
+      "name": "NotoSansHans-Medium.otf",
+      "sha256": "25033438cfa41f1873d4902b8555956557b765117756bcef96406e023e49578c",
+      "size": 8389940
+    },
+    {
+      "name": "MiSans-Regular.ttf",
+      "sha256": "6aa32ded55e110a95be10080e0c322f2382681cd581c5cbb24f4fd4ce96fbb08",
+      "size": 8073152
+    },
+    {
+      "name": "MiSans-Bold.ttf",
+      "sha256": "c01078cf5e0ca166672612e29ae8c94f3a6b224d047ffbf3801e33003051ec0e",
+      "size": 7959920
+    },
+    {
+      "name": "MiSans-Light.ttf",
+      "sha256": "3d8dde7ea7d675111c6883661548914bf1a79824a648394f461fef91c180b667",
+      "size": 8127308
+    }
+  ],
+  "fallback_files": []
+}

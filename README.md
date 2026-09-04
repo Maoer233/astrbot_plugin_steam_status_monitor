@@ -23,7 +23,7 @@
 - **无效会话过滤**：跳过空群号 / `GroupMessage:0_` 等无法投递的 QQ 会话，避免主动推送报错
 - **超时不堵结束卡**：Steam 查询超时期间仍结算到期会话并立刻推送结束通知，不会攒到下次开局
 - **网络代理支持**：可配置 http / https / socks5 代理，改善网络环境下的数据获取稳定性
-- **字体自动管理**：自动检测并加载插件 `fonts` 目录下的 NotoSansHans 系列字体，渲染更稳定
+- **字体运行时下载**：商店包不含约 39MB CJK 字体；启动后后台从 [fonts-bundle](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor/releases/tag/fonts-bundle) 下载并校验，可用 `/steam fonts` 查看进度。下载完成前卡片可能暂时缺字
 - **性能优化**：节流写盘、单点异常隔离、批量预拉取，避免拖慢 AstrBot 主进程与 WebUI
 - **原生逐指令权限**：每条指令使用 AstrBot 框架的 `admin/member` 权限，不再维护插件内部权限等级
 - **AstrBot 内置管理页**：仪表盘、群聊、绑定、每日推送和权限管理直接集成在 AstrBot WebUI，无需额外端口
@@ -69,6 +69,9 @@
 | `notify_send_text` | 通知发送文本开关 | true |
 | `enable_proxy` | 启用网络代理 | false |
 | `proxy_url` | 代理链接（如 `http://127.0.0.1:7890`） | 空 |
+| `font_download_enabled` | 启动后自动下载 CJK 字体包 | true |
+| `font_pack_url` | 自定义字体包 URL（须 https，仍按清单校验） | 空 |
+| `font_download_timeout_sec` | 字体包下载超时（秒） | 120 |
 
 > 带「修改后重启AstrBot生效」标注的配置项需重启后生效。
 
@@ -81,6 +84,7 @@
 - Steam 查询出现 `ConnectTimeout` / `ReadTimeout` 时，结束卡仍会按时发出，不会等到下次开局才补发。网络不稳定时建议开启代理。
 - 监控人数较多时，建议适当调高 `max_group_size` 并保持智能轮询，以兼顾时效与 Steam 限流。
 - Steam 摘要同一时刻只有一个 `gameid`，插件不能识别「同时玩多款游戏」，A→B 会视为切换并立即结算 A。
+- 商店安装后首次启动会在后台下载 CJK 字体（约 39MB）。可用 `/steam fonts` 查看状态，`/steam fonts download` 立即下载并显示进度，`/steam fonts clean` 清理缓存。开发克隆若 `assets/fonts` 已有字体则跳过下载。
 
 ## 演示截图
 ![开始游戏示例](https://raw.githubusercontent.com/Maoer233/astrbot_plugin_steam_status_monitor/main/assets/images/str.png)

@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from .game_start import get_avatar_frame_url, get_avatar_frame_path
-from ...shared.paths import FONTS_DIR
+from ...shared.fonts import load_truetype
 
 logger = logging.getLogger(__name__)
 
@@ -67,24 +67,16 @@ TIME_COL_W = 70              # 时长列宽度（右对齐区域）
 
 def _get_font(font_path, size):
     """安全加载字体"""
-    try:
-        return ImageFont.truetype(font_path, size)
-    except Exception:
-        try:
-            return ImageFont.truetype(os.path.join(str(FONTS_DIR), 'NotoSansHans-Regular.otf'), size)
-        except Exception:
-            return ImageFont.load_default()
+    extra = (font_path,) if font_path else ()
+    return load_truetype("NotoSansHans-Regular.otf", size, fallbacks=extra)
 
 
 def _get_bold_font(font_path, size):
     """获取加粗字体（Medium）"""
-    bold_path = font_path.replace('Regular', 'Medium')
-    if os.path.exists(bold_path):
-        try:
-            return ImageFont.truetype(bold_path, size)
-        except Exception:
-            pass
-    return _get_font(font_path, size)
+    extra = ()
+    if font_path:
+        extra = (str(font_path).replace("Regular", "Medium"), font_path)
+    return load_truetype("NotoSansHans-Medium.otf", size, fallbacks=extra)
 
 
 def _format_hours(minutes):
@@ -371,10 +363,8 @@ async def render_rank_image(data_dir, rank_data, period_label, font_path=None, p
         if max_total_minutes > 0:
             pct = round(player["total_minutes"] / max_total_minutes * 100)
             pct_text = f"{pct}%"
-            try:
-                font_pct = ImageFont.truetype(font_path, 13)
-            except Exception:
-                font_pct = font_small
+            extra = (font_path,) if font_path else ()
+            font_pct = load_truetype("NotoSansHans-Regular.otf", 13, fallbacks=extra)
             draw.text((bar_x + fill_w + 8, bar_y - 2), pct_text, font=font_pct, fill=(180, 190, 200))
 
     buf = io.BytesIO()

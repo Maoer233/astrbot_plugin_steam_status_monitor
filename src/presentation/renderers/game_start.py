@@ -6,7 +6,8 @@ from PIL import Image, ImageDraw, ImageFont
 import random
 from .steam_cover import get_steam_library_cover_url
 
-from ...shared.paths import FONTS_DIR, IMAGES_DIR
+from ...shared.fonts import load_truetype, resolve_font_path
+from ...shared.paths import IMAGES_DIR
 from ...shared.logging import logger
 from ...shared.network import httpx_client_kwargs
 
@@ -364,30 +365,13 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
     return 0.0
 
 def get_font_path(font_name):
-    fonts_dir = str(FONTS_DIR)
-    font_path = os.path.join(fonts_dir, font_name)
-    if os.path.exists(font_path):
-        return font_path
-    font_path2 = os.path.join(os.path.dirname(__file__), font_name)
-    if os.path.exists(font_path2):
-        return font_path2
-    return font_name
+    return resolve_font_path(font_name) or font_name
 
 def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None, version=None):
     # 字体
-    fonts_dir = str(FONTS_DIR)
-    font_regular = os.path.join(fonts_dir, 'NotoSansHans-Regular.otf')
-    font_medium = os.path.join(fonts_dir, 'NotoSansHans-Medium.otf')
-    if not os.path.exists(font_regular):
-        font_regular = os.path.join(os.path.dirname(__file__), 'NotoSansHans-Regular.otf')
-    if not os.path.exists(font_medium):
-        font_medium = os.path.join(os.path.dirname(__file__), 'NotoSansHans-Medium.otf')
-    try:
-        font_bold = ImageFont.truetype(font_medium, 28)
-        font = ImageFont.truetype(font_regular, 22)
-        font_small = ImageFont.truetype(font_regular, 16)
-    except:
-        font_bold = font = font_small = ImageFont.load_default()
+    font_bold = load_truetype("NotoSansHans-Medium.otf", 28)
+    font = load_truetype("NotoSansHans-Regular.otf", 22)
+    font_small = load_truetype("NotoSansHans-Regular.otf", 16)
 
     # 先测量在线人数，给右上角固定预留区域，避免与玩家名发生碰撞。
     measure_img = Image.new("RGB", (1, 1))
@@ -395,10 +379,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     online_text = None
     online_text_w = 0
     if online_count is not None:
-        try:
-            font_online = ImageFont.truetype(font_regular, 7)
-        except:
-            font_online = ImageFont.load_default()
+        font_online = load_truetype("NotoSansHans-Regular.otf", 7)
         online_text = f"\u25CF玩家人数{online_count}"
         online_bbox = measure_draw.textbbox((0, 0), online_text, font=font_online)
         online_text_w = online_bbox[2] - online_bbox[0] + 18
@@ -419,10 +400,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     avatar_x = cover_right + avatar_margin
     text_x = avatar_x + avatar_size + avatar_margin
     name_font_size = 28
-    try:
-        player_font = ImageFont.truetype(font_medium, name_font_size)
-    except:
-        player_font = ImageFont.load_default()
+    player_font = load_truetype("NotoSansHans-Medium.otf", name_font_size)
     name_bbox = measure_draw.textbbox((0, 0), player_name or "", font=player_font)
     name_width = name_bbox[2] - name_bbox[0]
     max_name_line_w = 360
@@ -490,11 +468,8 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
                     print(f"[render_game_start_image] 头像框渲染失败: {e}")
             # 超能力文本渲染（头像下方居中两行）
             if superpower:
-                try:
-                    font_power_title = ImageFont.truetype(font_regular, 16)
-                    font_power = ImageFont.truetype(font_regular, 18)
-                except:
-                    font_power_title = font_power = ImageFont.load_default()
+                font_power_title = load_truetype("NotoSansHans-Regular.otf", 16)
+                font_power = load_truetype("NotoSansHans-Regular.otf", 18)
                 power_x = avatar_x + AVATAR_SIZE // 2
                 power_y = avatar_y + AVATAR_SIZE + 8
                 title_text = "今天的超能力"
@@ -551,10 +526,7 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
 
     # 右下角版本号水印
     if version:
-        try:
-            font_version = ImageFont.truetype(font_regular, 8)
-        except:
-            font_version = ImageFont.load_default()
+        font_version = load_truetype("NotoSansHans-Regular.otf", 8)
         v_text = f"v{version}"
         v_bbox = draw.textbbox((0, 0), v_text, font=font_version)
         v_w = v_bbox[2] - v_bbox[0]
