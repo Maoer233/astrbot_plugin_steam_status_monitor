@@ -10,7 +10,7 @@ from PIL import ImageFont
 from .logging import logger
 from .paths import FONTS_DIR, REQUIRED_FONT_FILES
 
-_warned_missing = False
+_logged_missing: set[str] = set()
 _path_cache: dict[str, str | None] = {}
 _data_fonts_dir = ""
 _bundled_dir = str(FONTS_DIR)
@@ -27,6 +27,7 @@ def configure_font_resolver(data_dir: str, bundled_dir: str | None = None) -> No
 
 def invalidate() -> None:
     _path_cache.clear()
+    _logged_missing.clear()
 
 
 def bundled_fonts_complete(bundled_dir: str | None = None) -> bool:
@@ -89,23 +90,27 @@ def resolve_font_path(name: str, *, bold: bool = False) -> str | None:
                         candidates.append(os.path.join(_data_fonts_dir, entry))
             except OSError:
                 pass
-    candidates.extend(_system_font_candidates(name, bold=bold))
 
     found = None
     for path in candidates:
         found = _existing_file(path)
         if found:
             break
+    if not found:
+        _error_missing_once(name)
+        for path in _system_font_candidates(name, bold=bold):
+            found = _existing_file(path)
+            if found:
+                break
     _path_cache[cache_key] = found
     return found
 
 
-def _warn_missing_once() -> None:
-    global _warned_missing
-    if _warned_missing:
+def _error_missing_once(name: str) -> None:
+    if name in _logged_missing:
         return
-    _warned_missing = True
-    logger.warning("CJK 字体未就绪，卡片可能出现方块字，正在后台下载")
+    _logged_missing.add(name)
+    logger.error("[Font] 找不到字体文件 %s，卡片可能出现方块字", name)
 
 
 def load_truetype(name: str, size: int, fallbacks: tuple[str, ...] | list[str] = ()):
@@ -128,5 +133,8 @@ def load_truetype(name: str, size: int, fallbacks: tuple[str, ...] | list[str] =
             return ImageFont.truetype(path, size)
         except Exception:
             continue
-    _warn_missing_once()
+    fallback_key = f"{name}|default"
+    if fallback_key not in _logged_missing:
+        _logged_missing.add(fallback_key)
+        logger.error("[Font] 字体 %s 加载失败，已回退默认字体，卡片可能出现方块字", name)
     return ImageFont.load_default()

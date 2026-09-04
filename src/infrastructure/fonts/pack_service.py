@@ -41,6 +41,13 @@ _MAX_NOT_FOUND_ATTEMPTS = 5
 _MAX_HASH_FAILURES = 3
 _PROGRESS_CHUNK = 2 * 1024 * 1024
 _PROGRESS_INTERVAL = 2.0
+_DEFAULT_TIMEOUT_SEC = 600
+_CONNECT_TIMEOUT_SEC = 15.0
+_GITHUB_MIRROR_PREFIXES = (
+    "https://gh-proxy.com/",
+    "https://ghproxy.net/",
+    "https://github.akams.cn/",
+)
 
 ProgressCallback = Callable[[dict], Awaitable[None] | None]
 
@@ -58,6 +65,35 @@ def _sha256_file(path: str) -> str:
 
 def _is_https(url: str) -> bool:
     return urlsplit(url).scheme.lower() == "https"
+
+
+def _is_github_release_url(url: str) -> bool:
+    parts = urlsplit(url)
+    if parts.scheme.lower() != "https":
+        return False
+    host = parts.netloc.lower()
+    if host != "github.com" and not host.endswith(".github.com"):
+        return False
+    return "/releases/download/" in parts.path
+
+
+def candidate_download_urls(url: str, *, use_mirrors: bool = True) -> list[str]:
+    """GitHub Release 先走国内镜像，官方地址兜底。自定义非 GitHub 源不包装。"""
+    url = (url or "").strip()
+    if not url:
+        return []
+    if not use_mirrors or not _is_github_release_url(url):
+        return [url]
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for prefix in _GITHUB_MIRROR_PREFIXES:
+        mirrored = prefix.rstrip("/") + "/" + url
+        if mirrored not in seen:
+            seen.add(mirrored)
+            candidates.append(mirrored)
+    if url not in seen:
+        candidates.append(url)
+    return candidates
 
 
 def _safe_url(url: str) -> str:
@@ -166,7 +202,7 @@ class FontPackService:
         proxy: str | None = None,
         enabled: bool = True,
         pack_url: str = "",
-        timeout_sec: int = 120,
+        timeout_sec: int = _DEFAULT_TIMEOUT_SEC,
         bundled_dir: str | None = None,
         manifest_path: str | None = None,
     ):
@@ -177,7 +213,7 @@ class FontPackService:
         self.proxy = proxy
         self.enabled = enabled
         self.pack_url_override = (pack_url or "").strip()
-        self.timeout_sec = max(int(timeout_sec or 120), 10)
+        self.timeout_sec = max(int(timeout_sec or _DEFAULT_TIMEOUT_SEC), 10)
         self.bundled_dir = bundled_dir or str(FONTS_DIR)
         self.manifest_path = manifest_path or str(FONT_MANIFEST_PATH)
         self.status = STATUS_MISSING
@@ -335,8 +371,11 @@ class FontPackService:
             if self.pack_url_override and not _is_https(self.pack_url_override):
                 raise FontPackError("自定义字体包 URL 必须是 https", retryable=False, kind="config")
             self._check_disk_space(manifest)
-            logger.info("[Font] 开始下载字体包 %s", _safe_url(url))
-            await self._download_and_install(manifest, url)
+            await self._download_and_install(
+                manifest,
+                url,
+                use_mirrors=not bool(self.pack_url_override) and not bool(self.proxy),
+            )
             self.status = STATUS_READY
             self.error = ""
             self._retry_index = 0
@@ -442,34 +481,75 @@ class FontPackService:
                 kind="disk",
             )
 
-    async def _download_and_install(self, manifest: FontManifest, url: str) -> None:
+    async def _download_and_install(
+        self,
+        manifest: FontManifest,
+        url: str,
+        *,
+        use_mirrors: bool = True,
+    ) -> None:
         self.status = STATUS_DOWNLOADING
-        self.downloaded = 0
-        self.total = 0
-        self._speed_samples = [(time.monotonic(), 0)]
         os.makedirs(self.download_dir, exist_ok=True)
         part_path = os.path.join(self.download_dir, "fonts.zip.part")
         extract_dir = os.path.join(self.download_dir, "extract")
-        if os.path.isdir(extract_dir):
-            shutil.rmtree(extract_dir, ignore_errors=True)
-        os.makedirs(extract_dir, exist_ok=True)
+        candidates = candidate_download_urls(url, use_mirrors=use_mirrors)
+        if not candidates:
+            raise FontPackError("没有可用的字体包下载地址", retryable=False, kind="config")
+        last_error: Exception | None = None
         try:
-            await self._stream_download(url, part_path, manifest.max_bytes)
-            digest = _sha256_file(part_path)
-            if digest != manifest.zip_sha256:
-                raise FontPackError("字体包 SHA256 校验失败", retryable=True, kind="hash")
-            self._extract_zip(part_path, extract_dir)
-            installed = self._collect_extracted_files(extract_dir, manifest)
-            self._verify_extracted(installed, manifest)
-            self._commit_files(installed, manifest)
-            self._write_local_manifest(manifest)
+            for index, candidate in enumerate(candidates):
+                self.downloaded = 0
+                self.total = 0
+                self._speed_samples = [(time.monotonic(), 0)]
+                if os.path.isdir(extract_dir):
+                    shutil.rmtree(extract_dir, ignore_errors=True)
+                os.makedirs(extract_dir, exist_ok=True)
+                if os.path.isfile(part_path):
+                    os.remove(part_path)
+                try:
+                    logger.info(
+                        "[Font] 开始下载字体包 (%s/%s) %s",
+                        index + 1,
+                        len(candidates),
+                        _safe_url(candidate),
+                    )
+                    await self._stream_download(candidate, part_path, manifest.max_bytes)
+                    digest = _sha256_file(part_path)
+                    if digest != manifest.zip_sha256:
+                        raise FontPackError("字体包 SHA256 校验失败", retryable=True, kind="hash")
+                    self._extract_zip(part_path, extract_dir)
+                    installed = self._collect_extracted_files(extract_dir, manifest)
+                    self._verify_extracted(installed, manifest)
+                    self._commit_files(installed, manifest)
+                    self._write_local_manifest(manifest)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except FontPackError as exc:
+                    last_error = exc
+                    logger.warning(
+                        "[Font] 字体包源失败 %s：%s",
+                        _safe_url(candidate),
+                        redact_sensitive(str(exc)),
+                    )
+                    if exc.kind in ("disk", "config", "manifest"):
+                        raise
+                    continue
+            if last_error:
+                raise last_error
+            raise FontPackError("没有可用的字体包下载地址", retryable=False, kind="config")
         finally:
             self._cleanup_download_dir()
 
     async def _stream_download(self, url: str, dest: str, max_bytes: int) -> None:
         import httpx
 
-        timeout = httpx.Timeout(self.timeout_sec)
+        timeout = httpx.Timeout(
+            connect=_CONNECT_TIMEOUT_SEC,
+            read=self.timeout_sec,
+            write=self.timeout_sec,
+            pool=_CONNECT_TIMEOUT_SEC,
+        )
         last_progress = 0.0
         last_bytes = 0
         try:
