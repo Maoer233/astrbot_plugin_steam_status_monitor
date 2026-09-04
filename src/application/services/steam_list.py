@@ -134,7 +134,13 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
             gid = u.get('gameid', '')
             if gid:
                 from ...presentation.renderers.game_start import get_cover_path
-                cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=proxy)
+                cp = await get_cover_path(
+                    self.data_dir, gid, u.get('game', ''),
+                    sgdb_api_key=self.SGDB_API_KEY,
+                    appid=gid,
+                    proxy=proxy,
+                    sgdb_api_base=self.SGDB_API_BASE,
+                )
                 if cp:
                     covers[u['sid']] = cp
     img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)

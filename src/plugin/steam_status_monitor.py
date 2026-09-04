@@ -70,7 +70,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.4.1"
+        self._plugin_version = "4.4.4"
         self._ensure_fonts()  # 插件启动时自动检测/下载字体
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
@@ -1298,7 +1298,13 @@ class SteamStatusMonitorV3(
         covers = {}
         if not steam_style and gameid:
             from ..presentation.renderers.game_start import get_cover_path
-            cp = await get_cover_path(self.data_dir, gameid, game or zh_game_name, proxy=self.proxy)
+            cp = await get_cover_path(
+                self.data_dir, gameid, game or zh_game_name,
+                sgdb_api_key=self.SGDB_API_KEY,
+                appid=gameid,
+                proxy=self.proxy,
+                sgdb_api_base=self.SGDB_API_BASE,
+            )
             if cp: covers[sid] = cp
         img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
         if img_bytes:
@@ -1811,7 +1817,13 @@ class SteamStatusMonitorV3(
                 gid = u.get('gameid', '')
                 if gid:
                     from ..presentation.renderers.game_start import get_cover_path
-                    cp = await get_cover_path(self.data_dir, gid, u.get('game', ''), proxy=self.proxy)
+                    cp = await get_cover_path(
+                        self.data_dir, gid, u.get('game', ''),
+                        sgdb_api_key=self.SGDB_API_KEY,
+                        appid=gid,
+                        proxy=self.proxy,
+                        sgdb_api_base=self.SGDB_API_BASE,
+                    )
                     if cp:
                         covers[u['sid']] = cp
         img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
