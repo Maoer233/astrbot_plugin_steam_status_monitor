@@ -2,17 +2,17 @@
   "steam_api_key": {
     "description": "Steam Web API Key",
     "type": "string",
-    "hint": "请在 https://steamcommunity.com/dev/apikey 获取 "
+    "hint": "必填项-请在 https://steamcommunity.com/dev/apikey 获取 "
   },
   "sgdb_api_key": {
     "description": "SteamGridDB API Key",
     "type": "string",
-    "hint": "请在 https://www.steamgriddb.com/profile/preferences/api 获取"
+    "hint": "必填项-请在 https://www.steamgriddb.com/profile/preferences/api 获取"
   },
   "itad_api_key": {
     "description": "IsThereAnyDeal API Key",
     "type": "string",
-    "hint": "用于中文游戏搜索、当前价格和历史最低价查询；请在 ITAD 开发者页面获取",
+    "hint": "可选项-用于游戏搜索、当前价格和历史最低价查询；请在 https://isthereanydeal.com/apps/ 获取获取",
     "default": ""
   },
   "itad_api_base": {
