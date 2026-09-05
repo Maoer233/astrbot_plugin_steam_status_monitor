@@ -25,14 +25,14 @@
     "description": "价格查询地区代码",
     "type": "string",
     "hint": "选择用于查询价格的 Steam 区",
-    "options": ["CN", "US", "JP", "KR", "RU", "UA", "TR"],
+    "options": ["CN", "US", "JP", "KR", "RU", "UA", "TR", "HK"],
     "default": "CN"
   },
   "price_compare_regions": {
     "description": "价格对比地区",
     "type": "string",
     "hint": "选择用于价格对比的 Steam 区，选 NONE 则不进行对比",
-    "options": ["NONE", "UA", "US", "JP", "KR", "RU", "CN", "TR"],
+    "options": ["NONE", "UA", "US", "JP", "KR", "RU", "CN", "TR", "HK"],
     "default": "UA"
   },
   "fixed_poll_interval": {
