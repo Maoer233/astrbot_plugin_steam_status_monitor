@@ -4,6 +4,9 @@ from typing import Optional
 from ...presentation.renderers.steam_list import render_steam_list_image
 from ...presentation.renderers.game_start import get_avatar_frame_url, get_avatar_frame_path
 
+# 与 alllist 一致的 personastate -> 状态 映射（0离线,1在线,2忙碌,3离开,4打盹）
+_PERSONA_STATUS = {0: 'offline', 1: 'online', 2: 'busy', 3: 'away', 4: 'snooze'}
+
 async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
     '''列出所有玩家当前状态（图片美化版，分群支持）'''
     # 获取分群ID
@@ -84,7 +87,7 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
             user_list.append({
                 'sid': sid,
                 'name': name,
-                'status': 'online',
+                'status': _PERSONA_STATUS.get(int(personastate), 'online'),
                 'avatar_url': avatar_url,
                 'game': '',
                 'gameid': '',

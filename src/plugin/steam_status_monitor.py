@@ -71,7 +71,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.5.2"
+        self._plugin_version = "4.5.4"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -916,6 +916,16 @@ class SteamStatusMonitorV3(
             if frame_path:
                 avatar_frame_paths[sid] = frame_path
 
+        # 排行榜游戏名统一转中文名来源（覆盖插件重启/缓存污染等写入的英文名）
+        for p in rank_data:
+            for g in p.get("games", []):
+                gid = g.get("gameid")
+                if not gid:
+                    continue
+                resolved = await self.get_chinese_game_name(str(gid), g.get("name"))
+                if resolved:
+                    g["name"] = resolved
+
         font_path = self.get_font_path("NotoSansHans-Regular.otf")
         img_bytes = await render_rank_image(
             self.data_dir,
@@ -1077,6 +1087,16 @@ class SteamStatusMonitorV3(
                             fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=self.proxy)
                     if fp:
                         avatar_frame_paths[sid] = fp
+
+            # 排行榜游戏名统一转中文名来源（覆盖插件重启/缓存污染等写入的英文名）
+            for p in rank_data:
+                for g in p.get("games", []):
+                    gid = g.get("gameid")
+                    if not gid:
+                        continue
+                    resolved = await self.get_chinese_game_name(str(gid), g.get("name"))
+                    if resolved:
+                        g["name"] = resolved
 
             font_path = self.get_font_path('NotoSansHans-Regular.otf')
             img_bytes = await render_rank_image(
@@ -1709,7 +1729,7 @@ class SteamStatusMonitorV3(
                 if total <= 0:
                     continue
                 game_list = sorted(
-                    [{"name": g["name"], "minutes": g["minutes"]} for g in games.values()],
+                    [{"name": g["name"], "minutes": g["minutes"], "gameid": gid} for gid, g in games.items()],
                     key=lambda x: x["minutes"],
                     reverse=True
                 )
