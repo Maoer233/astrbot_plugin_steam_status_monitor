@@ -59,7 +59,7 @@ class PollingTrackingMixin:
                 next_minute = (int(now) // 60 + 1) * 60
                 await asyncio.sleep(max(0, next_minute - now))
                 # 0秒：跨群收集所有到点的SteamID，合并为一次批量查询（N群=1次API调用+自动去重）
-                group_ids = list(self.group_steam_ids.keys())
+                group_ids = list(self.running_groups)  # 只轮询已启动的群，避免未启动群残留轮询
                 group_sids = {}  # {group_id: [sid, ...]}
                 all_sids_set = set()
                 now2 = time.time()

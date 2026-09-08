@@ -94,6 +94,15 @@ class MonitorAdminService:
             self.groups[owner] = [sid for sid in owner_ids if sid != steam_id]
             if not self.groups[owner]:
                 del self.groups[owner]
+                # 群已空，停止该群的监控轮询
+                running_groups = getattr(self._plugin, 'running_groups', set())
+                running_groups.discard(owner)
+                monitor_enabled = getattr(self._plugin, 'group_monitor_enabled', {})
+                monitor_enabled.pop(owner, None)
+                notify_sessions = getattr(self._plugin, 'notify_sessions', {})
+                notify_sessions.pop(owner, None)
+                self._plugin._save_notify_session()
+                self._plugin._save_group_switches()
         push_groups.pop(steam_id, None)
         self._plugin._save_group_steam_ids()
         self._plugin._save_push_groups()
