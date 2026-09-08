@@ -1696,7 +1696,15 @@ class SteamStatusMonitorV3(
                 date_keys.append(d.strftime("%Y-%m-%d"))
             # 确定要统计的 SteamID 集合
             if group_id:
-                target_sids = set(self.group_steam_ids.get(group_id, []))
+                # 主监控ID
+                direct_steam_ids = self.group_steam_ids.get(group_id, [])
+                # 子群推送ID（从 push_groups 中查找推送到该群的 SteamID）
+                push_steam_ids = [
+                    sid
+                    for sid, push_targets in (getattr(self, 'push_groups', {}) or {}).items()
+                    if group_id in {str(target) for target in push_targets}
+                ]
+                target_sids = set(direct_steam_ids) | set(push_steam_ids)
             else:
                 target_sids = set()
                 for gids in self.group_steam_ids.values():
