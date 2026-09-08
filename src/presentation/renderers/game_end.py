@@ -2,10 +2,15 @@
 import os
 import io
 import time
-import asyncio
 import httpx
 from PIL import Image, ImageDraw, ImageFont
-from .game_start import get_avatar_frame_url, get_avatar_frame_path, _cache_config, get_horizontal_cover_path
+from .game_start import (
+    get_avatar_frame_url,
+    get_avatar_frame_path,
+    get_avatar_path,
+    _cache_config,
+    get_horizontal_cover_path,
+)
 from .steam_cover import get_steam_library_cover_url
 from ...shared.fonts import load_truetype, resolve_font_path
 from ...shared.paths import IMAGES_DIR
@@ -69,31 +74,6 @@ async def get_sgdb_vertical_cover(game_name, sgdb_api_key=None, sgdb_game_name=N
         except Exception as e:
             print(f"[get_sgdb_vertical_cover] SGDB API异常: {e}")
             return None
-
-def get_avatar_path(data_dir, steamid, url, force_update=False, proxy=None):
-    avatar_dir = os.path.join(data_dir, "avatars")
-    os.makedirs(avatar_dir, exist_ok=True)
-    path = os.path.join(avatar_dir, f"{steamid}.jpg")
-    refresh_interval = 24 * 3600
-    print(f"[game_end_render] get_avatar_path: url={url}, path={path}, exists={os.path.exists(path)}")
-    if os.path.exists(path) and not force_update:
-        if time.time() - os.path.getmtime(path) < refresh_interval:
-            print(f"[game_end_render] 使用本地头像: {path}, size={os.path.getsize(path)}")
-            return path
-    try:
-        import httpx
-        resp = httpx.get(url, timeout=10, proxy=proxy)
-        if resp.status_code == 200:
-            with open(path, "wb") as f:
-                f.write(resp.content)
-            print(f"[game_end_render] 下载头像成功: {path}, size={os.path.getsize(path)}")
-            return path
-        else:
-            print(f"[game_end_render] 头像下载失败: HTTP {resp.status_code} url={url}")
-    except Exception as e:
-        import traceback
-        print(f"[game_end_render] 头像下载异常: {e}\n{traceback.format_exc()}")
-    return path if os.path.exists(path) else None
 
 # 渐变背景函数补充
 def render_gradient_bg(img_w, img_h, color_top, color_bottom):
@@ -435,10 +415,10 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
 
 # render_game_end 里 await get_cover_path
 async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, game_name, end_time_str, tip_text, duration_h, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None, sgdb_api_base=None, steam_store_base=None):
-    avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
+    avatar_path = await get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key, sgdb_api_base=sgdb_api_base, steam_store_base=steam_store_base)
     # 获取横版封面（竖版缺失时叠加用）
-    horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
+    horizontal_cover_path = await get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
     avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
     if not avatar_frame_path:
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)

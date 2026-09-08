@@ -97,12 +97,12 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
         plugin.group_last_states = {"g1": {"s1": {"gameid": "A", "name": "P", "gameextrainfo": "GameA"}}}
         await plugin.session_service.handle("g1", "s1", "A", 1000, player_name="P", current_game_name="GameA")
 
-        async def fetch(_sid):
-            return {"gameid": None, "name": "P"}
-
-        plugin.fetch_player_status = fetch
         with patch("src.application.services.status_change_tracking.time.time", return_value=1100):
-            await plugin.check_status_change("g1", single_sid="s1")
+            await plugin.check_status_change(
+                "g1",
+                single_sid="s1",
+                status_override={"gameid": None, "name": "P"},
+            )
         self.assertEqual("confirming_exit", plugin.session_service.get("g1", "s1").state)
 
     def test_hydrate_legacy_pending_quit(self):

@@ -131,16 +131,10 @@ class SteamClientMixin:
                         await asyncio.sleep(delay)
                         delay *= 2
                     else:
-                        logger.error(f"[批量查询] 本批彻底失败，降级为单查: {batch}")
-                        # 降级：批量失败时回退到逐个查询，保证可用性
-                        for sid in batch:
-                            if sid not in result:
-                                try:
-                                    single = await self.fetch_player_status(sid, retry=1)
-                                    if single:
-                                        result[sid] = single
-                                except Exception as se:
-                                    logger.warning(f'[批量查询] 单查降级也失败 (SteamID={sid}): {format_exception(se)}')
+                        logger.error(
+                            f"[批量查询] 本批彻底失败，跳过本轮（不再串行单查，避免把主循环拖死）: "
+                            f"{len(batch)} 个 ID"
+                        )
         return result
 
     async def resolve_steam_input(self, raw):
