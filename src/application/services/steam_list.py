@@ -146,7 +146,8 @@ async def handle_steam_list(self, event, *, font_path: Optional[str] = None, pro
                 )
                 if cp:
                     covers[u['sid']] = cp
-    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
+    parent_name, parent_avatar_url = self._steam_parent(event)
+    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style, parent_name=parent_name, parent_avatar_url=parent_avatar_url)
     if img_bytes:
         with io.BytesIO(img_bytes) as buf:
             import tempfile

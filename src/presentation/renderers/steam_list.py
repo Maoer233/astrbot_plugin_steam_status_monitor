@@ -175,12 +175,15 @@ def _fit_text(draw, text, font, max_w):
     return text[:lo] + ell
 
 
-def draw_parent_status(parent_name, sub_text, fonts):
+def draw_parent_status(parent_name, sub_text, fonts, parent_avatar=None):
     """顶部横幅：bot 头像 + 名称 + 状态（参照 nonebot-plugin-steam-info draw_parent_status）"""
     canvas = _load_image(_res('parent_status.png'), (WIDTH, 120))
     if canvas is None:
         canvas = Image.new('RGBA', (WIDTH, 120), (39, 79, 96, 255))
-    avatar = _load_image(_res('unknown_avatar.jpg'), (PARENT_AVATAR_SIZE, PARENT_AVATAR_SIZE))
+    if parent_avatar is not None:
+        avatar = parent_avatar.resize((PARENT_AVATAR_SIZE, PARENT_AVATAR_SIZE), Image.BICUBIC)
+    else:
+        avatar = _load_image(_res('unknown_avatar.jpg'), (PARENT_AVATAR_SIZE, PARENT_AVATAR_SIZE))
     if avatar is not None:
         avatar_y = 120 - 16 - PARENT_AVATAR_SIZE
         canvas.paste(avatar, (16, avatar_y), avatar)
@@ -285,7 +288,7 @@ def draw_section(title, rows, fonts, show_count=False):
 
 async def _render_steam_style(data_dir, user_list, font_path=None, proxy=None,
                               avatar_frame_paths=None, covers=None,
-                              parent_name=None, parent_sub=None):
+                              parent_name=None, parent_sub=None, parent_avatar_url=None):
     """渲染 Steam 玩家状态列表图片（steam风格）
 
     user_list 元素字段：sid/name/status/avatar_url/game/gameid/play_str/lastlogoff。
@@ -329,7 +332,10 @@ async def _render_steam_style(data_dir, user_list, font_path=None, proxy=None,
         parent_name = 'Steam 状态监控'
     if parent_sub is None:
         parent_sub = f"监控中 · {len(user_list)} 位玩家"
-    banner = draw_parent_status(parent_name, parent_sub, fonts)
+    parent_avatar = None
+    if parent_avatar_url:
+        parent_avatar = await fetch_avatar(parent_avatar_url, data_dir, "parent", proxy=proxy)
+    banner = draw_parent_status(parent_name, parent_sub, fonts, parent_avatar=parent_avatar)
     search_bar = draw_friends_search(fonts)
 
     sections = []
@@ -527,7 +533,8 @@ async def _render_card_style(data_dir, user_list, font_path=None, proxy=None,
 
 async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=None,
                                   avatar_frame_paths=None, covers=None,
-                                  parent_name=None, parent_sub=None, steam_style=False):
+                                  parent_name=None, parent_sub=None, parent_avatar_url=None,
+                                  steam_style=False):
     """渲染 Steam 玩家状态列表图片。
 
     steam_style=True：使用新版 steam 好友列表风格（对应配置项 enable_steam_style 开启）；
@@ -538,6 +545,7 @@ async def render_steam_list_image(data_dir, user_list, font_path=None, proxy=Non
             data_dir, user_list, font_path=font_path, proxy=proxy,
             avatar_frame_paths=avatar_frame_paths, covers=covers,
             parent_name=parent_name, parent_sub=parent_sub,
+            parent_avatar_url=parent_avatar_url,
         )
     return await _render_card_style(
         data_dir, user_list, font_path=font_path, proxy=proxy,

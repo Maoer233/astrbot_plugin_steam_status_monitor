@@ -71,7 +71,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.5.7"
+        self._plugin_version = "4.6.0"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -1337,7 +1337,8 @@ class SteamStatusMonitorV3(
                 sgdb_api_base=self.SGDB_API_BASE,
             )
             if cp: covers[sid] = cp
-        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
+        parent_name, parent_avatar_url = self._steam_parent(event)
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style, parent_name=parent_name, parent_avatar_url=parent_avatar_url)
         if img_bytes:
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
@@ -1803,6 +1804,16 @@ class SteamStatusMonitorV3(
             logger.warning(f"获取在线人数失败: {e} (gameid={gameid})")
         return None
 
+    def _steam_parent(self, event):
+        """返回 (触发者昵称, QQ头像URL)；获取失败返回 (None, None)。用于 Steam 列表顶部显示触发者头像/名称。"""
+        try:
+            _sid = event.get_sender_id()
+            _name = event.get_sender_name()
+        except Exception:
+            return None, None
+        url = f"https://q1.qlogo.cn/g?b=qq&nk={_sid}&s=640" if _sid else None
+        return _name, url
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("steam alllist")
     async def steam_alllist(self, event: AstrMessageEvent, mode: str = "img"):
@@ -1905,7 +1916,8 @@ class SteamStatusMonitorV3(
                     )
                     if cp:
                         covers[u['sid']] = cp
-        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style)
+        parent_name, parent_avatar_url = self._steam_parent(event)
+        img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=self.proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style, parent_name=parent_name, parent_avatar_url=parent_avatar_url)
         if img_bytes:
             import tempfile
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
