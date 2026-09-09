@@ -193,6 +193,7 @@ pip install httpx pillow
 
 ## 更新记录
 - V4.6.0（2026/09/09）
+  - **修复**（#48，感谢 @OLRainM）：避免 Steam 状态查询超时把轮询与通知渲染拖死。
   - **功能新增**：Steam 好友列表风格卡片顶部（头像与名称）改为显示**触发指令者**的 QQ 头像与 QQ 昵称（仅 `enable_steam_style` 开启时生效）；取不到触发者时回退为默认占位头像与“Steam 状态监控”。
   - 覆盖指令：`/steam list`、`/steam alllist`、`/steamwho`（/在干嘛）。
 
