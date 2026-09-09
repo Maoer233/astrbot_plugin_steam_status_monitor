@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from ...shared.fonts import load_truetype
 from ...shared.network import httpx_client_kwargs
+from ...shared.utils.price import to_cny
 
 
 CARD_WIDTH = 820
@@ -156,6 +157,7 @@ async def render_game_detail_image(
     small_font = _font(font_path, 14)
     price_font = _font(font_path, 34)
     tag_font = _font(font_path, 13)
+    mini_font = _font(font_path, 10)
 
     itad_summary = itad_summary or {}
     region_prices = region_prices or {}
@@ -176,10 +178,11 @@ async def render_game_detail_image(
     else:
         current_text, discount_text, regular_text = "暂无价格", "", ""
 
-    history_low = itad_summary.get("history_low")
+    history_low = itad_summary.get("steam_low")
     if history_low is None:
-        history_low = itad_summary.get("lowest")
+        history_low = itad_summary.get("history_low") or itad_summary.get("lowest")
     history_text = _value_text(history_low, currency)
+    history_low_cut = itad_summary.get("steam_low_cut")
 
     title = game.get("name") or "未知游戏"
     english_title = game.get("english_name") or game.get("original_name") or ""
@@ -308,6 +311,26 @@ async def render_game_detail_image(
         draw.line((cursor + 10, price_y + 22, cursor + 10 + regular_width, price_y + 22), fill=STEAM_STRIKE)
     draw.text((left_x + 12, section_top[1] + 102), "史低", font=small_font, fill=STEAM_MUTED)
     draw.text((left_x + 56, section_top[1] + 102), history_text, font=small_font, fill=STEAM_TEXT)
+    if history_low_cut:
+        _low_cursor = left_x + 56 + draw.textbbox((0, 0), history_text, font=small_font)[2] + 10
+        _discount_tag(draw, _low_cursor, section_top[1] + 94, f"-{int(history_low_cut)}%", tag_font, small=True)
+    # CDK / 第三方商店最低当前在售价（非 Steam，price_region 口径，折 CNY）
+    cdk_shop = itad_summary.get("cdk_shop")
+    cdk_amount = itad_summary.get("cdk_amount")
+    if cdk_shop and cdk_amount is not None:
+        cdk_currency = itad_summary.get("cdk_currency")
+        cdk_cut = itad_summary.get("cdk_cut")
+        cny = to_cny(cdk_amount, cdk_currency) if cdk_currency and cdk_currency != "CNY" else cdk_amount
+        cdk_y = section_top[1] + 124
+        price_part = _value_text(cny, "CNY")
+        draw.text((left_x + 12, cdk_y), "其它", font=small_font, fill=STEAM_MUTED)
+        _price_x = left_x + 56
+        draw.text((_price_x, cdk_y), price_part, font=small_font, fill=STEAM_TEXT)
+        _cur = _price_x + draw.textbbox((0, 0), price_part, font=small_font)[2] + 10
+        if cdk_cut:
+            _cur += _discount_tag(draw, _cur, cdk_y - 2, f"-{int(cdk_cut)}%", tag_font, small=True)
+        _shop_x = _cur + 10
+        draw.text((_shop_x, cdk_y + 2), f"({cdk_shop})", font=mini_font, fill=STEAM_MUTED)
 
     for index, row in enumerate(region_rows):
         row_y = section_top[2] + 22 + index * 36

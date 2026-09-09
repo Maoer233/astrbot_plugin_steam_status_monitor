@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from html import unescape
 from typing import Any
 import re
+import unicodedata
 
 import httpx
 
@@ -199,6 +200,21 @@ class ITADClient:
             return re.search(rf"(?<![0-9a-z]){re.escape(token)}(?![0-9a-z])", haystack) is not None
         return token in haystack
 
+    @staticmethod
+    def _normalize_title(s: str) -> str:
+        """归一化游戏名，消除 Steam(Unicode U+2122/U+00AE) 与 ITAD(CP1252 字节) 对 ®/™ 等字符的编码差异。"""
+        if not s:
+            return ""
+        repl = {
+            "\x99": "™", "\x9c": "œ", "\x91": "‘", "\x92": "’",
+            "\x93": "“", "\x94": "”", "\x85": "…", "\x96": "–", "\x97": "—",
+        }
+        s = "".join(repl.get(ch, ch) for ch in str(s))
+        try:
+            return unicodedata.normalize("NFKC", s).casefold().strip()
+        except Exception:
+            return str(s or "").casefold().strip()
+
     @classmethod
     def _title_matches_query(cls, title: str, query: str) -> bool:
         """标题需覆盖查询词中足够多的有效 token，避免 Steamy 糊到 steam。"""
@@ -285,10 +301,10 @@ class ITADClient:
             itad_games = await self._parse_search_payload(
                 await self._get("/games/search/v1", {"title": search_title, "results": 3}), 3
             )
-            normalized_title = search_title.casefold()
+            normalized_title = self._normalize_title(search_title)
             game = next(
                 (candidate for candidate in itad_games
-                 if candidate.title.casefold().strip() == normalized_title),
+                 if self._normalize_title(candidate.title) == normalized_title),
                 None,
             )
             if game is None:
@@ -329,6 +345,10 @@ class ITADClient:
         current_regular = None
         currency = None
         cut = None
+        cdk_shop = None
+        cdk_amount = None
+        cdk_currency = None
+        cdk_cut = None
         for deal in current.get("deals", []) if isinstance(current, dict) else []:
             if not isinstance(deal, dict):
                 continue
@@ -337,11 +357,19 @@ class ITADClient:
             amount = price.get("amount")
             if amount is None:
                 continue
-            current_price = float(amount)
-            current_regular = float(regular.get("amount") or current_price)
-            currency = price.get("currency")
-            cut = deal.get("cut")
-            break
+            if current_price is None:
+                current_price = float(amount)
+                current_regular = float(regular.get("amount") or current_price)
+                currency = price.get("currency")
+                cut = deal.get("cut")
+            shop_name = str(((deal.get("shop") or {}).get("name") or "")).lower()
+            if shop_name == "steam":
+                continue
+            if cdk_amount is None or float(amount) < cdk_amount:
+                cdk_amount = float(amount)
+                cdk_shop = (deal.get("shop") or {}).get("name")
+                cdk_currency = price.get("currency")
+                cdk_cut = deal.get("cut")
         history_low = None
         low_obj = current.get("historyLow") if isinstance(current, dict) else None
         if isinstance(low_obj, dict):
@@ -353,24 +381,40 @@ class ITADClient:
             if not currency:
                 currency = low_all.get("currency")
         lowest = None
+        lowest_cut = None
+        steam_low = None
+        steam_low_cut = None
         for item in history:
             if not isinstance(item, dict):
                 continue
             deal = item.get("deal") or {}
+            shop_name = str(((item.get("shop") or {}).get("name") or "")).lower()
             price = deal.get("price") or {}
             amount = price.get("amount")
             try:
                 amount = float(amount)
             except (TypeError, ValueError):
                 continue
-            lowest = amount if lowest is None else min(lowest, amount)
+            if lowest is None or amount < lowest:
+                lowest = amount
+                lowest_cut = deal.get("cut")
+            if shop_name == "steam" and (steam_low is None or amount < steam_low):
+                steam_low = amount
+                steam_low_cut = deal.get("cut")
         return {
             "current": current,
             "current_price": current_price,
             "current_regular": current_regular,
             "currency": currency,
             "cut": cut,
+            "cdk_shop": cdk_shop,
+            "cdk_amount": cdk_amount,
+            "cdk_currency": cdk_currency,
+            "cdk_cut": cdk_cut,
             "history_low": history_low,
             "lowest": lowest,
+            "lowest_cut": lowest_cut,
+            "steam_low": steam_low,
+            "steam_low_cut": steam_low_cut,
             "history": history,
         }
