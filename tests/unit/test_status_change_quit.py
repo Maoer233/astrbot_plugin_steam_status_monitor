@@ -60,7 +60,7 @@ class StatusChangeQuitTests(unittest.IsolatedAsyncioTestCase):
         await plugin.session_service.handle("g1", "s1", "A", 1000, player_name="P", current_game_name="GameA")
         plugin.group_last_states["g1"]["s1"] = {"gameid": "A", "name": "P", "gameextrainfo": "GameA"}
         with patch("src.application.services.status_change_tracking.time.time", return_value=1600):
-            await plugin.check_status_change("g1", single_sid="s1")
+            await plugin.check_status_change("g1", single_sid="s1", status_override=plugin.status)
         self.assertEqual([("s1", "A", "GameA", 10.0)], plugin.playtime)
         self.assertEqual("B", plugin.session_service.get("g1", "s1").gameid)
 
@@ -69,9 +69,36 @@ class StatusChangeQuitTests(unittest.IsolatedAsyncioTestCase):
         await plugin.session_service.handle("g1", "s1", "A", 1000, player_name="P", current_game_name="GameA")
         plugin.group_last_states["g1"]["s1"] = {"gameid": "A", "name": "P", "gameextrainfo": "GameA"}
         with patch("src.application.services.status_change_tracking.time.time", return_value=1100):
-            await plugin.check_status_change("g1", single_sid="s1")
+            await plugin.check_status_change("g1", single_sid="s1", status_override=plugin.status)
         self.assertEqual([], plugin.playtime)
         self.assertEqual("confirming_exit", plugin.session_service.get("g1", "s1").state)
+
+    async def test_batch_miss_does_not_refetch_player_status(self):
+        plugin = FakePlugin({"gameid": "A", "name": "P"})
+        plugin.fetch_calls = 0
+
+        async def fetch(_sid):
+            plugin.fetch_calls += 1
+            raise AssertionError("batch miss must not fall back to single lookup")
+
+        plugin.fetch_player_status = fetch
+        with patch("src.application.services.status_change_tracking.time.time", return_value=1100):
+            msg = await plugin.check_status_change("g1", single_sid="s1", status_override=None)
+        self.assertEqual(0, plugin.fetch_calls)
+        self.assertIn("获取失败", msg)
+
+    async def test_missing_override_does_not_fetch_player_status(self):
+        plugin = FakePlugin({"gameid": "A", "name": "P"})
+        plugin.fetch_calls = 0
+
+        async def fetch(_sid):
+            plugin.fetch_calls += 1
+            raise AssertionError("check_status_change must not single-lookup")
+
+        plugin.fetch_player_status = fetch
+        msg = await plugin.check_status_change("g1", single_sid="s1")
+        self.assertEqual(0, plugin.fetch_calls)
+        self.assertIn("获取失败", msg)
 
 
 if __name__ == "__main__":

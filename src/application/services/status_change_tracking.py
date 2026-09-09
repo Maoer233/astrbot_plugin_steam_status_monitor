@@ -3,12 +3,15 @@ import time
 from ...domain.monitoring.polling import calculate_poll_schedule
 from ...presentation.formatters.status import format_player_status
 
+_STATUS_UNSET = object()
+
 
 class StatusChangeTrackingMixin:
     """Status polling change detection. Session ownership lives in SessionService."""
 
-    async def check_status_change(self, group_id, single_sid=None, status_override=None, poll_level=None, skip_push=False):
-        '''轮询检测玩家状态变更并推送通知（分群，支持单个sid）
+    async def check_status_change(self, group_id, single_sid=None, status_override=_STATUS_UNSET, poll_level=None, skip_push=False):
+        '''轮询检测玩家状态变更并推送通知（分群，支持单个sid）。
+        必须由调用方传入本轮批量结果 status_override；缺失则跳过，不再单查。
         返回精简日志字符串，不直接打印日志'''
         now = int(time.time())
         # 插件重启后首次初始化期间：若该群状态文件是"停止期间遗留的旧数据"，本次检测到的变化
@@ -21,7 +24,11 @@ class StatusChangeTrackingMixin:
         last_states = self.group_last_states.setdefault(group_id, {})
         logs = []
         for sid in steam_ids:
-            status = status_override if (single_sid and status_override is not None) else await self.fetch_player_status(sid)
+            # 检测循环只消费本轮批量结果；没有覆盖值就跳过，禁止打网单查。
+            if not single_sid or status_override is _STATUS_UNSET:
+                logs.append(f"{sid}: 获取失败")
+                continue
+            status = status_override
             if not status:
                 logs.append(f"{sid}: 获取失败")
                 continue

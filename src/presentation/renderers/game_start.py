@@ -20,7 +20,7 @@ COVER_W, COVER_H = 80, 120
 IMG_W, IMG_H = 512, 192  # 16:6，画布高度减少三分之一
 
 
-def get_avatar_path(data_dir, steamid, url, force_update=False, proxy=None):
+async def get_avatar_path(data_dir, steamid, url, force_update=False, proxy=None):
     avatar_dir = os.path.join(data_dir, "avatars")
     os.makedirs(avatar_dir, exist_ok=True)
     path = os.path.join(avatar_dir, f"{steamid}.jpg")
@@ -30,8 +30,11 @@ def get_avatar_path(data_dir, steamid, url, force_update=False, proxy=None):
             return path
     elif refresh_interval == 0 and os.path.exists(path):
         return path
+    if not url:
+        return path if os.path.exists(path) else None
     try:
-        resp = httpx.get(url, timeout=10, proxy=proxy)
+        async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
+            resp = await client.get(url)
         if resp.status_code == 200:
             with open(path, "wb") as f:
                 f.write(resp.content)
@@ -258,8 +261,7 @@ async def get_cover_path(data_dir, gameid, game_name, force_update=False, sgdb_a
         return missing_cover
     return None
 
-def get_horizontal_cover_path(data_dir, gameid, appid=None, proxy=None, steam_store_base=None):
-    import httpx
+async def get_horizontal_cover_path(data_dir, gameid, appid=None, proxy=None, steam_store_base=None):
     cover_dir = os.path.join(data_dir, "covers_h")
     os.makedirs(cover_dir, exist_ok=True)
     path = os.path.join(cover_dir, f"{gameid}.jpg")
@@ -270,17 +272,21 @@ def get_horizontal_cover_path(data_dir, gameid, appid=None, proxy=None, steam_st
     try:
         store_base = (steam_store_base or "https://store.steampowered.com").rstrip("/")
         url = f"{store_base}/api/appdetails?appids={appid}&l=schinese"
-        if resp.status_code == 200:
+        async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(proxy)) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return path if os.path.exists(path) else None
             data = resp.json()
             info = data.get(str(appid), {}).get("data", {})
             header_img = info.get("header_image")
-            if header_img:
-                img_resp = httpx.get(header_img, timeout=10, proxy=proxy)
-                if img_resp.status_code == 200:
-                    with open(path, "wb") as f:
-                        f.write(img_resp.content)
-                    print(f"[get_horizontal_cover_path] 下载成功: {gameid} -> {path}")
-                    return path
+            if not header_img:
+                return path if os.path.exists(path) else None
+            img_resp = await client.get(header_img)
+            if img_resp.status_code == 200:
+                with open(path, "wb") as f:
+                    f.write(img_resp.content)
+                print(f"[get_horizontal_cover_path] 下载成功: {gameid} -> {path}")
+                return path
     except Exception as e:
         print(f"[get_horizontal_cover_path] 获取横版封面异常: {e}")
     return path if os.path.exists(path) else None
@@ -536,10 +542,10 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     return img.convert("RGB")
 async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, game_name, api_key=None, superpower=None, online_count=None, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, version=None, sgdb_api_base=None, steam_store_base=None, steam_api_base=None):
     print(f"[render_game_start] superpower参数: {superpower}")
-    avatar_path = get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
+    avatar_path = await get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
     cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key, sgdb_api_base=sgdb_api_base, steam_api_base=steam_api_base)
     # 获取横版封面（竖版缺失时叠加用）
-    horizontal_cover_path = get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
+    horizontal_cover_path = await get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
     playtime_hours = None
     playtime_unowned = False
     if api_key:
