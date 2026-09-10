@@ -419,7 +419,11 @@ class AchievementMonitor:
         y = padding_v + header_h + padding_v
 
         connector = aiohttp_connector()
-        async with aiohttp.ClientSession(connector=connector) as session:
+        # 成就图标 CDN（cdn.akamai.steamstatic.com / steamcdn-a.akamaihd.net）
+        # 在部分服务器上直连不可达，需经系统代理（HTTPS_PROXY）。aiohttp 默认
+        # 不读环境代理（trust_env=False），开启 trust_env 让图标请求走系统代理；
+        # session.get 仍保留显式 proxy=self.proxy 的兼容路径。
+        async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
             idx = 0
             for apiname in new_achievements:
                 detail = achievement_details.get(apiname)

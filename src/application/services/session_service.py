@@ -389,6 +389,9 @@ class SessionService:
         plugin = self._plugin
         if skip_push or not plugin.config.get("enable_network_fluctuation_notify", True):
             return
+        # 黑白名单过滤：网络波动提示与游戏开始/结束播报一致，黑名单游戏不再推送波动提示
+        if getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid):
+            return
         notify_sessions = plugin._get_notify_sessions(session.group_id, session.sid)
         if not notify_sessions:
             return
