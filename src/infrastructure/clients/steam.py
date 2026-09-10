@@ -8,6 +8,31 @@ from ...shared.logging import format_exception, logger
 from ...shared.network import httpx_client_kwargs
 from ...shared.utils.price import store_region_candidates
 
+# 成人内容/年龄墙：无 Cookie 时 appdetails 与 appreviews 常返回 success=false。
+STEAM_STORE_COOKIES = {
+    "birthtime": "0",
+    "lastagecheckage": "1-0-1970",
+    "mature_content": "1",
+    "wants_mature_content": "1",
+}
+STEAM_STORE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+}
+
+
+def steam_store_client_kwargs(proxy=None):
+    """商店接口共用代理、年龄墙 Cookie 与浏览器头。"""
+    return {
+        "cookies": STEAM_STORE_COOKIES,
+        "headers": STEAM_STORE_HEADERS,
+        **httpx_client_kwargs(proxy),
+    }
+
 
 class SteamClientError(RuntimeError):
     """Steam 客户端调用失败。"""
@@ -223,7 +248,7 @@ class SteamClientMixin:
         language = language or "all"
         params["language"] = language
         try:
-            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 payload = response.json()
@@ -280,39 +305,47 @@ class SteamClientMixin:
         return data if isinstance(data, dict) else None
 
     async def fetch_game_details(self, appid, language="schinese", country="CN"):
-        """获取 Steam 商店游戏详情。主区锁区时按港/台/日/美回退。"""
+        """获取 Steam 商店游戏详情。主区锁区时按港/台/日/美回退；简体失败再试英文。"""
         gid = str(appid).strip()
         if not gid.isdigit():
             return None
         preferred = str(country or "CN").strip().upper() or "CN"
+        languages = []
+        if language:
+            languages.append(language)
+        if language not in ("english", "en"):
+            languages.append("english")
         last_error = None
         try:
-            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
-                for cc in store_region_candidates(preferred):
-                    try:
-                        data = await self._request_appdetails(
-                            client, gid, language=language, country=cc
-                        )
-                    except Exception as exc:
-                        last_error = exc
-                        logger.warning(
-                            "获取 Steam %s 区详情失败: %s (appid=%s)",
-                            cc,
-                            exc,
-                            gid,
-                        )
-                        continue
-                    if not data:
-                        continue
-                    data["_store_region"] = cc
-                    if cc != preferred:
-                        logger.info(
-                            "Steam %s 区锁区或无详情，改用 %s 区 (appid=%s)",
-                            preferred,
-                            cc,
-                            gid,
-                        )
-                    return data
+            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
+                for lang in languages:
+                    for cc in store_region_candidates(preferred):
+                        try:
+                            data = await self._request_appdetails(
+                                client, gid, language=lang, country=cc
+                            )
+                        except Exception as exc:
+                            last_error = exc
+                            logger.warning(
+                                "获取 Steam %s 区详情失败: %s (appid=%s, lang=%s)",
+                                cc,
+                                exc,
+                                gid,
+                                lang,
+                            )
+                            continue
+                        if not data:
+                            continue
+                        data["_store_region"] = cc
+                        data["_store_language"] = lang
+                        if cc != preferred:
+                            logger.info(
+                                "Steam %s 区锁区或无详情，改用 %s 区 (appid=%s)",
+                                preferred,
+                                cc,
+                                gid,
+                            )
+                        return data
             if last_error:
                 logger.warning(f"获取 Steam 游戏详情失败: {last_error} (appid={gid})")
             else:
@@ -330,7 +363,7 @@ class SteamClientMixin:
             return None
         preferred = str(country or "CN").strip().upper() or "CN"
         try:
-            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
                 for cc in store_region_candidates(preferred):
                     try:
                         data = await self._request_appdetails(client, gid, country=cc)

@@ -1,8 +1,12 @@
 import unittest
 from unittest.mock import patch
 
-from src.infrastructure.clients.steam import SteamClientMixin
-from src.shared.utils.price import store_region_candidates, summary_to_cny
+from src.infrastructure.clients.steam import STEAM_STORE_COOKIES, SteamClientMixin
+from src.shared.utils.price import (
+    is_store_region_locked,
+    store_region_candidates,
+    summary_to_cny,
+)
 
 
 class FakeSteam(SteamClientMixin):
@@ -25,11 +29,13 @@ class _FakeResponse:
 
 class _RegionClient:
     payloads = {}
+    language_payloads = {}
     calls = []
     errors = {}
+    cookies = None
 
     def __init__(self, *args, **kwargs):
-        pass
+        _RegionClient.cookies = kwargs.get("cookies")
 
     async def __aenter__(self):
         return self
@@ -38,11 +44,14 @@ class _RegionClient:
         return False
 
     async def get(self, url, params=None):
-        cc = str((params or {}).get("cc") or "").upper()
-        _RegionClient.calls.append(cc)
+        params = params or {}
+        cc = str(params.get("cc") or "").upper()
+        lang = str(params.get("l") or "")
+        _RegionClient.calls.append((cc, lang))
         if cc in _RegionClient.errors:
             raise _RegionClient.errors[cc]
-        payload = _RegionClient.payloads.get(cc) or {"1034140": {"success": False}}
+        keyed = _RegionClient.language_payloads.get((cc, lang))
+        payload = keyed or _RegionClient.payloads.get(cc) or {"1034140": {"success": False}}
         return _FakeResponse(payload)
 
 
@@ -68,6 +77,8 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         _RegionClient.calls = []
         _RegionClient.errors = {}
+        _RegionClient.cookies = None
+        _RegionClient.language_payloads = {}
         _RegionClient.payloads = {
             "CN": _payload(False),
             "HK": _payload(
@@ -90,7 +101,8 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("Subverse", detail["name"])
         self.assertEqual("HK", detail["_store_region"])
-        self.assertEqual(["CN", "HK"], _RegionClient.calls)
+        self.assertEqual([("CN", "schinese"), ("HK", "schinese")], _RegionClient.calls)
+        self.assertEqual("1", _RegionClient.cookies["wants_mature_content"])
 
     async def test_region_price_uses_actual_unlocked_region(self):
         client = FakeSteam()
@@ -122,8 +134,8 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("US", detail["_store_region"])
         self.assertEqual("US", price["region"])
-        self.assertEqual(["US"], _RegionClient.calls[:1])
-        self.assertNotIn("HK", _RegionClient.calls)
+        self.assertEqual(("US", "schinese"), _RegionClient.calls[0])
+        self.assertNotIn("HK", [cc for cc, _lang in _RegionClient.calls])
 
     async def test_cn_timeout_still_tries_hk(self):
         _RegionClient.errors["CN"] = TimeoutError("cn timeout")
@@ -132,4 +144,41 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
             detail = await client.fetch_game_details("1034140", country="CN")
 
         self.assertEqual("HK", detail["_store_region"])
-        self.assertEqual(["CN", "HK"], _RegionClient.calls)
+        self.assertEqual([("CN", "schinese"), ("HK", "schinese")], _RegionClient.calls)
+
+    async def test_schinese_failure_falls_back_to_english(self):
+        _RegionClient.payloads = {}
+        _RegionClient.language_payloads = {
+            ("CN", "schinese"): _payload(False),
+            ("HK", "schinese"): _payload(False),
+            ("TW", "schinese"): _payload(False),
+            ("JP", "schinese"): _payload(False),
+            ("US", "schinese"): _payload(False),
+            ("CN", "english"): _payload(
+                True,
+                name="Subverse",
+                short_description="Adult sci-fi shooter.",
+                genres=[{"description": "Action"}],
+            ),
+        }
+        client = FakeSteam()
+        with patch("src.infrastructure.clients.steam.httpx.AsyncClient", _RegionClient):
+            detail = await client.fetch_game_details("1034140", country="CN")
+
+        self.assertEqual("Subverse", detail["name"])
+        self.assertEqual("CN", detail["_store_region"])
+        self.assertEqual("english", detail["_store_language"])
+        self.assertIn(("US", "schinese"), _RegionClient.calls)
+        self.assertIn(("CN", "english"), _RegionClient.calls)
+        self.assertEqual(STEAM_STORE_COOKIES, _RegionClient.cookies)
+
+
+class StoreRegionLockedHintTests(unittest.TestCase):
+    def test_locked_when_preferred_missing_and_fallback_used(self):
+        self.assertTrue(is_store_region_locked("CN", "HK", {"HK": {"current_price": 249}}))
+
+    def test_not_locked_when_preferred_has_price(self):
+        self.assertFalse(is_store_region_locked("CN", "CN", {"CN": {"current_price": 128}}))
+
+    def test_not_locked_without_any_store_hit(self):
+        self.assertFalse(is_store_region_locked("CN", None, {}))

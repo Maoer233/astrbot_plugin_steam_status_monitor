@@ -52,6 +52,20 @@ def store_region_candidates(preferred="CN"):
     return ordered
 
 
+def is_store_region_locked(preferred, actual_region=None, region_prices=None):
+    """主区无商店价、且实际命中了其它区时，视为锁区。"""
+    preferred = str(preferred or "").strip().upper()
+    if not preferred:
+        return False
+    actual = str(actual_region or "").strip().upper()
+    available = {str(code).upper() for code in (region_prices or {})}
+    if preferred in available:
+        return False
+    if actual and actual != preferred:
+        return True
+    return bool(available - {preferred})
+
+
 def extract_price_query(raw_msg: str, prefix: str) -> str:
     """从完整消息中剥掉 /steam price（或 px）前缀，保留含空格的游戏名。"""
     return re.sub(

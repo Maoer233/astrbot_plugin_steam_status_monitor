@@ -23,7 +23,7 @@ from ..application.services.polling_tracking import PollingTrackingMixin
 from ..presentation.renderers.game_start import render_game_start
 from ..presentation.renderers.game_end import render_game_end
 from ..presentation.renderers.rank import render_rank_image
-from ..presentation.renderers.game_detail import render_game_detail_image
+from ..presentation.renderers.game_detail import COUNTRY_LABEL, render_game_detail_image
 from ..presentation.renderers.game_start import get_font_path
 from ..domain.monitoring import MonitorStateStore, StateBackedMonitorMixin
 from ..domain.ranking.push_scopes import build_rank_push_scopes
@@ -45,6 +45,7 @@ from ..shared.utils.price import (
     CURRENCY_REGION,
     extract_price_query,
     extract_steam_appid,
+    is_store_region_locked,
     store_region_candidates,
     summary_to_currency,
 )
@@ -723,13 +724,18 @@ class SteamStatusMonitorV3(
                 region_prices[actual] = summary_to_currency(region_summary, price_currency)
         detail = await self.fetch_game_details(game.appid, country=price_region) if game.appid else None
         reviews = await self.fetch_game_reviews_both(game.appid) if game.appid else None
-        if detail and reviews:
-            detail['review_all'] = reviews.get('all') or {}
-            detail['review_schinese'] = reviews.get('schinese') or {}
+        if detail:
+            detail['review_all'] = (reviews or {}).get('all') or {}
+            detail['review_schinese'] = (reviews or {}).get('schinese') or {}
         self._steam_search_pending.pop(session_key, None)
         self._steam_search_cache.pop(session_key, None)
         store_appid = (detail or {}).get('store_appid') or game.appid
         store_url = f"https://store.steampowered.com/app/{store_appid}/" if store_appid else ""
+        store_message = store_url
+        actual_store_region = str((detail or {}).get("_store_region") or "").upper()
+        if store_url and is_store_region_locked(price_region, actual_store_region, region_prices):
+            region_label = COUNTRY_LABEL.get(price_region, price_region)
+            store_message = f"{store_url}\n当前游戏锁{region_label}"
 
         card_data = detail or {
             'name': game.title,
@@ -756,15 +762,15 @@ class SteamStatusMonitorV3(
             with open(image_path, "rb") as image_file:
                 image_base64 = base64.b64encode(image_file.read()).decode("ascii")
             result = event.make_result().base64_image(image_base64)
-            if store_url:
-                result.message(store_url)
+            if store_message:
+                result.message(store_message)
             yield result
             return
         except Exception as exc:
             logger.exception("渲染 Steam 价格详情卡片失败: %s", exc)
 
-        if store_url:
-            yield event.plain_result(store_url)
+        if store_message:
+            yield event.plain_result(store_message)
         else:
             yield event.plain_result("未找到对应的 Steam 商店链接。")
 

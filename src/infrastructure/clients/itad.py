@@ -17,6 +17,11 @@ try:
 except ImportError:
     def httpx_client_kwargs(proxy=None):
         return {'proxy': proxy} if proxy else {}
+try:
+    from .steam import steam_store_client_kwargs
+except ImportError:
+    def steam_store_client_kwargs(proxy=None):
+        return httpx_client_kwargs(proxy)
 
 
 @dataclass
@@ -81,7 +86,7 @@ class ITADClient:
     async def _steam_storesearch(self, query: str, language: str = "english", limit: int = 6):
         """只走 storesearch API，避免空结果时被 HTML 页的无关条目顶掉。"""
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(
                     "https://store.steampowered.com/api/storesearch/",
                     params={"term": query, "l": language, "cc": "cn"},
@@ -99,7 +104,7 @@ class ITADClient:
     async def _steam_search_html(self, query: str, language: str = "english", limit: int = 6):
         """商店搜索页兜底；国区成人内容经常被过滤，调用方需再做标题相关度校验。"""
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 page = await client.get(
                     "https://store.steampowered.com/search/results/",
                     params={"term": query, "l": language, "cc": "cn", "count": limit, "json": 1},
@@ -176,7 +181,7 @@ class ITADClient:
 
     async def _steam_english_title(self, appid: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(
                     "https://store.steampowered.com/api/appdetails/",
                     params={"appids": appid, "l": "english", "cc": "cn"},
