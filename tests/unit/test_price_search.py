@@ -59,6 +59,12 @@ class TitleMatchTests(unittest.TestCase):
             )
         )
 
+    def test_chinese_base_game_does_not_match_english_query(self):
+        self.assertFalse(ITADClient._title_matches_query("艾尔登法环", "ELDEN RING"))
+        self.assertTrue(
+            ITADClient._title_matches_query("ELDEN RING Tarnished Pack", "ELDEN RING")
+        )
+
 
 class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
     async def test_keeps_steam_hits_when_itad_is_empty(self):
@@ -122,3 +128,71 @@ class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(["1126320"], [game.appid for game in games])
         self.assertEqual(["itad-s1"], [game.id for game in games])
+
+
+class SteamItemRankingTests(unittest.TestCase):
+    def test_filter_keeps_localized_base_game_ahead_of_dlc(self):
+        client = ITADClient(api_key="test")
+        items = [
+            {"id": "3655690", "name": "ELDEN RING Tarnished Pack", "type": "dlc"},
+            {"id": "1245620", "name": "艾尔登法环", "type": "game"},
+            {"id": "2778580", "name": "ELDEN RING NIGHTREIGN", "type": "game"},
+        ]
+
+        filtered = client._filter_steam_items(items, "ELDEN RING", 6, keep_localized=True)
+
+        self.assertEqual(["1245620", "2778580", "3655690"], [item["id"] for item in filtered])
+
+    def test_exact_english_title_outranks_dlc_even_without_type(self):
+        client = ITADClient(api_key="test")
+        items = [
+            {"id": "3655690", "name": "ELDEN RING Tarnished Pack"},
+            {"id": "1245620", "name": "ELDEN RING"},
+        ]
+
+        filtered = client._filter_steam_items(items, "ELDEN RING", 6)
+
+        self.assertEqual(["1245620", "3655690"], [item["id"] for item in filtered])
+
+
+class SearchGamesRankingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prefers_elden_ring_over_tarnished_pack(self):
+        client = ITADClient(api_key="test")
+        steam_items = [
+            {"id": "3655690", "name": "ELDEN RING Tarnished Pack", "type": "dlc", "tiny_image": "dlc.jpg"},
+            {"id": "1245620", "name": "艾尔登法环", "type": "game", "tiny_image": "base.jpg"},
+        ]
+        english_titles = {
+            "3655690": "ELDEN RING Tarnished Pack",
+            "1245620": "ELDEN RING",
+        }
+        with (
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
+            patch.object(
+                client,
+                "_steam_english_title",
+                AsyncMock(side_effect=lambda appid: english_titles.get(appid, "")),
+            ),
+            patch.object(client, "_get", AsyncMock(return_value=[])),
+        ):
+            games = await client.search_games("ELDEN RING")
+
+        self.assertEqual(["1245620", "3655690"], [game.appid for game in games])
+        self.assertEqual("ELDEN RING", games[0].title)
+
+    async def test_keeps_localized_base_game_when_english_title_is_missing(self):
+        client = ITADClient(api_key="test")
+        steam_items = [
+            {"id": "3655690", "name": "ELDEN RING Tarnished Pack", "type": "dlc"},
+            {"id": "1245620", "name": "艾尔登法环", "type": "app"},
+        ]
+        with (
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
+            patch.object(client, "_steam_english_title", AsyncMock(return_value="")),
+            patch.object(client, "_get", AsyncMock(return_value=[])),
+        ):
+            games = await client.search_games("ELDEN RING")
+
+        self.assertEqual("1245620", games[0].appid)
