@@ -45,9 +45,11 @@ class _RegionClient:
 
     async def get(self, url, params=None):
         params = params or {}
+        if not params.get("appids"):
+            raise RuntimeError("400 Bad Request: missing appids")
         cc = str(params.get("cc") or "").upper()
         lang = str(params.get("l") or "")
-        _RegionClient.calls.append((cc, lang))
+        _RegionClient.calls.append((params.get("appids"), cc, lang))
         if cc in _RegionClient.errors:
             raise _RegionClient.errors[cc]
         keyed = _RegionClient.language_payloads.get((cc, lang))
@@ -101,7 +103,10 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("Subverse", detail["name"])
         self.assertEqual("HK", detail["_store_region"])
-        self.assertEqual([("CN", "schinese"), ("HK", "schinese")], _RegionClient.calls)
+        self.assertEqual(
+            [("1034140", "CN", "schinese"), ("1034140", "HK", "schinese")],
+            _RegionClient.calls,
+        )
         self.assertEqual("1", _RegionClient.cookies["wants_mature_content"])
 
     async def test_region_price_uses_actual_unlocked_region(self):
@@ -134,8 +139,8 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("US", detail["_store_region"])
         self.assertEqual("US", price["region"])
-        self.assertEqual(("US", "schinese"), _RegionClient.calls[0])
-        self.assertNotIn("HK", [cc for cc, _lang in _RegionClient.calls])
+        self.assertEqual(("1034140", "US", "schinese"), _RegionClient.calls[0])
+        self.assertNotIn("HK", [cc for _appid, cc, _lang in _RegionClient.calls])
 
     async def test_cn_timeout_still_tries_hk(self):
         _RegionClient.errors["CN"] = TimeoutError("cn timeout")
@@ -144,7 +149,10 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
             detail = await client.fetch_game_details("1034140", country="CN")
 
         self.assertEqual("HK", detail["_store_region"])
-        self.assertEqual([("CN", "schinese"), ("HK", "schinese")], _RegionClient.calls)
+        self.assertEqual(
+            [("1034140", "CN", "schinese"), ("1034140", "HK", "schinese")],
+            _RegionClient.calls,
+        )
 
     async def test_schinese_failure_falls_back_to_english(self):
         _RegionClient.payloads = {}
@@ -168,8 +176,8 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("Subverse", detail["name"])
         self.assertEqual("CN", detail["_store_region"])
         self.assertEqual("english", detail["_store_language"])
-        self.assertIn(("US", "schinese"), _RegionClient.calls)
-        self.assertIn(("CN", "english"), _RegionClient.calls)
+        self.assertIn(("1034140", "US", "schinese"), _RegionClient.calls)
+        self.assertIn(("1034140", "CN", "english"), _RegionClient.calls)
         self.assertEqual(STEAM_STORE_COOKIES, _RegionClient.cookies)
 
 

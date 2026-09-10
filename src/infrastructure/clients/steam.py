@@ -289,12 +289,14 @@ class SteamClientMixin:
 
     async def _request_appdetails(self, client, gid, language=None, country=None):
         """请求 appdetails；success=false（锁区）返回 None，不抛错。"""
-        params = {}
+        # appids 必须放进 params。httpx 的 params 会整段替换 URL 查询串，
+        # 写在 ?appids= 上会被 cc/l 覆盖，商店接口直接 400。
+        params = {"appids": gid}
         if language:
             params["l"] = language
         if country:
             params["cc"] = str(country).lower()
-        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}"
+        url = f"{self.STEAM_STORE_BASE}/api/appdetails"
         response = await client.get(url, params=params)
         response.raise_for_status()
         payload = response.json()
