@@ -41,7 +41,7 @@ from ..infrastructure.clients.steam import SteamClientMixin
 from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
-from ..shared.utils.price import extract_price_query, summary_to_cny
+from ..shared.utils.price import CURRENCY_REGION, extract_price_query, extract_steam_appid, summary_to_currency
 from ..shared.utils.notify_session import is_sendable_group_session, is_valid_group_id
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
@@ -71,7 +71,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.6.0"
+        self._plugin_version = "4.7.0"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -654,12 +654,20 @@ class SteamStatusMonitorV3(
                 yield event.plain_result("候选序号无效，请重新回复序号。")
                 return
         else:
-            search_query = await self._translate_game_query(query)
-            games = await self.ITAD_CLIENT.search_games(search_query)
-            if not games:
-                yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
-                return
-            game = games[0]
+            url_appid = extract_steam_appid(query)
+            if url_appid:
+                game = await self.ITAD_CLIENT.lookup_steam_appid(url_appid)
+                if game is None:
+                    yield event.plain_result("未能通过该商店链接查到 ITAD 价格，请改用游戏名查询。")
+                    return
+                games = [game]
+            else:
+                search_query = await self._translate_game_query(query)
+                games = await self.ITAD_CLIENT.search_games(search_query)
+                if not games:
+                    yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
+                    return
+                game = games[0]
         if not auto_first and not selected_from_cache and len(games) > 1:
             self._steam_search_cache[session_key] = games
             self._steam_search_pending[session_key] = True
@@ -668,7 +676,10 @@ class SteamStatusMonitorV3(
                 lines.append(f"{index}. {game.title}")
             yield event.plain_result("\n".join(lines))
             return
-        price_region = (self.config.get("price_region", "CN") or "CN").strip().upper() or "CN"
+        price_currency = (self.config.get("price_currency", "CNY") or "CNY").strip().upper() or "CNY"
+        price_region = (self.config.get("price_region", "") or "").strip().upper()
+        if not price_region:
+            price_region = CURRENCY_REGION.get(price_currency, "CN")
         compare_region_raw = (self.config.get("price_compare_regions", "UA") or "NONE").strip()
         # 兼容旧配置：price_compare_regions 此前为逗号分隔（如 "CN,US"），此处取第一个作为单选对比区
         compare_region = compare_region_raw.split(",")[0].strip().upper()
@@ -676,7 +687,7 @@ class SteamStatusMonitorV3(
         if compare_region and compare_region != "NONE" and compare_region != price_region:
             region_codes.append(compare_region)
         # 主区史低/兜底仍由 ITAD 提供；地区对比行改用 Steam 商店各国家区价（cc=<国家>），
-        # 再统一折算为 CNY 显示与比较（与参考插件一致，UA 区即 Steam 商店价）
+        # 再统一折算为主货币显示与比较（与参考插件一致，UA 区即 Steam 商店价）
         summary = await self.ITAD_CLIENT.get_price_summary(game.id, price_region)
         region_prices = {}
         if game.appid:
@@ -684,11 +695,11 @@ class SteamStatusMonitorV3(
                 *[self.fetch_region_price(game.appid, region) for region in region_codes]
             )
             region_prices = {
-                code: summary_to_cny(region_summary)
+                code: summary_to_currency(region_summary, price_currency)
                 for code, region_summary in zip(region_codes, region_summaries)
                 if region_summary
             }
-        detail = await self.fetch_game_details(game.appid) if game.appid else None
+        detail = await self.fetch_game_details(game.appid, country=price_region.lower()) if game.appid else None
         if detail and game.appid:
             reviews = await self.fetch_game_reviews_both(game.appid)
             if reviews:

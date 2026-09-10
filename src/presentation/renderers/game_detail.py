@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from ...shared.fonts import load_truetype
 from ...shared.network import httpx_client_kwargs
-from ...shared.utils.price import to_cny
+from ...shared.utils.price import convert
 
 
 CARD_WIDTH = 820
@@ -165,16 +165,16 @@ async def render_game_detail_image(
     currency = itad_summary.get("currency") or price.get("currency") or ""
     if game.get("is_free"):
         current_text, discount_text, regular_text = "免费", "", ""
+    elif itad_summary.get("current_price") is not None:
+        current_text = _value_text(itad_summary.get("current_price"), currency)
+        discount = itad_summary.get("cut") or 0
+        discount_text = f"-{int(discount)}%" if discount else ""
+        regular_text = _value_text(itad_summary.get("current_regular"), currency) if discount and itad_summary.get("current_regular") is not None else ""
     elif price:
         current_text = price.get("final_formatted") or _value_text(price.get("final", 0) / 100, currency)
         discount = price.get("discount_percent") or 0
         discount_text = f"-{discount}%" if discount else ""
         regular_text = price.get("initial_formatted") if discount else ""
-    elif itad_summary.get("current_price") is not None:
-        current_text = _value_text(itad_summary.get("current_price"), currency)
-        discount = itad_summary.get("cut") or 0
-        discount_text = f"-{int(discount)}%" if discount else ""
-        regular_text = _value_text(itad_summary.get("current_regular"), currency) if itad_summary.get("current_regular") is not None else ""
     else:
         current_text, discount_text, regular_text = "暂无价格", "", ""
 
@@ -229,7 +229,7 @@ async def render_game_detail_image(
             "cut": region_summary.get("cut"),
         })
     region_height = max(86, 26 + len(region_rows) * 36 + 16)
-    section_heights = (150, 150, region_height)
+    section_heights = (150, 168, region_height)  # 第二个区段底部多留一个空行（“其它”行下方）
 
     right_content_bottom = cover_top + cover_height + 20 + len(description_lines) * 24 + 8 + tag_height + 40 + 46
     left_content_bottom = PADDING + sum(section_heights) + 2 * section_gap
@@ -320,9 +320,9 @@ async def render_game_detail_image(
     if cdk_shop and cdk_amount is not None:
         cdk_currency = itad_summary.get("cdk_currency")
         cdk_cut = itad_summary.get("cdk_cut")
-        cny = to_cny(cdk_amount, cdk_currency) if cdk_currency and cdk_currency != "CNY" else cdk_amount
+        target_price = convert(cdk_amount, cdk_currency, currency) if cdk_currency and cdk_currency != currency else cdk_amount
         cdk_y = section_top[1] + 124
-        price_part = _value_text(cny, "CNY")
+        price_part = _value_text(target_price, currency)
         draw.text((left_x + 12, cdk_y), "其它", font=small_font, fill=STEAM_MUTED)
         _price_x = left_x + 56
         draw.text((_price_x, cdk_y), price_part, font=small_font, fill=STEAM_TEXT)

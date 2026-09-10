@@ -21,15 +21,22 @@
     "hint": "通常留空使用官方 API 地址",
     "default": ""
   },
+  "price_currency": {
+    "description": "价格主货币",
+    "type": "string",
+    "hint": "价格查询卡片展示的主货币；未填写价格对比区1时自动选择对应 Steam 区（如 JPY→日区、USD→美区）",
+    "options": ["CNY", "JPY", "USD", "EUR", "GBP", "KRW", "RUB", "UAH", "TRY", "PLN", "BRL", "INR", "HKD"],
+    "default": "CNY"
+  },
   "price_region": {
-    "description": "价格查询地区代码",
+    "description": "价格对比区1",
     "type": "string",
     "hint": "选择用于查询价格的 Steam 区",
     "options": ["CN", "US", "JP", "KR", "RU", "UA", "TR", "HK"],
     "default": "CN"
   },
   "price_compare_regions": {
-    "description": "价格对比地区",
+    "description": "价格对比区2",
     "type": "string",
     "hint": "选择用于价格对比的 Steam 区，选 NONE 则不进行对比",
     "options": ["NONE", "UA", "US", "JP", "KR", "RU", "CN", "TR", "HK"],

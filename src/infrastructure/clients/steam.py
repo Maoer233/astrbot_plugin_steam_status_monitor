@@ -261,12 +261,12 @@ class SteamClientMixin:
         )
         return {"all": all_review, "schinese": zh_review}
 
-    async def fetch_game_details(self, appid, language="schinese"):
-        """获取 Steam 商店游戏详情。"""
+    async def fetch_game_details(self, appid, language="schinese", country="cn"):
+        """获取 Steam 商店游戏详情（country 决定价格币种，如 jp=日元）。"""
         gid = str(appid).strip()
         if not gid.isdigit():
             return None
-        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}&l={language}&cc=cn"
+        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}&l={language}&cc={country}"
         try:
             async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                 response = await client.get(url)

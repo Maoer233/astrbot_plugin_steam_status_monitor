@@ -1,7 +1,7 @@
 """IsThereAnyDeal 客户端：游戏搜索、当前价格与历史最低价。"""
 from dataclasses import dataclass
 from html import unescape
-from typing import Any
+from typing import Any, Optional
 import re
 import unicodedata
 
@@ -321,6 +321,17 @@ class ITADClient:
                 break
         return result
 
+    async def lookup_steam_appid(self, appid: str) -> Optional[ITADGame]:
+        """按 Steam appid 直接查 ITAD 游戏（用于商店链接查询）。"""
+        payload = await self._get("/games/lookup/v1", {"appid": str(appid)})
+        game = (payload or {}).get("game") if isinstance(payload, dict) else None
+        if isinstance(game, dict) and game.get("id"):
+            itad = ITADGame(str(game.get("id")), str(game.get("title") or ""))
+            itad.appid = str(appid)
+            itad.image = ""
+            return itad
+        return None
+
     async def get_prices(self, game_id: str, country: str = "CN") -> dict[str, Any]:
         payload = await self._post("/games/prices/v3", [game_id], {"country": country})
         if isinstance(payload, list):
@@ -349,6 +360,7 @@ class ITADClient:
         cdk_amount = None
         cdk_currency = None
         cdk_cut = None
+        fallback_deal = None
         for deal in current.get("deals", []) if isinstance(current, dict) else []:
             if not isinstance(deal, dict):
                 continue
@@ -357,19 +369,27 @@ class ITADClient:
             amount = price.get("amount")
             if amount is None:
                 continue
-            if current_price is None:
+            shop_name = str(((deal.get("shop") or {}).get("name") or "")).lower()
+            if fallback_deal is None:
+                fallback_deal = (
+                    float(amount),
+                    float(regular.get("amount") or amount),
+                    price.get("currency"),
+                    deal.get("cut"),
+                )
+            if shop_name == "steam":
+                # 当前价/折扣只取 Steam 店铺当前在售价，避免把第三方折扣当成 Steam 折扣
                 current_price = float(amount)
                 current_regular = float(regular.get("amount") or current_price)
                 currency = price.get("currency")
                 cut = deal.get("cut")
-            shop_name = str(((deal.get("shop") or {}).get("name") or "")).lower()
-            if shop_name == "steam":
-                continue
-            if cdk_amount is None or float(amount) < cdk_amount:
+            elif cdk_amount is None or float(amount) < cdk_amount:
                 cdk_amount = float(amount)
                 cdk_shop = (deal.get("shop") or {}).get("name")
                 cdk_currency = price.get("currency")
                 cdk_cut = deal.get("cut")
+        if current_price is None and fallback_deal is not None:
+            current_price, current_regular, currency, cut = fallback_deal
         history_low = None
         low_obj = current.get("historyLow") if isinstance(current, dict) else None
         if isinstance(low_obj, dict):
