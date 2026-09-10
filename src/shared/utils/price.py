@@ -17,6 +17,7 @@ RATES = {
     "BRL": 1.3186,  # 巴西雷亚尔
     "INR": 0.0708,  # 印度卢比
     "HKD": 0.8576,  # 港元
+    "TWD": 0.2142,  # 新台币（按 USD 交叉估算）
 }
 
 # 主货币 → ITAD/Steam 查询区映射（主货币决定查询哪个国家/地区的商店价）
@@ -34,7 +35,21 @@ CURRENCY_REGION = {
     "BRL": "BR",
     "INR": "IN",
     "HKD": "HK",
+    "TWD": "TW",
 }
+
+# 国区锁区时的商店回退顺序：港、台、日、美。
+STORE_REGION_FALLBACKS = ("HK", "TW", "JP", "US")
+
+
+def store_region_candidates(preferred="CN"):
+    """主区优先，其后追加未锁区回退，去重且保持顺序。"""
+    preferred = str(preferred or "CN").strip().upper() or "CN"
+    ordered = []
+    for code in (preferred, *STORE_REGION_FALLBACKS):
+        if code and code not in ordered:
+            ordered.append(code)
+    return ordered
 
 
 def extract_price_query(raw_msg: str, prefix: str) -> str:

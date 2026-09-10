@@ -41,7 +41,13 @@ from ..infrastructure.clients.steam import SteamClientMixin
 from ..infrastructure.clients.itad import ITADClient
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH, CONFIG_PATH
-from ..shared.utils.price import CURRENCY_REGION, extract_price_query, extract_steam_appid, summary_to_currency
+from ..shared.utils.price import (
+    CURRENCY_REGION,
+    extract_price_query,
+    extract_steam_appid,
+    store_region_candidates,
+    summary_to_currency,
+)
 from ..shared.utils.notify_session import is_sendable_group_session, is_valid_group_id
 
 # 状态文件最后写入距今超过该秒数（默认 60 分钟），视为插件停止期间遗留的陈旧状态。
@@ -543,7 +549,11 @@ class SteamStatusMonitorV3(
         if not appid.isdigit():
             yield event.plain_result("用法：/steam game <Steam AppID>")
             return
-        game = await self.fetch_game_details(appid)
+        price_currency = (self.config.get("price_currency", "CNY") or "CNY").strip().upper() or "CNY"
+        price_region = (self.config.get("price_region", "") or "").strip().upper()
+        if not price_region:
+            price_region = CURRENCY_REGION.get(price_currency, "CN")
+        game = await self.fetch_game_details(appid, country=price_region)
         if not game:
             yield event.plain_result(f"未找到 Steam 游戏 AppID：{appid}，或 Steam 商店暂时无法访问。")
             return
@@ -688,23 +698,34 @@ class SteamStatusMonitorV3(
             region_codes.append(compare_region)
         # 主区史低/兜底仍由 ITAD 提供；地区对比行改用 Steam 商店各国家区价（cc=<国家>），
         # 再统一折算为主货币显示与比较（与参考插件一致，UA 区即 Steam 商店价）
-        summary = await self.ITAD_CLIENT.get_price_summary(game.id, price_region)
+        summary = await self.ITAD_CLIENT.get_price_summary(game.id, price_region) or {}
+        if summary.get("current_price") is None:
+            for fallback_region in store_region_candidates(price_region)[1:]:
+                fallback_summary = await self.ITAD_CLIENT.get_price_summary(game.id, fallback_region) or {}
+                if fallback_summary.get("current_price") is not None:
+                    logger.info(
+                        "ITAD %s 区无价格，改用 %s 区 (game=%s)",
+                        price_region,
+                        fallback_region,
+                        game.id,
+                    )
+                    summary = fallback_summary
+                    break
         region_prices = {}
         if game.appid:
             region_summaries = await asyncio.gather(
                 *[self.fetch_region_price(game.appid, region) for region in region_codes]
             )
-            region_prices = {
-                code: summary_to_currency(region_summary, price_currency)
-                for code, region_summary in zip(region_codes, region_summaries)
-                if region_summary
-            }
-        detail = await self.fetch_game_details(game.appid, country=price_region.lower()) if game.appid else None
-        if detail and game.appid:
-            reviews = await self.fetch_game_reviews_both(game.appid)
-            if reviews:
-                detail['review_all'] = reviews.get('all') or {}
-                detail['review_schinese'] = reviews.get('schinese') or {}
+            for code, region_summary in zip(region_codes, region_summaries):
+                if not region_summary:
+                    continue
+                actual = str(region_summary.get("region") or code).upper()
+                region_prices[actual] = summary_to_currency(region_summary, price_currency)
+        detail = await self.fetch_game_details(game.appid, country=price_region) if game.appid else None
+        reviews = await self.fetch_game_reviews_both(game.appid) if game.appid else None
+        if detail and reviews:
+            detail['review_all'] = reviews.get('all') or {}
+            detail['review_schinese'] = reviews.get('schinese') or {}
         self._steam_search_pending.pop(session_key, None)
         self._steam_search_cache.pop(session_key, None)
         store_appid = (detail or {}).get('store_appid') or game.appid
@@ -718,8 +739,8 @@ class SteamStatusMonitorV3(
             'developers': [],
             'release_date': {'date': '未知'},
             'price_overview': {},
-            'review_all': {},
-            'review_schinese': {},
+            'review_all': (reviews or {}).get('all') or {},
+            'review_schinese': (reviews or {}).get('schinese') or {},
         }
         try:
             img_bytes = await render_game_detail_image(
