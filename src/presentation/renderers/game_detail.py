@@ -341,14 +341,14 @@ async def render_game_detail_image(
         price_text = _value_text(row["price"], row["currency"])
         draw.text((x, row_y), price_text, font=small_font, fill=STEAM_WHITE)
         x += draw.textbbox((0, 0), price_text, font=small_font)[2] + 10
-        if row["regular"]:
+        if row["cut"]:
+            x += _discount_tag(draw, x, row_y - 4, f"-{int(row['cut'])}%", tag_font, small=True)
+            x += 8
+        if row["cut"] and row["regular"]:
             regular_text = _value_text(row["regular"], row["currency"])
             draw.text((x, row_y + 1), regular_text, font=small_font, fill=STEAM_STRIKE)
             regular_width = draw.textbbox((0, 0), regular_text, font=small_font)[2]
             draw.line((x, row_y + 11, x + regular_width, row_y + 11), fill=STEAM_STRIKE)
-            x += regular_width + 12
-        if row["cut"]:
-            x += _discount_tag(draw, x, row_y - 4, f"-{int(row['cut'])}%", tag_font, small=True)
 
     # 地区差价提示：找出最贵/最便宜地区（已统一 CNY），显示“XX 更贵，多花 X.XX 元呢！(+X.XX%)”
     if len(region_rows) >= 2:
