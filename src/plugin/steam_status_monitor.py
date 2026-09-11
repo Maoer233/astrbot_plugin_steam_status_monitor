@@ -78,7 +78,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.7.2"
+        self._plugin_version = "4.7.3"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -188,6 +188,11 @@ class SteamStatusMonitorV3(
         self._load_notify_session()
         # 成就监控
         self.achievement_monitor = AchievementMonitor(self.data_dir, steam_api_base=self.STEAM_API_BASE, proxy=self.proxy)
+        # 首次启动：校验历史成就黑名单，自动移出被误拉黑（本身有成就）的游戏；仅执行一次
+        if not self.achievement_monitor.is_blacklist_verified():
+            self._achievement_blacklist_verify_task = asyncio.create_task(
+                self.achievement_monitor.verify_blacklist_once()
+            )
         self.max_achievement_notifications = self.config.get('max_achievement_notifications', 5)
         self.achievement_poll_tasks = {}  # {(group_id, sid, gameid): asyncio.Task}
         self.achievement_snapshots = {}   # {(group_id, sid, gameid): [成就列表]}

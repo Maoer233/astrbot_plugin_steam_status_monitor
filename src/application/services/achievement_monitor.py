@@ -47,6 +47,62 @@ class AchievementMonitor:
         except Exception:
             pass
 
+    def _blacklist_verified_flag_path(self):
+        return os.path.join(self.data_dir, "achievement_blacklist_verified.flag")
+
+    def is_blacklist_verified(self) -> bool:
+        return os.path.exists(self._blacklist_verified_flag_path())
+
+    def _mark_blacklist_verified(self):
+        try:
+            with open(self._blacklist_verified_flag_path(), "w", encoding="utf-8") as f:
+                f.write("1")
+        except Exception:
+            pass
+
+    async def verify_blacklist_once(self):
+        """首次启动校验历史黑名单：用全局成就接口判断黑名单里的游戏是否本身有成就，
+        有成就则视为历史误拉黑（旧逻辑把“描述为空/网络失败”当无成就）并移出。
+        仅在未校验过时执行一次（标记文件），避免每次重启重复请求。"""
+        if self.is_blacklist_verified():
+            return
+        try:
+            await self._verify_blacklist_entries()
+        except Exception as e:
+            logger.warning(f"[成就黑名单校验] 校验异常: {e}")
+        finally:
+            self._mark_blacklist_verified()
+
+    async def _verify_blacklist_entries(self):
+        if not self.achievement_blacklist:
+            return
+        url = f"{self.steam_api_base}/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2/"
+        removed = []
+        remaining = set()
+        for appid in list(self.achievement_blacklist):
+            keep = True  # 默认保留；只有确认“本身有成就”才移出
+            try:
+                async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+                    resp = await client.get(url, params={"gameid": appid})
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        achievements = (data.get("achievementpercentages") or {}).get("achievements") or []
+                        if achievements:
+                            keep = False  # 游戏本身有成就 → 历史误拉黑
+            except Exception:
+                keep = True  # 网络失败：保留，避免误删真正无成就的
+            if keep:
+                remaining.add(appid)
+            else:
+                removed.append(appid)
+            await asyncio.sleep(0.3)
+        if removed:
+            self.achievement_blacklist = remaining
+            self._save_blacklist()
+            logger.info(f"[成就黑名单校验] 移出 {len(removed)} 个历史误拉黑游戏（本身有成就）: {removed}")
+        else:
+            logger.info("[成就黑名单校验] 未发现历史误拉黑条目")
+
     def _load_achievements_cache(self):
         """加载成就缓存"""
         try:
@@ -67,15 +123,20 @@ class AchievementMonitor:
     
     async def get_player_achievements(self, api_key: str, group_id: str, steamid: str, appid: int) -> Optional[Set[str]]:
         """
-        获取指定玩家在指定游戏中的已解锁成就 apiname 集合，失败自动尝试多语言（中文、英文），每种语言最多重试3次
+        获取指定玩家在指定游戏中的已解锁成就 apiname 集合。
+        - 返回 set（可能为空集）= 查询成功（HTTP 200 + success=true，即使 0 解锁/无描述）；
+        - 返回 None = 本次未取到（隐私 401 / 网络失败等），不拉黑，按正常轮询重试。
+        仅当 HTTP 400 且返回 no stats（游戏本身无成就统计）时才加入黑名单并跳过后续轮询。
         """
         # 黑名单机制
         if hasattr(self, 'achievement_blacklist') and str(appid) in self.achievement_blacklist:
             return None
         url = f"{self.steam_api_base}/ISteamUserStats/GetPlayerAchievements/v1/"
         lang_list = ["schinese", "english", "en"]
-        all_failed = True
+        saw_no_stats = False
         for lang in lang_list:
+            if saw_no_stats:
+                break
             params = {
                 "key": api_key,
                 "steamid": steamid,
@@ -86,30 +147,45 @@ class AchievementMonitor:
                 try:
                     async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
                         response = await client.get(url, params=params)
-                        if response.status_code == 200:
+                        status = response.status_code
+                        if status == 200:
                             data = response.json()
-                            if "playerstats" in data and "achievements" in data["playerstats"]:
-                                achievements = data["playerstats"]["achievements"]
-                                unlocked = {
-                                    ach["apiname"] for ach in achievements 
+                            stats = data.get("playerstats") or {}
+                            if stats.get("success"):
+                                # 成功：只要 success=true 即视为拿到数据（描述为空、0 解锁都属正常）
+                                achievements = stats.get("achievements") or []
+                                return {
+                                    ach["apiname"] for ach in achievements
                                     if ach.get("achieved", 0) == 1
                                 }
-                                # 检查是否有描述字段且不全为空
-                                has_desc = any(ach.get("description") for ach in achievements)
-                                if has_desc:
-                                    all_failed = False
-                                    return unlocked
-                                # 否则继续尝试下一个语言
-                        elif response.status_code == 401:
-                            print(f"无权限获取玩家 {steamid} 的游戏 {appid} 成就数据 (隐私设置)")
+                            # success=false：检查是否为“无成就统计”
+                            err = str(stats.get("error") or "").lower()
+                            if "no stats" in err:
+                                saw_no_stats = True
+                                break
+                            # 其它（如隐私：Profile is not public）→ 换语言/重试
+                            logger.info(f"[成就获取] appid={appid} lang={lang} success=false error={stats.get('error')}")
+                        elif status == 401:
+                            logger.info(f"[成就获取] 玩家 {steamid} 游戏 {appid} 成就隐私，跳过")
                             return None
+                        elif status == 400:
+                            # 400 通常表示该游戏没有成就统计（no stats）
+                            try:
+                                err = str((response.json().get("playerstats") or {}).get("error") or "").lower()
+                            except Exception:
+                                err = ""
+                            if "no stats" in err:
+                                saw_no_stats = True
+                                break
+                            logger.warning(f"[成就获取] appid={appid} HTTP 400 非 no stats（{err or '未知'}）")
                         else:
-                            print(f"获取成就数据失败: HTTP {response.status_code} (第{attempt+1}次, lang={lang})")
+                            # 5xx / 429 等网络类错误：不拉黑，按正常轮询重试
+                            logger.warning(f"[成就获取] appid={appid} HTTP {status} (第{attempt+1}次, lang={lang})")
                 except Exception as e:
-                    print(f"请求异常: {e} (第{attempt+1}次, lang={lang})")
-        # 如果全部失败，加入黑名单
-        if all_failed:
-            print(f"游戏 {appid} 已加入成就黑名单（无成就或API异常）")
+                    logger.warning(f"[成就获取] appid={appid} 请求异常: {e} (第{attempt+1}次, lang={lang})")
+        if saw_no_stats:
+            print(f"游戏 {appid} 已加入成就黑名单（无成就统计）")
+            logger.info(f"[成就黑名单] 游戏 {appid} 无成就统计，已加入黑名单并跳过轮询")
             self.achievement_blacklist.add(str(appid))
             self._save_blacklist()
         return None
