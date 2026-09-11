@@ -17,6 +17,11 @@ try:
 except ImportError:
     def httpx_client_kwargs(proxy=None):
         return {'proxy': proxy} if proxy else {}
+try:
+    from .steam import steam_store_client_kwargs
+except ImportError:
+    def steam_store_client_kwargs(proxy=None):
+        return httpx_client_kwargs(proxy)
 
 
 @dataclass
@@ -81,7 +86,7 @@ class ITADClient:
     async def _steam_storesearch(self, query: str, language: str = "english", limit: int = 6):
         """只走 storesearch API，避免空结果时被 HTML 页的无关条目顶掉。"""
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(
                     "https://store.steampowered.com/api/storesearch/",
                     params={"term": query, "l": language, "cc": "cn"},
@@ -99,7 +104,7 @@ class ITADClient:
     async def _steam_search_html(self, query: str, language: str = "english", limit: int = 6):
         """商店搜索页兜底；国区成人内容经常被过滤，调用方需再做标题相关度校验。"""
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 page = await client.get(
                     "https://store.steampowered.com/search/results/",
                     params={"term": query, "l": language, "cc": "cn", "count": limit, "json": 1},
@@ -176,7 +181,7 @@ class ITADClient:
 
     async def _steam_english_title(self, appid: str) -> str:
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(
                     "https://store.steampowered.com/api/appdetails/",
                     params={"appids": appid, "l": "english", "cc": "cn"},
@@ -215,6 +220,10 @@ class ITADClient:
         except Exception:
             return str(s or "").casefold().strip()
 
+    @staticmethod
+    def _contains_cjk(text: str) -> bool:
+        return any("\u4e00" <= char <= "\u9fff" for char in str(text or ""))
+
     @classmethod
     def _title_matches_query(cls, title: str, query: str) -> bool:
         """标题需覆盖查询词中足够多的有效 token，避免 Steamy 糊到 steam。"""
@@ -231,35 +240,90 @@ class ITADClient:
             return matched == 1
         return matched >= max(2, (len(tokens) + 1) // 2)
 
-    def _filter_steam_items(self, items, query: str, limit: int) -> list[dict]:
+    @classmethod
+    def _keep_localized_steam_item(cls, item: dict, title: str, query: str) -> bool:
+        """中文商店名对不上英文查询词时，仍保留非 DLC 条目，留给英文标题再过滤。"""
+        item_type = str(item.get("type") or "").lower()
+        if item_type in {"dlc", "bundle", "music", "video"}:
+            return False
+        return cls._contains_cjk(title) and not cls._contains_cjk(query)
+
+    @classmethod
+    def _steam_type_rank(cls, item_type: str) -> int:
+        return {
+            "game": 0,
+            "app": 0,
+            "software": 1,
+            "dlc": 2,
+            "bundle": 3,
+            "music": 4,
+            "video": 5,
+        }.get(str(item_type or "").lower(), 1)
+
+    @classmethod
+    def _steam_item_sort_key(cls, item: dict, query: str, index: int):
+        title = str(item.get("name") or "").casefold().strip()
+        query_folded = str(query or "").casefold().strip()
+        type_rank = cls._steam_type_rank(item.get("type"))
+        exact = 0 if title == query_folded else 1
+        return (exact, type_rank, index)
+
+    @classmethod
+    def _game_sort_key(cls, game: ITADGame, query: str, index: int):
+        title = str(game.title or "").casefold().strip()
+        query_folded = str(query or "").casefold().strip()
+        exact = 0 if title == query_folded else 1
+        extra = 0 if exact == 0 else max(
+            0, len(cls._query_tokens(title)) - len(cls._query_tokens(query))
+        )
+        return (exact, extra, len(title), index)
+
+    def _filter_steam_items(
+        self, items, query: str, limit: int, keep_localized: bool = False
+    ) -> list[dict]:
         result = []
         seen: set[str] = set()
-        for item in items or []:
+        for index, item in enumerate(items or []):
             if not isinstance(item, dict):
                 continue
             appid = str(item.get("id") or "")
             title = str(item.get("name") or "").strip()
             if not appid or appid in seen or not title:
                 continue
-            if not self._title_matches_query(title, query):
+            if not (
+                self._title_matches_query(title, query)
+                or (keep_localized and self._keep_localized_steam_item(item, title, query))
+            ):
                 continue
             seen.add(appid)
-            result.append(item)
-            if len(result) >= limit:
-                break
-        return result
+            result.append((index, item))
+        result.sort(key=lambda pair: self._steam_item_sort_key(pair[1], query, pair[0]))
+        return [item for _, item in result[:limit]]
 
     async def _lookup_steam_items(self, query: str, limit: int) -> list[dict]:
         """优先 storesearch；HTML 页只在过滤后仍有相关标题时才采用。"""
+        fetch_limit = max(limit * 2, 10)
+        merged: list[dict] = []
+        seen: set[str] = set()
+        for language in ("schinese", "english"):
+            for item in self._filter_steam_items(
+                await self._steam_storesearch(query, language, fetch_limit),
+                query,
+                fetch_limit,
+                keep_localized=True,
+            ):
+                appid = str(item.get("id") or "")
+                if not appid or appid in seen:
+                    continue
+                seen.add(appid)
+                merged.append(item)
+        if merged:
+            ranked = list(enumerate(merged))
+            ranked.sort(key=lambda pair: self._steam_item_sort_key(pair[1], query, pair[0]))
+            return [item for _, item in ranked[:limit]]
         for language in ("schinese", "english"):
             items = self._filter_steam_items(
-                await self._steam_storesearch(query, language, limit), query, limit
-            )
-            if items:
-                return items
-        for language in ("schinese", "english"):
-            items = self._filter_steam_items(
-                await self._steam_search_html(query, language, limit), query, limit
+                await self._steam_search_html(query, language, fetch_limit), query, limit
             )
             if items:
                 return items
@@ -267,7 +331,7 @@ class ITADClient:
 
     async def search_games(self, query: str, limit: int = 6) -> list[ITADGame]:
         """先通过 Steam 商店解析本地化名称，再用英文标题查询 ITAD。"""
-        steam_items = await self._lookup_steam_items(query, limit)
+        steam_items = await self._lookup_steam_items(query, max(limit * 2, 10))
 
         # Steam 中文索引可能暂时没有结果；保留 ITAD 直搜作为兜底，避免中文查询完全失败。
         if not steam_items:
@@ -282,7 +346,9 @@ class ITADClient:
                 if candidates:
                     game.appid = str(candidates[0].get("id") or "")
                     game.image = game.image or candidates[0].get("tiny_image", "")
-            return matched[:limit]
+            ranked = list(enumerate(matched))
+            ranked.sort(key=lambda pair: self._game_sort_key(pair[1], query, pair[0]))
+            return [game for _, game in ranked[:limit]]
 
         result: list[ITADGame] = []
         seen_keys: set[str] = set()
@@ -293,9 +359,13 @@ class ITADClient:
             search_title = english_title or local_title
             if not search_title:
                 continue
-            if english_title and not (
-                self._title_matches_query(english_title, query)
+            if not (
+                self._title_matches_query(english_title or search_title, query)
                 or self._title_matches_query(local_title, query)
+                or (
+                    not english_title
+                    and self._keep_localized_steam_item(item, local_title, query)
+                )
             ):
                 continue
             itad_games = await self._parse_search_payload(
@@ -317,9 +387,9 @@ class ITADClient:
             game.image = game.image or item.get("tiny_image", "")
             seen_keys.add(dedupe_key)
             result.append(game)
-            if len(result) >= limit:
-                break
-        return result
+        ranked = list(enumerate(result))
+        ranked.sort(key=lambda pair: self._game_sort_key(pair[1], query, pair[0]))
+        return [game for _, game in ranked[:limit]]
 
     async def lookup_steam_appid(self, appid: str) -> Optional[ITADGame]:
         """按 Steam appid 直接查 ITAD 游戏（用于商店链接查询）。"""

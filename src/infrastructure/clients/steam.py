@@ -6,6 +6,32 @@ import httpx
 
 from ...shared.logging import format_exception, logger
 from ...shared.network import httpx_client_kwargs
+from ...shared.utils.price import store_region_candidates
+
+# 成人内容/年龄墙：无 Cookie 时 appdetails 与 appreviews 常返回 success=false。
+STEAM_STORE_COOKIES = {
+    "birthtime": "0",
+    "lastagecheckage": "1-0-1970",
+    "mature_content": "1",
+    "wants_mature_content": "1",
+}
+STEAM_STORE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+}
+
+
+def steam_store_client_kwargs(proxy=None):
+    """商店接口共用代理、年龄墙 Cookie 与浏览器头。"""
+    return {
+        "cookies": STEAM_STORE_COOKIES,
+        "headers": STEAM_STORE_HEADERS,
+        **httpx_client_kwargs(proxy),
+    }
 
 
 class SteamClientError(RuntimeError):
@@ -222,7 +248,7 @@ class SteamClientMixin:
         language = language or "all"
         params["language"] = language
         try:
-            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
+            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(url, params=params)
                 response.raise_for_status()
                 payload = response.json()
@@ -261,45 +287,116 @@ class SteamClientMixin:
         )
         return {"all": all_review, "schinese": zh_review}
 
-    async def fetch_game_details(self, appid, language="schinese", country="cn"):
-        """获取 Steam 商店游戏详情（country 决定价格币种，如 jp=日元）。"""
+    async def _request_appdetails(self, client, gid, language=None, country=None):
+        """请求 appdetails；success=false（锁区）返回 None，不抛错。"""
+        # appids 必须放进 params。httpx 的 params 会整段替换 URL 查询串，
+        # 写在 ?appids= 上会被 cc/l 覆盖，商店接口直接 400。
+        params = {"appids": gid}
+        if language:
+            params["l"] = language
+        if country:
+            params["cc"] = str(country).lower()
+        url = f"{self.STEAM_STORE_BASE}/api/appdetails"
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        item = payload.get(gid, {}) if isinstance(payload, dict) else {}
+        if not item.get("success"):
+            return None
+        data = item.get("data")
+        return data if isinstance(data, dict) else None
+
+    async def fetch_game_details(self, appid, language="schinese", country="CN"):
+        """获取 Steam 商店游戏详情。主区锁区时按港/台/日/美回退；简体失败再试英文。"""
         gid = str(appid).strip()
         if not gid.isdigit():
             return None
-        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}&l={language}&cc={country}"
+        preferred = str(country or "CN").strip().upper() or "CN"
+        languages = []
+        if language:
+            languages.append(language)
+        if language not in ("english", "en"):
+            languages.append("english")
+        last_error = None
         try:
-            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                payload = response.json().get(gid, {})
-                return payload.get("data") if payload.get("success") else None
+            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
+                for lang in languages:
+                    for cc in store_region_candidates(preferred):
+                        try:
+                            data = await self._request_appdetails(
+                                client, gid, language=lang, country=cc
+                            )
+                        except Exception as exc:
+                            last_error = exc
+                            logger.warning(
+                                "获取 Steam %s 区详情失败: %s (appid=%s, lang=%s)",
+                                cc,
+                                exc,
+                                gid,
+                                lang,
+                            )
+                            continue
+                        if not data:
+                            continue
+                        data["_store_region"] = cc
+                        data["_store_language"] = lang
+                        if cc != preferred:
+                            logger.info(
+                                "Steam %s 区锁区或无详情，改用 %s 区 (appid=%s)",
+                                preferred,
+                                cc,
+                                gid,
+                            )
+                        return data
+            if last_error:
+                logger.warning(f"获取 Steam 游戏详情失败: {last_error} (appid={gid})")
+            else:
+                logger.info("Steam 各区均无商店详情 (appid=%s, preferred=%s)", gid, preferred)
+            return None
         except Exception as exc:
             logger.warning(f"获取 Steam 游戏详情失败: {exc} (appid={gid})")
             return None
 
     async def fetch_region_price(self, appid, country="CN"):
-        """获取指定国家区 Steam 商店价格（含币种、折后价/原价/折扣）。返回 dict 或 None。"""
+        """获取指定国家区 Steam 商店价格（含币种、折后价/原价/折扣）。
+        主区锁区或无价时回退未锁区，返回 dict 的 region 为实际命中区。"""
         gid = str(appid).strip()
         if not gid.isdigit():
             return None
-        url = f"{self.STEAM_STORE_BASE}/api/appdetails?appids={gid}&cc={str(country).lower()}"
+        preferred = str(country or "CN").strip().upper() or "CN"
         try:
-            async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(self.proxy)) as client:
-                response = await client.get(url)
-                response.raise_for_status()
-                payload = response.json().get(gid, {})
-                data = payload.get("data") if payload.get("success") else None
-                if not data:
-                    return None
-                price_overview = data.get("price_overview") or {}
-                if not price_overview:
-                    return None
-                return {
-                    "currency": price_overview.get("currency"),
-                    "current_price": price_overview.get("final", 0) / 100,
-                    "current_regular": price_overview.get("initial", 0) / 100,
-                    "cut": price_overview.get("discount_percent", 0),
-                }
+            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
+                for cc in store_region_candidates(preferred):
+                    try:
+                        data = await self._request_appdetails(client, gid, country=cc)
+                    except Exception as exc:
+                        logger.warning(
+                            "获取 Steam %s 区价格失败: %s (appid=%s)",
+                            cc,
+                            exc,
+                            gid,
+                        )
+                        continue
+                    if not data:
+                        continue
+                    price_overview = data.get("price_overview") or {}
+                    if not price_overview:
+                        continue
+                    if cc != preferred:
+                        logger.info(
+                            "Steam %s 区无价格，改用 %s 区 (appid=%s)",
+                            preferred,
+                            cc,
+                            gid,
+                        )
+                    return {
+                        "currency": price_overview.get("currency"),
+                        "current_price": price_overview.get("final", 0) / 100,
+                        "current_regular": price_overview.get("initial", 0) / 100,
+                        "cut": price_overview.get("discount_percent", 0),
+                        "region": cc,
+                    }
+            return None
         except Exception as exc:
             logger.warning(f"获取 Steam {country} 区价格失败: {exc} (appid={gid})")
             return None
