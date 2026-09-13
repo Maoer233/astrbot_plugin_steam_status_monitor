@@ -208,11 +208,10 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
-- V4.8.0-test（2026/09/13）
+- V4.8.0（2026/09/13）
   - **命令层拆分**：价格查询、排行记账、名单/绑定/推送路由、监控启停先进入 application 服务；AstrBot 胶水收到 `src/presentation/commands/`。插件主体只留组合根与命令注册桩，不再承载区价循环、时长聚合或裁图辅助。对外指令、权限和持久化格式不变。详见 `REFACTORING.md` 第 10 节。
-  - **并发安全修复**（#51）：为 `SessionService` 添加 per-player `asyncio.Lock`，修复游玩时长通知消息重复问题。根因是 `tick_due` 和 `handle` 缺少并发保护，主轮询和 Steam API 超时期间的 tick 可能同时处理同一会话，导致多次添加结束通知。`tick_due` 改为 async 方法，在锁内双重检查会话状态，确保操作串行化。
+  - **并发安全修复**（#51，感谢 @OLRainM）：为 `SessionService` 添加 per-player `asyncio.Lock`，修复游玩时长通知消息重复问题。根因是 `tick_due` 和 `handle` 缺少并发保护，主轮询和 Steam API 超时期间的 tick 可能同时处理同一会话，导致多次添加结束通知。`tick_due` 改为 async 方法，在锁内双重检查会话状态，确保操作串行化。
   - **测试修复**：添加 `pytest-asyncio` 依赖并跳过字体缺失测试，删除空的 `log_export.py`。最终测试：193 passed, 3 skipped。
-  - 本版本为 fork 测试版，尚未作为上游正式发布。
 
 - V4.7.3（2026/09/10）
   - **成就黑名单修复**：区分“获取失败”与“游戏无成就”——仅在 Steam 返回 `no stats`（游戏本身无成就统计）时才拉黑并跳过轮询；网络失败（超时/5xx/429）不再拉黑，按正常间隔继续轮询；`success=true` 即使成就描述为空或 0 解锁也视为成功，不再误判。
