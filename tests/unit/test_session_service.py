@@ -85,9 +85,9 @@ class SessionServiceTests(unittest.IsolatedAsyncioTestCase):
         service = plugin.session_service
         await service.handle("g1", "s1", "A", 1000, player_name="P", current_game_name="GameA")
         await service.handle("g1", "s1", None, 1100, player_name="P")
-        service.tick_due(1279)
+        await service.tick_due(1279)
         self.assertEqual([], plugin.playtime)
-        service.tick_due(1280)
+        await service.tick_due(1280)
         self.assertEqual([("s1", "A", "GameA", 100 / 60)], plugin.playtime)
         self.assertIsNone(service.get("g1", "s1"))
 

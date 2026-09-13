@@ -6,7 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 import random
 from .steam_cover import get_steam_library_cover_url
 
-from ...shared.fonts import load_truetype, resolve_font_path
+from ...shared.fonts import load_truetype
 from ...shared.paths import IMAGES_DIR
 from ...shared.logging import logger
 from ...shared.network import httpx_client_kwargs
@@ -369,9 +369,6 @@ async def get_playtime_hours(api_key, steamid, appid, retry_times=3, proxy=None)
         if attempt < retry_times - 1:
             await asyncio.sleep(1)
     return 0.0
-
-def get_font_path(font_name):
-    return resolve_font_path(font_name) or font_name
 
 def render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours=None, superpower=None, online_count=None, font_path=None, playtime_unowned=False, avatar_frame_path=None, horizontal_cover_path=None, version=None):
     # 字体

@@ -3,7 +3,6 @@ import json
 import os
 import time
 
-from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
 from ...shared.utils.notify_session import (
     build_group_notify_session,
@@ -11,11 +10,25 @@ from ...shared.utils.notify_session import (
     is_valid_group_id,
 )
 
+_STALE_STATE_THRESHOLD = 3600
+
 
 class PersistenceMixin:
     def _get_group_data_path(self, group_id, key):
         """获取分群数据文件路径"""
         return os.path.join(self.data_dir, f"group_{group_id}_{key}.json")
+
+    def _is_group_state_stale(self, group_id, threshold=_STALE_STATE_THRESHOLD):
+        """判断该群状态缓存是否为插件停止期间遗留的旧数据。"""
+        try:
+            path = self._get_group_data_path(group_id, "states")
+            if not os.path.exists(path):
+                return False
+            mtime = os.path.getmtime(path)
+            return mtime < self._startup_time and (time.time() - mtime) > threshold
+        except Exception as e:
+            logger.warning(f"[陈旧状态] 判断 states 新鲜度失败: {e} (group_id={group_id})")
+            return False
 
     def _load_persistent_data(self):
         # 分群加载各群的状态数据
@@ -217,19 +230,9 @@ class PersistenceMixin:
             logger.warning("已丢弃无效监控群: %s", dropped)
             self._save_group_steam_ids()
 
-    def get_font_path(self, font_name=None, bold=False):
-        """统一解析 CJK 字体路径：bundled → 数据目录 → 系统字体。"""
-        if not font_name:
-            font_name = "NotoSansHans-Regular.otf"
-        return resolve_font_path(font_name, bold=bold) or font_name
-
-    def _get_groups_file_path(self):
-        """获取 steam_groups.json 文件路径"""
-        return os.path.join(self.data_dir, "steam_groups.json")
-
     def _load_group_steam_ids(self):
         """从 steam_groups.json 加载所有群的 SteamID 列表"""
-        path = self._get_groups_file_path()
+        path = os.path.join(self.data_dir, "steam_groups.json")
         groups = {}
         if os.path.exists(path):
             try:
@@ -243,7 +246,7 @@ class PersistenceMixin:
 
     def _save_group_steam_ids(self):
         """保存所有群的 SteamID 列表到 steam_groups.json"""
-        path = self._get_groups_file_path()
+        path = os.path.join(self.data_dir, "steam_groups.json")
         groups = self.monitor_state.group_steam_ids
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -389,6 +392,10 @@ class PersistenceMixin:
 
     def _record_session(self, sid, gameid, game_name, start_time, end_time, duration_min, group_id):
         """记录单次游玩 session（在游戏退出确认后调用）。"""
+        ranking = getattr(self, "ranking_service", None)
+        if ranking is not None:
+            ranking.record_session(sid, gameid, game_name, start_time, end_time, duration_min, group_id)
+            return
         if duration_min <= 0 or not gameid:
             return
         date_str = self._get_day_key(0)
@@ -409,6 +416,16 @@ class PersistenceMixin:
             "group_id": str(group_id),
         })
         self._session_dirty = True
+
+    def _get_day_key(self, offset_days=0):
+        ranking = getattr(self, "ranking_service", None)
+        if ranking is not None:
+            return ranking.day_key(offset_days)
+        current = datetime.now()
+        if current.hour < 4:
+            current = current - timedelta(days=1)
+        current = current + timedelta(days=offset_days)
+        return current.strftime("%Y-%m-%d")
 
     # ========== QQ-SteamID 绑定系统 ==========
 

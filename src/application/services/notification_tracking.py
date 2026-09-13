@@ -5,6 +5,7 @@ import time
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image
 
+from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
 from ...shared.utils.notify_session import is_sendable_group_session
 from ...presentation.renderers.game_start import render_game_start
@@ -61,8 +62,8 @@ class NotificationTrackingMixin:
             if noti["type"] == "start":
                 status = noti.get("status", {})
                 avatar_url = status.get("avatarfull") or status.get("avatar")
-                superpower = self.get_today_superpower(noti["sid"])
-                font_path = self.get_font_path("NotoSansHans-Regular.otf")
+                superpower = self.superpower.get(noti["sid"])
+                font_path = resolve_font_path("NotoSansHans-Regular.otf")
                 zh_game_name, en_game_name = await self.get_game_names(noti["gameid"], noti["game"])
                 img_bytes = await render_game_start(
                     self.data_dir, noti["sid"], noti["name"], avatar_url,
@@ -82,7 +83,7 @@ class NotificationTrackingMixin:
                     noti["gameid"], zh_game_name, end_time_str,
                     noti.get("tip_text") or "你已经和椅子合为一体，成为传说中的'椅子精'了喵！",
                     duration_h, sgdb_api_key=self.SGDB_API_KEY,
-                    font_path=self.get_font_path("NotoSansHans-Regular.otf"),
+                    font_path=resolve_font_path("NotoSansHans-Regular.otf"),
                     sgdb_game_name=en_game_name, appid=noti.get("gameid"),
                     proxy=self.proxy, api_key=self.API_KEY,
                     sgdb_api_base=self.SGDB_API_BASE, steam_store_base=self.STEAM_STORE_BASE,

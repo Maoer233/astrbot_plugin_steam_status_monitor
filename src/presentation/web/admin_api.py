@@ -153,12 +153,9 @@ class WebAdminAPI:
         )
         return json_response(payload)
 
-    def invalidate_cache(self, *names):
-        self._response_cache.invalidate(*names)
-
     def _invalidate_statistics_cache(self):
         """Invalidate cached responses affected by group/player mutations."""
-        self.invalidate_cache("dashboard", "groups", "heatmap", "player_search_index")
+        self._response_cache.invalidate("dashboard", "groups", "heatmap", "player_search_index")
 
     def register_routes(self, context):
         """Register all routes used by ``pages/steam-monitor``."""
@@ -255,11 +252,8 @@ class WebAdminAPI:
 
     async def _api_dashboard_stats(self, request):
         p = self.plugin
-        today = (
-            p._get_day_key(0)
-            if hasattr(p, "_get_day_key")
-            else datetime.now().strftime("%Y-%m-%d")
-        )
+        ranking = getattr(p, "ranking_service", None)
+        today = ranking.day_key(0) if ranking is not None else datetime.now().strftime("%Y-%m-%d")
         last_update = datetime.now().strftime("%Y-%m-%d %H:%M")
         return await self._cached_response(
             ("dashboard", today),
@@ -349,11 +343,7 @@ class WebAdminAPI:
         font_path = None
         try:
             from ...shared.fonts import resolve_font_path
-            fp = getattr(p, "get_font_path", None)
-            if fp:
-                font_path = fp("NotoSansHans-Regular.otf")
-            if not font_path:
-                font_path = resolve_font_path("NotoSansHans-Regular.otf")
+            font_path = resolve_font_path("NotoSansHans-Regular.otf")
         except Exception:
             pass
 
@@ -704,7 +694,7 @@ class WebAdminAPI:
         gid = str(data.get("group_id", "")).strip()
         if not gid:
             return json_response({"error": "invalid group_id"}, status_code=400)
-        if self.admin.remove_group(gid):
+        if self.admin.remove_group(gid).changed:
             self._invalidate_statistics_cache()
         return json_response({"ok": True})
 
@@ -1143,7 +1133,8 @@ class WebAdminAPI:
                         total_minutes += mins
 
         # 今天游戏
-        today = p._get_day_key(0) if hasattr(p, "_get_day_key") else datetime.now().strftime("%Y-%m-%d")
+        ranking = getattr(p, "ranking_service", None)
+        today = ranking.day_key(0) if ranking is not None else datetime.now().strftime("%Y-%m-%d")
         play_records = getattr(p, "play_records", {}) or {}
         today_games = []
         today_data = play_records.get(today, {}).get(steamid, {})

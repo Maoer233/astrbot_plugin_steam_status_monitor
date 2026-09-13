@@ -1,5 +1,7 @@
 import unittest
+from pathlib import Path
 
+import pytest
 from PIL import ImageFont
 
 from src.presentation.renderers.game_end import (
@@ -10,6 +12,10 @@ from src.presentation.renderers.game_end import (
 from src.shared.paths import FONTS_DIR
 
 
+@pytest.mark.skipif(
+    not (FONTS_DIR / "NotoSansHans-Medium.otf").exists(),
+    reason="字体包未下载，跳过渲染测试"
+)
 class GameEndNameLayoutTests(unittest.TestCase):
     def setUp(self):
         self.font = ImageFont.truetype(str(FONTS_DIR / "NotoSansHans-Medium.otf"), 28)

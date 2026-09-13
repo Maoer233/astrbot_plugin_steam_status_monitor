@@ -156,24 +156,6 @@ def build_player_search_index(plugin):
     return result
 
 
-def _heatmap_group_sids(plugin, group_id):
-    groups = getattr(plugin, "group_steam_ids", {}) or {}
-    push_groups = getattr(plugin, "push_groups", {}) or {}
-    if group_id:
-        direct_ids = groups.get(group_id, [])
-        push_ids = [
-            sid
-            for sid, target_groups in push_groups.items()
-            if str(group_id) in {str(target) for target in target_groups}
-        ]
-        return {str(sid) for sid in [*direct_ids, *push_ids]}
-    return {
-        str(sid)
-        for steam_ids in groups.values()
-        for sid in steam_ids
-    } | {str(sid) for sid in push_groups}
-
-
 def _build_heatmap_contributions(plugin, start_key, end_key, allowed_sids):
     """按玩家和日期聚合时长，同日优先采用精确会话以避免重复计数。"""
 
@@ -239,7 +221,21 @@ def build_heatmap_data(plugin, period, now, group_id=None):
     end_key = end_date.strftime("%Y-%m-%d")
 
     groups = getattr(plugin, "group_steam_ids", {}) or {}
-    allowed_sids = _heatmap_group_sids(plugin, group_id)
+    push_groups = getattr(plugin, "push_groups", {}) or {}
+    if group_id:
+        direct_ids = groups.get(group_id, [])
+        push_ids = [
+            sid
+            for sid, target_groups in push_groups.items()
+            if str(group_id) in {str(target) for target in target_groups}
+        ]
+        allowed_sids = {str(sid) for sid in [*direct_ids, *push_ids]}
+    else:
+        allowed_sids = {
+            str(sid)
+            for steam_ids in groups.values()
+            for sid in steam_ids
+        } | {str(sid) for sid in push_groups}
     contributions = _build_heatmap_contributions(
         plugin, start_key, end_key, allowed_sids
     )

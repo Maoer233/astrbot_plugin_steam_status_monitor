@@ -410,18 +410,25 @@ class ITADClient:
                     return item
         return {}
 
-    async def get_history(self, game_id: str, country: str = "CN") -> list[dict[str, Any]]:
-        payload = await self._get("/games/history/v2", {"id": game_id, "country": country})
-        if isinstance(payload, list):
-            return payload
-        return []
+    @staticmethod
+    def _price_amount(price_obj) -> Optional[float]:
+        if not isinstance(price_obj, dict):
+            return None
+        try:
+            return float(price_obj.get("amount"))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _is_steam_shop(shop) -> bool:
+        if not isinstance(shop, dict):
+            return False
+        if shop.get("id") == 61:
+            return True
+        return str(shop.get("name") or "").strip().lower() == "steam"
 
     async def get_price_summary(self, game_id: str, country: str = "CN") -> dict[str, Any]:
-        import asyncio
-
-        current, history = await asyncio.gather(
-            self.get_prices(game_id, country), self.get_history(game_id, country)
-        )
+        current = await self.get_prices(game_id, country)
         current_price = None
         current_regular = None
         currency = None
@@ -431,31 +438,43 @@ class ITADClient:
         cdk_currency = None
         cdk_cut = None
         fallback_deal = None
+        steam_low = None
+        steam_low_cut = None
         for deal in current.get("deals", []) if isinstance(current, dict) else []:
             if not isinstance(deal, dict):
                 continue
             price = deal.get("price") or {}
             regular = deal.get("regular") or {}
-            amount = price.get("amount")
+            amount = self._price_amount(price)
             if amount is None:
                 continue
-            shop_name = str(((deal.get("shop") or {}).get("name") or "")).lower()
+            shop = deal.get("shop") or {}
             if fallback_deal is None:
                 fallback_deal = (
-                    float(amount),
+                    amount,
                     float(regular.get("amount") or amount),
                     price.get("currency"),
                     deal.get("cut"),
                 )
-            if shop_name == "steam":
+            if self._is_steam_shop(shop):
                 # 当前价/折扣只取 Steam 店铺当前在售价，避免把第三方折扣当成 Steam 折扣
-                current_price = float(amount)
+                current_price = amount
                 current_regular = float(regular.get("amount") or current_price)
                 currency = price.get("currency")
                 cut = deal.get("cut")
-            elif cdk_amount is None or float(amount) < cdk_amount:
-                cdk_amount = float(amount)
-                cdk_shop = (deal.get("shop") or {}).get("name")
+                # Steam 史低用 prices/v3 的 storeLow（全时段店铺最低）。
+                # history/v2 默认只覆盖约 3 个月，近期无折扣时会把现价当成史低。
+                store_low = self._price_amount(deal.get("storeLow"))
+                if store_low is not None:
+                    steam_low = store_low
+                    regular_amount = self._price_amount(regular)
+                    if regular_amount and regular_amount > 0:
+                        steam_low_cut = int(round((1 - store_low / regular_amount) * 100))
+                    else:
+                        steam_low_cut = deal.get("cut") if store_low < amount else 0
+            elif cdk_amount is None or amount < cdk_amount:
+                cdk_amount = amount
+                cdk_shop = shop.get("name")
                 cdk_currency = price.get("currency")
                 cdk_cut = deal.get("cut")
         if current_price is None and fallback_deal is not None:
@@ -464,33 +483,9 @@ class ITADClient:
         low_obj = current.get("historyLow") if isinstance(current, dict) else None
         if isinstance(low_obj, dict):
             low_all = low_obj.get("all") or {}
-            try:
-                history_low = float(low_all.get("amount"))
-            except (TypeError, ValueError):
-                history_low = None
+            history_low = self._price_amount(low_all)
             if not currency:
                 currency = low_all.get("currency")
-        lowest = None
-        lowest_cut = None
-        steam_low = None
-        steam_low_cut = None
-        for item in history:
-            if not isinstance(item, dict):
-                continue
-            deal = item.get("deal") or {}
-            shop_name = str(((item.get("shop") or {}).get("name") or "")).lower()
-            price = deal.get("price") or {}
-            amount = price.get("amount")
-            try:
-                amount = float(amount)
-            except (TypeError, ValueError):
-                continue
-            if lowest is None or amount < lowest:
-                lowest = amount
-                lowest_cut = deal.get("cut")
-            if shop_name == "steam" and (steam_low is None or amount < steam_low):
-                steam_low = amount
-                steam_low_cut = deal.get("cut")
         return {
             "current": current,
             "current_price": current_price,
@@ -502,9 +497,9 @@ class ITADClient:
             "cdk_currency": cdk_currency,
             "cdk_cut": cdk_cut,
             "history_low": history_low,
-            "lowest": lowest,
-            "lowest_cut": lowest_cut,
+            "lowest": history_low,
+            "lowest_cut": None,
             "steam_low": steam_low,
             "steam_low_cut": steam_low_cut,
-            "history": history,
+            "history": [],
         }

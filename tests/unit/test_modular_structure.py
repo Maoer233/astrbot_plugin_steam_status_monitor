@@ -31,14 +31,28 @@ class ModularStructureTests(unittest.TestCase):
     def test_layered_modules_and_assets_exist(self):
         expected_paths = (
             "src/plugin/steam_status_monitor.py",
+            "src/plugin/runtime_config.py",
             "src/infrastructure/clients/steam.py",
             "src/infrastructure/persistence/plugin_data.py",
             "src/application/services/achievement_monitor.py",
             "src/application/services/session_service.py",
+            "src/application/services/ranking.py",
+            "src/application/services/price_query.py",
+            "src/application/services/monitor_control.py",
+            "src/application/services/player_status_view.py",
+            "src/application/services/rank_view.py",
+            "src/domain/monitoring/game_filter.py",
             "src/domain/monitoring/session.py",
             "src/domain/ranking/push_scopes.py",
+            "src/presentation/commands/__init__.py",
+            "src/presentation/commands/monitor.py",
+            "src/presentation/commands/store.py",
+            "src/presentation/commands/rank.py",
+            "src/presentation/commands/ops.py",
             "src/presentation/web/admin_api.py",
             "src/presentation/renderers/game_start.py",
+            "src/presentation/renderers/image_crop.py",
+            "src/presentation/renderers/superpower.py",
             "src/shared/paths.py",
             "assets/abilities.txt",
             "assets/fonts/manifest.json",
@@ -116,6 +130,33 @@ class ModularStructureTests(unittest.TestCase):
         ]
         self.assertEqual(1, method_names.count("steam_push_group"))
         self.assertEqual(1, method_names.count("steam_delpush_group"))
+
+    def test_composition_root_does_not_keep_passthrough_helpers(self):
+        text = (PROJECT_ROOT / "src/plugin/steam_status_monitor.py").read_text(encoding="utf-8")
+        forbidden = (
+            "def crop_image_auto",
+            "def get_today_superpower",
+            "async def get_game_online_count",
+            "def _steam_parent",
+            "def _get_rank_data",
+            "def _record_playtime",
+            "def _should_skip_game",
+            "async def _daily_rank_push",
+            "async def _translate_game_query",
+        )
+        hits = [token for token in forbidden if token in text]
+        self.assertEqual([], hits)
+
+    def test_command_modules_do_not_own_core_rules(self):
+        commands_dir = PROJECT_ROOT / "src/presentation/commands"
+        forbidden = ("play_records[", "ITAD_CLIENT", "httpx")
+        hits = []
+        for path in commands_dir.glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                if token in text:
+                    hits.append(f"{path.name}: {token}")
+        self.assertEqual([], hits)
 
 
 if __name__ == "__main__":

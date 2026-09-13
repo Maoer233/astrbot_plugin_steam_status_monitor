@@ -5,7 +5,7 @@ from src.infrastructure.clients.steam import STEAM_STORE_COOKIES, SteamClientMix
 from src.shared.utils.price import (
     is_store_region_locked,
     store_region_candidates,
-    summary_to_cny,
+    summary_to_currency,
 )
 
 
@@ -117,7 +117,7 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("HK", price["region"])
         self.assertEqual("HKD", price["currency"])
         self.assertEqual(249.0, price["current_price"])
-        converted = summary_to_cny(price)
+        converted = summary_to_currency(price, "CNY")
         self.assertEqual("CNY", converted["currency"])
         self.assertNotIn("CN", {price["region"]})
 

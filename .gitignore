@@ -3,10 +3,11 @@ venv/
 .vscode/
 .github/
 .git-rewrite/
+.codebuddy/
 *.lnk
 test_line.txt
 /data/steam_status_monitor/
-/docs/
+/docs/self/
 
 # 运行时下载的 CJK 字体（商店包 / Git 不跟踪）
 assets/fonts/*.otf

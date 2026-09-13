@@ -25,11 +25,8 @@ class AchievementMonitor:
         self.details_cache = {}  # (group_id, appid) -> details 缓存
         self._load_blacklist()
     
-    def _blacklist_path(self):
-        return os.path.join(self.data_dir, "achievement_blacklist.json")
-
     def _load_blacklist(self):
-        path = self._blacklist_path()
+        path = os.path.join(self.data_dir, "achievement_blacklist.json")
         if os.path.exists(path):
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -40,25 +37,15 @@ class AchievementMonitor:
             self.achievement_blacklist = set()
 
     def _save_blacklist(self):
-        path = self._blacklist_path()
+        path = os.path.join(self.data_dir, "achievement_blacklist.json")
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(list(self.achievement_blacklist), f, ensure_ascii=False)
         except Exception:
             pass
 
-    def _blacklist_verified_flag_path(self):
-        return os.path.join(self.data_dir, "achievement_blacklist_verified.flag")
-
     def is_blacklist_verified(self) -> bool:
-        return os.path.exists(self._blacklist_verified_flag_path())
-
-    def _mark_blacklist_verified(self):
-        try:
-            with open(self._blacklist_verified_flag_path(), "w", encoding="utf-8") as f:
-                f.write("1")
-        except Exception:
-            pass
+        return os.path.exists(os.path.join(self.data_dir, "achievement_blacklist_verified.flag"))
 
     async def verify_blacklist_once(self):
         """首次启动校验历史黑名单：用全局成就接口判断黑名单里的游戏是否本身有成就，
@@ -71,7 +58,15 @@ class AchievementMonitor:
         except Exception as e:
             logger.warning(f"[成就黑名单校验] 校验异常: {e}")
         finally:
-            self._mark_blacklist_verified()
+            try:
+                with open(
+                    os.path.join(self.data_dir, "achievement_blacklist_verified.flag"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    f.write("1")
+            except Exception:
+                pass
 
     async def _verify_blacklist_entries(self):
         if not self.achievement_blacklist:

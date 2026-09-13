@@ -103,11 +103,6 @@ def convert(price, from_currency, to_currency, rates=None):
     return round(amount * f_rate / t_rate, 2)
 
 
-def to_cny(price, currency, rates=None):
-    """兼容包装：将指定货币金额折算为 CNY。"""
-    return convert(price, currency, "CNY", rates)
-
-
 def summary_to_currency(summary, target="CNY", rates=None):
     """将 ITAD price summary 的金额字段统一折算为目标币种，返回新 dict。
     仅当原币种与目标币种都有汇率时才折算并置 currency=target；否则保留原币种与金额，避免错标。"""
@@ -118,13 +113,8 @@ def summary_to_currency(summary, target="CNY", rates=None):
         return out
     table = rates or RATES
     if currency in table and target in table:
-        for field in ("current_price", "current_regular", "history_low", "lowest"):
+        for field in ("current_price", "current_regular", "history_low", "lowest", "steam_low", "cdk_amount"):
             if out.get(field) is not None:
                 out[field] = convert(out[field], currency, target, table)
         out["currency"] = target
     return out
-
-
-def summary_to_cny(summary, rates=None):
-    """兼容包装：将 ITAD price summary 统一折算为 CNY。"""
-    return summary_to_currency(summary, "CNY", rates)

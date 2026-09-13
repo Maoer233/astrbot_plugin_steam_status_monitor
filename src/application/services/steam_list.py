@@ -1,159 +1,97 @@
-import time
 import io
+import tempfile
 from typing import Optional
+
 from ...presentation.renderers.steam_list import render_steam_list_image
 from ...presentation.renderers.game_start import get_avatar_frame_url, get_avatar_frame_path
+from .player_status_view import PlayerStatusViewService, build_player_row
 
-# 与 alllist 一致的 personastate -> 状态 映射（0离线,1在线,2忙碌,3离开,4打盹）
-_PERSONA_STATUS = {0: 'offline', 1: 'online', 2: 'busy', 3: 'away', 4: 'snooze'}
+__all__ = ["build_player_row", "handle_steam_list", "render_user_list_image", "list_parent"]
 
-async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
-    '''列出所有玩家当前状态（图片美化版，分群支持）'''
-    # 获取分群ID
-    group_id = None
-    if hasattr(event, 'get_group_id'):
-        group_id = str(event.get_group_id())
-    elif hasattr(event, 'group_id'):
-        group_id = str(event.group_id)
-    else:
-        group_id = 'default'
-    direct_steam_ids = self.group_steam_ids.get(group_id, [])
-    push_steam_ids = [
-        sid
-        for sid, push_groups in (getattr(self, 'push_groups', {}) or {}).items()
-        if group_id in {str(target) for target in push_groups}
-    ]
-    steam_ids = list(dict.fromkeys([*direct_steam_ids, *push_steam_ids]))
-    user_list = []
-    now = int(time.time())
-    # 分发群不参与轮询，游玩开始时间应读取对应主监控群的缓存。
-    primary_group_by_sid = {}
-    for sid in steam_ids:
-        if sid in direct_steam_ids:
-            primary_group_by_sid[sid] = group_id
-            continue
-        primary_group_by_sid[sid] = next(
-            (
-                owner_group_id
-                for owner_group_id, owner_steam_ids in self.group_steam_ids.items()
-                if sid in {str(owner_sid) for owner_sid in owner_steam_ids}
-            ),
-            group_id,
-        )
-    # 批量查询所有玩家状态，减少API调用次数
-    status_map = await self.fetch_player_statuses_batch(steam_ids) if steam_ids else {}
-    for sid in steam_ids:
-        status = status_map.get(sid)
-        if not status:
-            user_list.append({
-                'sid': sid,
-                'name': sid,
-                'status': 'error',
-                'avatar_url': '',
-                'game': '',
-                'gameid': '',
-                'play_str': '获取失败',
-                'lastlogoff': None
-            })
-            continue
-        name = self._resolve_bind_name(sid, status.get('name') or sid)
-        gameid = status.get('gameid')
-        game = status.get('gameextrainfo')
-        lastlogoff = status.get('lastlogoff')
-        personastate = status.get('personastate', 0)
-        avatar_url = status.get('avatarfull') or status.get('avatar') or ''
-        zh_game_name = await self.get_chinese_game_name(gameid, game) if gameid else (game or "未知游戏")
-        if gameid:
-            start_time = self.session_service.started_at(
-                primary_group_by_sid.get(sid, group_id), sid, gameid
-            )
-            play_seconds = now - start_time if start_time else 0
-            play_minutes = play_seconds / 60
-            if play_minutes < 60:
-                play_str = f"{play_minutes:.1f}分钟"
-            else:
-                play_str = f"{play_minutes/60:.1f}小时"
-            user_list.append({
-                'sid': sid,
-                'name': name,
-                'status': 'playing',
-                'avatar_url': avatar_url,
-                'game': zh_game_name,
-                'gameid': gameid,
-                'play_str': play_str,
-                'lastlogoff': lastlogoff
-            })
-        elif personastate and int(personastate) > 0:
-            user_list.append({
-                'sid': sid,
-                'name': name,
-                'status': _PERSONA_STATUS.get(int(personastate), 'online'),
-                'avatar_url': avatar_url,
-                'game': '',
-                'gameid': '',
-                'play_str': '',
-                'lastlogoff': lastlogoff
-            })
-        elif lastlogoff:
-            hours_ago = (now - int(lastlogoff)) / 3600
-            user_list.append({
-                'sid': sid,
-                'name': name,
-                'status': 'offline',
-                'avatar_url': avatar_url,
-                'game': '',
-                'gameid': '',
-                'play_str': f"上次在线 {hours_ago:.1f} 小时前",
-                'lastlogoff': lastlogoff
-            })
-        else:
-            user_list.append({
-                'sid': sid,
-                'name': name,
-                'status': 'offline',
-                'avatar_url': avatar_url,
-                'game': '',
-                'gameid': '',
-                'play_str': '',
-                'lastlogoff': lastlogoff
-            })
-    # 获取所有用户的头像框
+
+def list_parent(event):
+    """返回 (触发者昵称, QQ头像URL)；获取失败返回 (None, None)。"""
+    try:
+        sender_id = event.get_sender_id()
+        sender_name = event.get_sender_name()
+    except Exception:
+        return None, None
+    url = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640" if sender_id else None
+    return sender_name, url
+
+
+async def collect_list_assets(plugin, user_list, *, proxy=None):
     avatar_frame_paths = {}
-    for u in user_list:
-        sid = u.get("sid", "")
-        if sid:
-            fp = await get_avatar_frame_path(self.data_dir, sid, proxy=proxy)
-            if not fp:
-                frame_url = await get_avatar_frame_url(sid, proxy=proxy)
-                if frame_url:
-                    fp = await get_avatar_frame_path(self.data_dir, sid, frame_url, proxy=proxy)
-            if fp:
-                avatar_frame_paths[sid] = fp
-    # 渲染图片（新版 steam 风格不展示封面；旧版卡片风格需要封面，仅在关闭新风格时预取）
-    steam_style = self.config.get('enable_steam_style', False)
+    for user in user_list:
+        sid = user.get("sid", "")
+        if not sid:
+            continue
+        fp = await get_avatar_frame_path(plugin.data_dir, sid, proxy=proxy)
+        if not fp:
+            frame_url = await get_avatar_frame_url(sid, proxy=proxy)
+            if frame_url:
+                fp = await get_avatar_frame_path(plugin.data_dir, sid, frame_url, proxy=proxy)
+        if fp:
+            avatar_frame_paths[sid] = fp
+    steam_style = (getattr(plugin, "config", {}) or {}).get("enable_steam_style", False)
     covers = {}
     if not steam_style:
-        for u in user_list:
-            gid = u.get('gameid', '')
-            if gid:
-                from ...presentation.renderers.game_start import get_cover_path
-                cp = await get_cover_path(
-                    self.data_dir, gid, u.get('game', ''),
-                    sgdb_api_key=self.SGDB_API_KEY,
-                    appid=gid,
-                    proxy=proxy,
-                    sgdb_api_base=self.SGDB_API_BASE,
-                )
-                if cp:
-                    covers[u['sid']] = cp
-    parent_name, parent_avatar_url = self._steam_parent(event)
-    img_bytes = await render_steam_list_image(self.data_dir, user_list, font_path=font_path, proxy=proxy, avatar_frame_paths=avatar_frame_paths, covers=covers, steam_style=steam_style, parent_name=parent_name, parent_avatar_url=parent_avatar_url)
-    if img_bytes:
-        with io.BytesIO(img_bytes) as buf:
-            import tempfile
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                tmp.write(buf.read())
-                tmp_path = tmp.name
-            yield event.image_result(tmp_path)
+        from ...presentation.renderers.game_start import get_cover_path
+
+        for user in user_list:
+            gid = user.get("gameid", "")
+            if not gid:
+                continue
+            cp = await get_cover_path(
+                plugin.data_dir,
+                gid,
+                user.get("game", ""),
+                sgdb_api_key=getattr(plugin, "SGDB_API_KEY", None),
+                appid=gid,
+                proxy=proxy,
+                sgdb_api_base=getattr(plugin, "SGDB_API_BASE", None),
+            )
+            if cp:
+                covers[user["sid"]] = cp
+    return avatar_frame_paths, covers, steam_style
+
+
+async def render_user_list_image(plugin, event, user_list, *, font_path: Optional[str] = None, proxy=None):
+    proxy = plugin.proxy if proxy is None else proxy
+    avatar_frame_paths, covers, steam_style = await collect_list_assets(plugin, user_list, proxy=proxy)
+    parent_name, parent_avatar_url = list_parent(event)
+    img_bytes = await render_steam_list_image(
+        plugin.data_dir,
+        user_list,
+        font_path=font_path,
+        proxy=proxy,
+        avatar_frame_paths=avatar_frame_paths,
+        covers=covers,
+        steam_style=steam_style,
+        parent_name=parent_name,
+        parent_avatar_url=parent_avatar_url,
+    )
+    if not img_bytes:
+        return None
+    with io.BytesIO(img_bytes) as buf:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+            tmp.write(buf.read())
+            return tmp.name
+
+
+async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
+    """列出所有玩家当前状态（图片美化版，分群支持）"""
+    group_id = None
+    if hasattr(event, "get_group_id"):
+        group_id = str(event.get_group_id())
+    elif hasattr(event, "group_id"):
+        group_id = str(event.group_id)
+    else:
+        group_id = "default"
+    view = getattr(self, "player_status_view", None) or PlayerStatusViewService(self)
+    user_list = await view.build_group_rows(group_id)
+    tmp_path = await render_user_list_image(self, event, user_list, font_path=font_path, proxy=proxy)
+    if tmp_path:
+        yield event.image_result(tmp_path)
     else:
         yield event.plain_result("渲染图片失败")

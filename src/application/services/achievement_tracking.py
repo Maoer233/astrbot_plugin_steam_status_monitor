@@ -5,6 +5,7 @@ import time
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image
 
+from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
 from ...shared.utils.notify_session import is_sendable_group_session
 
@@ -99,7 +100,7 @@ class AchievementTrackingMixin:
         if details and game_name:
             for detail in details.values():
                 detail["game_name"] = game_name
-        font_path = self.get_font_path('NotoSansHans-Regular.otf')
+        font_path = resolve_font_path('NotoSansHans-Regular.otf')
         notify_sessions = []
         notify_session = getattr(self, 'notify_sessions', {}).get(group_id)
         if notify_session:

@@ -1,6 +1,8 @@
 import asyncio
+from collections import defaultdict
 from typing import Any, Dict, Optional, Tuple
 
+from ...domain.monitoring.game_filter import should_skip_game
 from ...domain.monitoring.session import PlayingSession, apply
 from ...presentation.formatters.status import format_play_duration
 
@@ -13,6 +15,7 @@ class SessionService:
 
     def __init__(self, plugin):
         self._plugin = plugin
+        self._locks: Dict[SessionKey, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def get(self, group_id, sid) -> Optional[PlayingSession]:
         return self._sessions().get(self._key(group_id, sid))
@@ -37,39 +40,40 @@ class SessionService:
         skip_push=False,
     ):
         key = self._key(group_id, sid)
-        current = self._sessions().get(key)
-        snapshot = {"steamid": str(sid), "group_id": str(group_id), "gameid": observed_gameid}
-        next_session, events = apply(
-            current,
-            snapshot,
-            int(now),
-            sid=str(sid),
-            group_id=str(group_id),
-        )
-        self._store(group_id, sid, next_session)
-        for event in events:
-            await self._dispatch(
-                event,
-                player_name=player_name,
-                current_game_name=current_game_name,
-                status=status,
-                skip_push=skip_push,
+        async with self._locks[key]:
+            current = self._sessions().get(key)
+            snapshot = {"steamid": str(sid), "group_id": str(group_id), "gameid": observed_gameid}
+            next_session, events = apply(
+                current,
+                snapshot,
+                int(now),
+                sid=str(sid),
+                group_id=str(group_id),
             )
-        if (
-            next_session is not None
-            and next_session.state == "playing"
-            and not skip_push
-        ):
-            await self._ensure_achievement_poll(
-                next_session,
-                player_name=player_name,
-                game_name=current_game_name,
-            )
-        if events:
-            self._plugin._data_dirty = True
-        return next_session, events
+            self._store(group_id, sid, next_session)
+            for event in events:
+                await self._dispatch(
+                    event,
+                    player_name=player_name,
+                    current_game_name=current_game_name,
+                    status=status,
+                    skip_push=skip_push,
+                )
+            if (
+                next_session is not None
+                and next_session.state == "playing"
+                and not skip_push
+            ):
+                await self._ensure_achievement_poll(
+                    next_session,
+                    player_name=player_name,
+                    game_name=current_game_name,
+                )
+            if events:
+                self._plugin._data_dirty = True
+            return next_session, events
 
-    def tick_due(self, now: int):
+    async def tick_due(self, now: int):
         due = [
             (key, session)
             for key, session in list(self._sessions().items())
@@ -78,18 +82,25 @@ class SessionService:
             and int(now) >= session.exit_deadline
         ]
         for (group_id, sid), session in due:
-            next_session, events = apply(
-                session,
-                {"steamid": sid, "group_id": group_id, "gameid": None},
-                int(now),
-                sid=sid,
-                group_id=group_id,
-            )
-            self._store(group_id, sid, next_session)
-            for event in events:
-                self._dispatch_sync(event, skip_push=False)
-            if events:
-                self._plugin._data_dirty = True
+            key = self._key(group_id, sid)
+            async with self._locks[key]:
+                # 双重检查：锁内再次确认会话状态未变
+                current = self._sessions().get(key)
+                if current is None or current.state != "confirming_exit":
+                    continue
+                next_session, events = apply(
+                    current,
+                    {"steamid": sid, "group_id": group_id, "gameid": None},
+                    int(now),
+                    sid=sid,
+                    group_id=group_id,
+                )
+                self._store(group_id, sid, next_session)
+                for event in events:
+                    if event.kind == "closed":
+                        self._apply_closed(event, skip_push=False)
+                if events:
+                    self._plugin._data_dirty = True
 
     def discard_group(self, group_id):
         group_id = str(group_id)
@@ -111,7 +122,12 @@ class SessionService:
             for sid, games in (pending_sids or {}).items():
                 if self.get(group_id, sid) is not None:
                     continue
-                info = self._pick_pending(games)
+                info = None
+                if isinstance(games, dict):
+                    for gameid, payload in games.items():
+                        if payload and not payload.get("notified"):
+                            info = (gameid, payload)
+                            break
                 if not info:
                     continue
                 gameid, payload = info
@@ -242,19 +258,13 @@ class SessionService:
         else:
             self._sessions()[key] = session
 
-    @staticmethod
-    def _pick_pending(games):
-        if not isinstance(games, dict):
-            return None
-        for gameid, payload in games.items():
-            if payload and not payload.get("notified"):
-                return gameid, payload
-        return None
+    def _apply_closed(self, event, *, skip_push):
+        self._on_closed(event.session, skip_push=skip_push)
+        self._meta().pop(self._key(event.session.group_id, event.session.sid), None)
 
     async def _dispatch(self, event, *, player_name, current_game_name, status, skip_push):
         if event.kind == "closed":
-            self._on_closed(event.session, skip_push=skip_push)
-            self._meta().pop(self._key(event.session.group_id, event.session.sid), None)
+            self._apply_closed(event, skip_push=skip_push)
             return
         if event.kind == "started":
             key = self._key(event.session.group_id, event.session.sid)
@@ -274,11 +284,6 @@ class SessionService:
         if event.kind == "fluctuation":
             self._on_resumed(event.session, player_name=player_name, skip_push=skip_push)
 
-    def _dispatch_sync(self, event, *, skip_push):
-        if event.kind == "closed":
-            self._on_closed(event.session, skip_push=skip_push)
-            self._meta().pop(self._key(event.session.group_id, event.session.sid), None)
-
     def _on_closed(self, session: PlayingSession, *, skip_push: bool):
         plugin = self._plugin
         key = self._key(session.group_id, session.sid)
@@ -286,16 +291,32 @@ class SessionService:
         game_name = meta.get("game_name") or "未知游戏"
         player_name = meta.get("player_name") or session.sid
         duration_min = session.duration_min
-        plugin._record_playtime(session.sid, session.gameid, game_name, duration_min)
-        plugin._record_session(
-            sid=session.sid,
-            gameid=session.gameid,
-            game_name=game_name,
-            start_time=session.started_at,
-            end_time=session.exited_at or session.closed_at,
-            duration_min=duration_min,
-            group_id=session.group_id,
-        )
+        ranking = getattr(plugin, "ranking_service", None)
+        if ranking is not None:
+            ranking.record_closed(
+                session.sid,
+                session.gameid,
+                game_name,
+                session.started_at,
+                session.exited_at or session.closed_at,
+                duration_min,
+                session.group_id,
+            )
+        else:
+            record_playtime = getattr(plugin, "_record_playtime", None)
+            record_session = getattr(plugin, "_record_session", None)
+            if callable(record_playtime):
+                record_playtime(session.sid, session.gameid, game_name, duration_min)
+            if callable(record_session):
+                record_session(
+                    sid=session.sid,
+                    gameid=session.gameid,
+                    game_name=game_name,
+                    start_time=session.started_at,
+                    end_time=session.exited_at or session.closed_at,
+                    duration_min=duration_min,
+                    group_id=session.group_id,
+                )
         last_quit = plugin.group_last_quit_times.setdefault(session.group_id, {})
         last_quit.setdefault(session.sid, {})[session.gameid] = int(session.closed_at or session.exited_at or 0)
 
@@ -311,7 +332,7 @@ class SessionService:
             achievement_monitor.clear_game_achievements(session.group_id, session.sid, session.gameid)
 
         monitor_on = getattr(plugin, "group_monitor_enabled", {}).get(session.group_id, True)
-        if not skip_push and monitor_on and not getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid) and plugin.config.get("enable_game_end_notify", True):
+        if not skip_push and monitor_on and not self._skip_game(session.gameid) and plugin.config.get("enable_game_end_notify", True):
             last_state = plugin.group_last_states.get(session.group_id, {}).get(session.sid) or {}
             plugin._pending_end_notifications.setdefault(session.group_id, []).append({
                 "type": "end",
@@ -345,7 +366,7 @@ class SessionService:
             if len(recent) > 8:
                 recent.pop(0)
         monitor_on = getattr(plugin, "group_monitor_enabled", {}).get(session.group_id, True)
-        if not skip_push and monitor_on and not getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid) and plugin.config.get("enable_game_start_notify", True):
+        if not skip_push and monitor_on and not self._skip_game(session.gameid) and plugin.config.get("enable_game_start_notify", True):
             plugin._pending_end_notifications.setdefault(session.group_id, []).append({
                 "type": "start",
                 "name": player_name or session.sid,
@@ -363,7 +384,7 @@ class SessionService:
         plugin = self._plugin
         if not plugin.config.get("enable_achievement_poll", True):
             return
-        if getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid):
+        if self._skip_game(session.gameid):
             return
         key = (session.group_id, session.sid, session.gameid)
         if key in getattr(plugin, "achievement_poll_tasks", {}):
@@ -390,7 +411,7 @@ class SessionService:
         if skip_push or not plugin.config.get("enable_network_fluctuation_notify", True):
             return
         # 黑白名单过滤：网络波动提示与游戏开始/结束播报一致，黑名单游戏不再推送波动提示
-        if getattr(plugin, "_should_skip_game", lambda _gid: False)(session.gameid):
+        if self._skip_game(session.gameid):
             return
         notify_sessions = plugin._get_notify_sessions(session.group_id, session.sid)
         if not notify_sessions:
@@ -418,3 +439,7 @@ class SessionService:
         except RuntimeError:
             return
         asyncio.create_task(_notify())
+
+    def _skip_game(self, gameid) -> bool:
+        plugin = self._plugin
+        return should_skip_game(getattr(plugin, "config", {}) or {}, gameid)

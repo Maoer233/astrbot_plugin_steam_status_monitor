@@ -12,7 +12,7 @@ from .game_start import (
     get_horizontal_cover_path,
 )
 from .steam_cover import get_steam_library_cover_url
-from ...shared.fonts import load_truetype, resolve_font_path
+from ...shared.fonts import load_truetype
 from ...shared.paths import IMAGES_DIR
 
 # 更深的蓝紫色到黑色渐变
@@ -203,9 +203,6 @@ def draw_duration_bar(draw, x, y, width, height, duration_h):
                 center_x = x + width // 2 - text_w // 2
                 center_y = y + height // 2 - text_h // 2 - 5
                 draw.text((center_x, center_y), text, font=font, fill=color, stroke_width=2, stroke_fill=(0,0,0,180))
-
-def get_font_path(font_name):
-    return resolve_font_path(font_name) or font_name
 
 # 与开始卡一致：名字区按实测宽度拉长，上限 360px，再换行。
 _MAX_NAME_LINE_W = 360

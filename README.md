@@ -28,6 +28,7 @@
 - **原生逐指令权限**：每条指令使用 AstrBot 框架的 `admin/member` 权限，不再维护插件内部权限等级
 - **AstrBot 内置管理页**：仪表盘、群聊、绑定、每日推送和权限管理直接集成在 AstrBot WebUI，无需额外端口
 - **权限配置同步**：内置管理页的“指令权限”直接读写 AstrBot 框架配置，并同步当前运行时权限
+- **命令层分层**：`/steam` 指令仍由 AstrBot 注册；名单、启停、价格、排行规则在应用服务，命令文件只做解析和回文。对外指令名、权限和数据目录不变
 
 ## 默认轮询间隔说明（智能轮询模式）
 | 玩家最近在线时间      | 轮询间隔 |
@@ -142,6 +143,21 @@
 - 普通 QQ 群号不能转换为群 OpenID。若不确定，请留空并从目标 QQ 官方群执行同步命令。
 - 修改 AppID、密钥或启用状态后建议重载插件；修改指令面板参数后重新执行同步命令。
 
+## 模块结构（开发者）
+
+根目录 `main.py` 仍是 AstrBot 加载入口。业务在 `src/`：
+
+| 位置 | 职责 |
+| --- | --- |
+| `src/plugin/steam_status_monitor.py` | 组合根：构造服务、生命周期、`@filter` 注册桩 |
+| `src/application/services/` | 名单、启停、价格编排、排行记账、读模型、会话 |
+| `src/presentation/commands/` | `monitor` / `store` / `rank` / `ops`：解析事件、调服务、回文/出图 |
+| `src/presentation/renderers/`、`src/presentation/web/` | 卡片渲染与 AstrBot 管理页 |
+| `src/infrastructure/` | Steam / ITAD / 字体 / JSON 落盘 |
+| `src/domain/` | 轮询间隔、会话状态机、监控状态 |
+
+AstrBot 只扫描 `Star` 子类上的命令装饰器，注册桩必须留在插件主体，不能为了行数做动态注册。决策见 [`docs/adr/adr-command-layer-split.md`](docs/adr/adr-command-layer-split.md)，复盘见 [`REFACTORING.md`](REFACTORING.md) 第 10 节。
+
 ## 指令列表
 - `/steam on` 启动本群Steam状态监控（开关会落盘，重启后仍开启）
 - `/steam off` 停止本群Steam状态监控（开关会落盘，重启后仍关闭；本群不再接收开始/结束卡）
@@ -192,6 +208,12 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V4.8.0-test（2026/09/13）
+  - **命令层拆分**：价格查询、排行记账、名单/绑定/推送路由、监控启停先进入 application 服务；AstrBot 胶水收到 `src/presentation/commands/`。插件主体只留组合根与命令注册桩，不再承载区价循环、时长聚合或裁图辅助。对外指令、权限和持久化格式不变。详见 `REFACTORING.md` 第 10 节。
+  - **并发安全修复**（#51）：为 `SessionService` 添加 per-player `asyncio.Lock`，修复游玩时长通知消息重复问题。根因是 `tick_due` 和 `handle` 缺少并发保护，主轮询和 Steam API 超时期间的 tick 可能同时处理同一会话，导致多次添加结束通知。`tick_due` 改为 async 方法，在锁内双重检查会话状态，确保操作串行化。
+  - **测试修复**：添加 `pytest-asyncio` 依赖并跳过字体缺失测试，删除空的 `log_export.py`。最终测试：193 passed, 3 skipped。
+  - 本版本为 fork 测试版，尚未作为上游正式发布。
+
 - V4.7.3（2026/09/10）
   - **成就黑名单修复**：区分“获取失败”与“游戏无成就”——仅在 Steam 返回 `no stats`（游戏本身无成就统计）时才拉黑并跳过轮询；网络失败（超时/5xx/429）不再拉黑，按正常间隔继续轮询；`success=true` 即使成就描述为空或 0 解锁也视为成功，不再误判。
   - **历史误拉黑自动清理**：首次启动用全局成就接口校验历史黑名单，游戏本身有成就的（历史误拉黑）自动移出，真正无成就的保留（仅执行一次）。

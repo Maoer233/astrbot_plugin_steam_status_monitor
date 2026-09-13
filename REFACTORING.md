@@ -51,7 +51,12 @@
 | `session_quit.py` | 结束卡文案与 SessionService 入口 |
 | `notification_tracking.py` | 通知聚合与发送 |
 | `achievement_tracking.py` | 成就变化跟踪与结算 |
-| `monitor_admin.py` | 管理页面的群组和绑定查询、修改边界 |
+| `monitor_admin.py` | 名单增删、绑定、推送组、清名单；Web 与群命令共用 |
+| `monitor_control.py` | `/steam on|off`、水合 `skip_push`、成就开关 |
+| `price_query.py` | 译名、搜索、ITAD 无价换区、拼价格卡 |
+| `ranking.py` | 日界、去重、日聚合；会话 close 只调 `record_closed` |
+| `rank_view.py` | 排行展示补齐、昨日推送、`rank_on` |
+| `player_status_view.py` | list / alllist / who 共用读模型 |
 | `qq_menu_management.py` | QQ 菜单相关管理流程 |
 
 **目的**：让轮询、状态转换、通知和管理操作可以分别阅读与测试，减少修改其中一个流程时对其他流程的影响。
@@ -74,9 +79,10 @@
 
 ### 2.5 基础设施与展示层拆分
 
-- `src/infrastructure/clients/steam.py`：Steam API、游戏名称和媒体资源请求。
+- `src/infrastructure/clients/steam.py`：Steam API、游戏名称、在线人数和媒体资源请求。
 - `src/infrastructure/persistence/plugin_data.py`：配置、状态、游玩和 Session 数据读写。
-- `src/presentation/renderers/`：开始、结束、列表和排行榜图片渲染。
+- `src/presentation/commands/`：AstrBot 命令胶水（monitor / store / rank / ops）。
+- `src/presentation/renderers/`：开始、结束、列表和排行榜图片渲染；裁图与超能力文案。
 - `src/presentation/web/`：AstrBot 管理页面路由、统计构建和缓存。
 - `src/shared/`：路径、日志、网络及通用辅助能力。
 
@@ -123,18 +129,19 @@ Session 记录使用业务日期、开始时间和游戏 ID 组成稳定的 `ses
 - 同一 Session 当前只保留首次成功写入的 `group_id`，全局统计正确，但历史按群归属若要求一条 Session 同时属于多个群，后续应引入兼容的 `group_ids` 模型；
 - 跨午夜 Session 仍沿用现有业务日期口径，本次没有改变自然日拆分规则。
 
-## 5. 明确未拆分的内容
+## 5. 明确不再继续拆的内容
 
-为避免过度设计，以下内容继续保留在插件主体：
+命令层拆分（2026-09-12）之后，插件主体只保留：
 
-- 插件初始化和生命周期编排；
-- AstrBot 命令装饰器、参数校验及用户反馈；
-- 仅在单一命令中使用的短逻辑；
-- 需要协调多个应用服务的入口流程。
+- 插件初始化和生命周期编排（组合根）；
+- AstrBot `@filter` 注册桩（装饰器 + 签名 + 一行转发）；
+- 轮询 / 通知 / 成就 / 持久化 / Steam 客户端 Mixin，以及仍持有 `session_service` 的 `SessionQuitMixin`。
 
-本次没有采用“一条命令一个文件”或继续增加大量 Mixin 的方式。后续只有在逻辑出现多个调用方、能够形成稳定边界并可独立测试时，才继续抽取。
+参数校验、用户反馈和通道胶水已在 `src/presentation/commands/`。名单、启停、价格编排、排行记账、读模型已在 application 服务。不要再为缩短文件去拆注册桩，也不要把 commands 再抽象成 BaseCommand / 动态注册。
 
-会话生命周期（游戏切换丢时长、pending_quit 双路径）的问题与后续方案见 `docs/session-lifecycle-refactor.md`。
+后续只有出现新的稳定边界时才继续抽取，例如 JSON 持有权迁出插件 dict（必须连 persistence 一起改），或 `SessionQuitMixin` 的结束卡文案迁走之后才能删除。
+
+会话生命周期见第 6 节。命令层拆分复盘见第 10 节。
 
 ## 6. 会话状态机显式状态重构（2026-09-02）
 
@@ -333,6 +340,72 @@ def apply(
 
 ## 9. 参考文档
 
-- **方案设计**：`docs/session-lifecycle-refactor.md` - 显式状态 vs 隐式状态方案对比、状态机设计、不变量规则
-- **审计报告**：`docs/session-lifecycle-refactor-audit.md` - 原有问题分析、双路径竞争时序
-- **长期记忆**：`.codebuddy/memory/MEMORY.md` - 重构决策和约定
+- **会话方案**：本地 `docs/self/` 中的会话生命周期稿（不上传）
+- **命令层决策**：`docs/adr/adr-command-layer-split.md`
+- **命令层方案**：`docs/design/command-layer-split.md`
+- **价格与排行持有**：`docs/design/price-and-ranking-ownership.md`
+- **透传中介**：`docs/adr/adr-inline-passthrough-helpers.md`
+
+---
+
+## 10. 命令层拆分复盘（2026-09-12）
+
+### 10.1 发生了什么
+
+拆分前，`SteamStatusMonitorV3` 同时是 AstrBot `Star` 子类、组合根、价格/排行/名单用例，以及 list / who / 测试卡的展示胶水。外部提议把约 18 条链路收到 `presentation/commands/`，把插件主体压到 100–150 行。
+
+方向对，但有三个硬约束：
+
+1. AstrBot 只扫描 `Star` 子类上的 `@filter.command`。独立函数不会被注册。33 条命令至少要留「装饰器 + 签名 + 一行转发」。
+2. 第 5 节原先反对先搬家再分层。把 `_steam_price` 原样搬进 `store_cmd.py`，只会得到四个仍依赖整个 `self` 的小 God 类。
+3. 刚删过透传中介。再加一层只 `return await plugin.xxx()` 的 commands，等于把空壳跳转加回来。
+
+拍板：**先让核心变成可测的 application 服务，再让 commands 做薄适配，最后让 plugin 只注册。** 行数是观察指标，不是验收标准。
+
+### 10.2 实际落地
+
+按「先可测边界、再挪胶水」，一次不搬 2000 行：
+
+| 步 | 提交 | 做了什么 |
+| --- | --- | --- |
+| 1 | `75200c6`、`56cfcfb` | `PriceQueryService`、`RankingService`、`runtime_config`；`MonitorControlService`、`PlayerStatusViewService`；Admin 补 `add_players` / 绑定 |
+| 2 | `c66c653`、`446564f` | `RankViewService`；排行推送与名单编排离开主类 |
+| 3 | `acf235e` | `presentation/commands/{monitor,store,rank,ops}.py`；`Star` 子类只留注册桩；推送组/清名单并进 Admin，Web 共用 |
+| 4 | `aa0ec8d` | 裁图/超能力/在线人数/列表触发者/日界回退离开组合根 |
+
+结果：
+
+- 插件主体约 370 行，只剩构造、生命周期和注册桩。
+- commands 里没有 `play_records[...] =`、没有 `httpx`、没有 `ITAD_CLIENT.search_games`。
+- `/steam addid` 与 Web `add_player` 对「已在他群监控」走同一套 Admin 规则。
+- `SessionService._on_closed` 与 `/steam rank` 共用 `RankingService`。
+- 护栏：`tests/unit/test_modular_structure.py` 用 AST 读主类装饰器，并禁止组合根再定义透传辅助。
+
+### 10.3 否掉的做法
+
+| 方案 | 否决原因 |
+| --- | --- |
+| 四个命令文件直接承接 18 条逻辑 | 名单规则和 list 出图捆在一起；Web 与群命令继续分叉 |
+| 命令做成 Mixin 多重继承 | MRO 已有轮询/通知/成就/持久化；注册表会散落各层 |
+| 动态扫描 commands 自行注册 | 权限装饰器丢失更难审；AST 护栏失效 |
+| 每个 HTTP 方法一个 application 包装 | 透传中介，client 已经是稳定边界 |
+| 为目录对称再拆 renderers / 引入 DI | 单进程一个 `Star` 实例，`self` 当组合根足够 |
+
+### 10.4 学到什么
+
+- **按变化原因分包，不要按入口分包。** 用户从哪条命令进来，不等于规则该住在那个文件。
+- **框架税要写进验收，不要当技术债去还。** 注册桩占主体大部分行数是 AstrBot 约束，压到 150 行只会把注册藏起来。
+- **先抽可测服务，搬家才是机械的。** 第 3 步能一次搬完，是因为第 1–2 步已经把核心从 handler 里掏空。
+- **JSON 持有权不要和命令面绑在一起。** 服务仍用属性代理读写插件 dict。真正迁 `play_records` 必须连 persistence 一起改，单独开一轮。
+- **commands 允许有胶水，不允许有核心规则。** `who` 解析 CQ、测试卡调 `render_*`、`/steam rs` 清状态，都是通道。区价回退、时长聚合、名单上限不是。
+
+### 10.5 残留与下一轮
+
+这一轮到此为止，不再继续拆命令层。残留不是没做完：
+
+- 注册桩必须留在 `Star` 子类。
+- `store.translate_game_query` 仍在命令模块，因为依赖 AstrBot LLM；组合根用闭包注入。
+- Mixin（轮询 / 通知 / 成就 / 持久化 / Steam 客户端 / `SessionQuitMixin`）不动。
+- JSON 仍落在插件 dict。
+
+下一轮该盯的是会话细粒度锁、成就补偿、JSON 持有权，不是再搬命令。决策全文见 `docs/adr/adr-command-layer-split.md`。

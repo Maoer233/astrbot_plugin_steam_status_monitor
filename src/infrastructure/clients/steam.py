@@ -275,10 +275,6 @@ class SteamClientMixin:
             logger.warning(f"获取 Steam 评价摘要失败: {exc} (appid={gid})")
             return None
 
-    async def fetch_game_reviews(self, appid, language="schinese"):
-        """获取 Steam 商店评价摘要（默认简体中文；language=None 表示全部语言）。"""
-        return await self._review_summary(appid, language)
-
     async def fetch_game_reviews_both(self, appid):
         """同时获取「全部语言」与「简体中文」两份评价摘要，供卡片并列显示。"""
         all_review, zh_review = await asyncio.gather(
@@ -439,6 +435,21 @@ class SteamClientMixin:
             logger.warning(f"获取游戏名失败: {e} (gameid={gid})")
         # 不缓存 fallback，让下次还能重试
         return fallback_name or "未知游戏"
+
+    async def get_game_online_count(self, gameid):
+        """通过 Steam Web API 获取当前游戏在线人数。"""
+        if not gameid:
+            return None
+        url = f"{self.STEAM_API_BASE}/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={gameid}"
+        try:
+            async with httpx.AsyncClient(timeout=10, **httpx_client_kwargs(self.proxy)) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data.get("response", {}).get("player_count")
+        except Exception as e:
+            logger.warning(f"获取在线人数失败: {e} (gameid={gameid})")
+        return None
 
     async def get_game_names(self, gameid, fallback_name=None):
         '''

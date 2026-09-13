@@ -97,20 +97,15 @@ def resolve_font_path(name: str, *, bold: bool = False) -> str | None:
         if found:
             break
     if not found:
-        _error_missing_once(name)
+        if name not in _logged_missing:
+            _logged_missing.add(name)
+            logger.error("[Font] 找不到字体文件 %s，卡片可能出现方块字", name)
         for path in _system_font_candidates(name, bold=bold):
             found = _existing_file(path)
             if found:
                 break
     _path_cache[cache_key] = found
     return found
-
-
-def _error_missing_once(name: str) -> None:
-    if name in _logged_missing:
-        return
-    _logged_missing.add(name)
-    logger.error("[Font] 找不到字体文件 %s，卡片可能出现方块字", name)
 
 
 def load_truetype(name: str, size: int, fallbacks: tuple[str, ...] | list[str] = ()):

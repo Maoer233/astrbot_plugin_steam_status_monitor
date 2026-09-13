@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from src.application.services.polling_tracking import PollingTrackingMixin
+from src.application.services.session_service import SessionService
 from src.infrastructure.persistence.plugin_data import PersistenceMixin
 
 
@@ -51,6 +52,7 @@ class GroupSwitchPersistenceTests(unittest.TestCase):
         plugin.group_recent_games = {}
         plugin.playing_sessions = {}
         plugin._session_meta = {}
+        plugin.session_service = SessionService(plugin)
         return plugin
 
     def test_existing_session_store_prevents_reimporting_legacy_pending_quit(self):

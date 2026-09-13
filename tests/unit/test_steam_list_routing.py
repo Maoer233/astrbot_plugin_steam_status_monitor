@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from src.application.services.player_status_view import PlayerStatusViewService
 from src.application.services.steam_list import handle_steam_list
 
 
@@ -35,22 +36,37 @@ class ListMonitor:
     def _resolve_bind_name(self, sid, name):
         return name
 
+    @property
+    def player_status_view(self):
+        return PlayerStatusViewService(self)
+
 
 def test_push_group_uses_primary_group_play_time_cache(monkeypatch):
-    async def fake_render(*args, **kwargs):
-        return "rendered"
+    captured = {}
+
+    async def fake_render(plugin, event, user_list, **kwargs):
+        captured["user_list"] = user_list
+        return "rendered.png"
 
     monkeypatch.setattr(
-        "src.application.services.steam_list.render_steam_list_image",
+        "src.application.services.steam_list.render_user_list_image",
         fake_render,
     )
 
+    class Event:
+        def get_group_id(self):
+            return "push"
+
+        def image_result(self, path):
+            return ("image", path)
+
     async def run():
-        event = type("Event", (), {"get_group_id": lambda self: "push"})()
-        result = [item async for item in handle_steam_list(ListMonitor(), event)]
-        assert result == ["rendered"]
+        result = [item async for item in handle_steam_list(ListMonitor(), Event())]
+        assert result == [("image", "rendered.png")]
 
     asyncio.run(run())
+    assert captured["user_list"][0]["status"] == "playing"
+    assert captured["user_list"][0]["play_str"] != "获取失败"
 
 
 class _StatusMonitor:
@@ -60,6 +76,7 @@ class _StatusMonitor:
         self.group_steam_ids = {"primary": ["sid1"]}
         self.push_groups = {}
         self.session_service = _SessionService()
+        self.proxy = None
         self._personastate = personastate
         self._gameid = gameid
 
@@ -80,6 +97,10 @@ class _StatusMonitor:
 
     def _resolve_bind_name(self, sid, name):
         return name
+
+    @property
+    def player_status_view(self):
+        return PlayerStatusViewService(self)
 
 
 @pytest.mark.parametrize("personastate,expected", [
