@@ -49,7 +49,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.8.0"
+        self._plugin_version = "4.8.1"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -150,16 +150,27 @@ class SteamStatusMonitorV3(
     async def terminate(self):
         '''插件被卸载/停用时取消所有后台任务并保存持久化数据'''
         # 取消主轮询循环和初始化任务，防止重载/禁用后残留多实例并发
-        for t in (getattr(self, '_poll_loop_task', None), getattr(self, '_init_poll_task', None), getattr(self, '_font_pack_task', None)):
+        pending = []
+        for t in (
+            getattr(self, '_poll_loop_task', None),
+            getattr(self, '_init_poll_task', None),
+            getattr(self, '_font_pack_task', None),
+            getattr(self, '_achievement_blacklist_verify_task', None),
+        ):
             if t and not t.done():
                 t.cancel()
+                pending.append(t)
         font_pack = getattr(self, 'font_pack', None)
         if font_pack:
             await font_pack.aclose()
         if hasattr(self, 'achievement_poll_tasks'):
             for task in self.achievement_poll_tasks.values():
-                task.cancel()
+                if task and not task.done():
+                    task.cancel()
+                    pending.append(task)
             self.achievement_poll_tasks.clear()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         self.achievement_snapshots.clear()
         # 保存持久化数据（强制落盘，不节流）
         self._save_persistent_data(force=True)
