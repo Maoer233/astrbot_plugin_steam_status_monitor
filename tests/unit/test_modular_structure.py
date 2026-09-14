@@ -16,8 +16,30 @@ class ModularStructureTests(unittest.TestCase):
 
         self.assertEqual(["Main"], [node.name for node in classes])
         self.assertEqual("SteamStatusMonitorV3", classes[0].bases[0].id)
+        extra = []
+        terminate = None
+        for node in classes[0].body:
+            if isinstance(node, (ast.Expr, ast.Pass)):
+                continue
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "terminate":
+                terminate = node
+                continue
+            extra.append(node)
+        self.assertEqual([], [type(node).__name__ for node in extra])
+        self.assertIsNotNone(
+            terminate,
+            "Main.terminate must live on the entry class; AstrBot only calls "
+            "terminate when it is present in star_cls_type.__dict__.",
+        )
         self.assertTrue(
-            all(isinstance(node, (ast.Expr, ast.Pass)) for node in classes[0].body)
+            any(
+                isinstance(node, ast.Await)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)
+                and node.value.func.attr == "terminate"
+                for node in ast.walk(terminate)
+            ),
+            "Main.terminate must await super().terminate().",
         )
         self.assertTrue(
             any(
@@ -26,6 +48,39 @@ class ModularStructureTests(unittest.TestCase):
                 and any(alias.name == "SteamStatusMonitorV3" for alias in node.names)
                 for node in imports
             )
+        )
+
+    def test_plugin_terminate_cancels_and_awaits_background_tasks(self):
+        source = (PROJECT_ROOT / "src/plugin/steam_status_monitor.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        plugin_class = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "SteamStatusMonitorV3"
+        )
+        terminate = next(
+            node
+            for node in plugin_class.body
+            if isinstance(node, ast.AsyncFunctionDef) and node.name == "terminate"
+        )
+        names = set()
+        for node in ast.walk(terminate):
+            if isinstance(node, ast.Attribute):
+                names.add(node.attr)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                names.add(node.value)
+        self.assertTrue({"_poll_loop_task", "_init_poll_task"} <= names)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Await)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)
+                and node.value.func.attr == "gather"
+                for node in ast.walk(terminate)
+            ),
+            "terminate must await cancelled tasks; cancel() alone leaves the old loop running.",
         )
 
     def test_layered_modules_and_assets_exist(self):

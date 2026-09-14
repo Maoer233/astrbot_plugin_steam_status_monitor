@@ -18,7 +18,7 @@ class FakePollingPlugin(PollingTrackingMixin):
             def __init__(self, outer):
                 self._outer = outer
 
-            def tick_due(self, now):
+            async def tick_due(self, now):
                 self._outer.ticks.append(now)
 
         self.session_service = _Sessions(self)
@@ -38,6 +38,29 @@ class PollingLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"sid": {"gameid": "1"}})
         self.assertGreaterEqual(len(plugin.ticks), 1)
         self.assertGreaterEqual(plugin.flushes, 1)
+
+    async def test_cancel_and_await_stops_background_loop(self):
+        ran = {"n": 0}
+
+        async def loop():
+            try:
+                while True:
+                    ran["n"] += 1
+                    await asyncio.sleep(0.01)
+            except asyncio.CancelledError:
+                raise
+
+        task = asyncio.create_task(loop())
+        await asyncio.sleep(0.03)
+        pending = []
+        if not task.done():
+            task.cancel()
+            pending.append(task)
+        await asyncio.gather(*pending, return_exceptions=True)
+        stopped = ran["n"]
+        await asyncio.sleep(0.03)
+        self.assertEqual(stopped, ran["n"])
+        self.assertTrue(task.done())
 
 
 class GroupSwitchPersistenceTests(unittest.TestCase):

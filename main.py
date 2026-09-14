@@ -11,6 +11,10 @@ from .src.plugin.steam_status_monitor import SteamStatusMonitorV3
 class Main(SteamStatusMonitorV3):
     """AstrBot plugin entry point."""
 
+    async def terminate(self):
+        # AstrBot 只调用入口类自身 __dict__ 里的 terminate，继承来的方法不会被调用。
+        await super().terminate()
+
 
 # AstrBot 通过模块路径把处理器绑定到插件实例。处理器定义在实现模块，
 # 入口类定义在当前模块，因此需要将处理器归属调整到运行时入口模块。
