@@ -190,7 +190,10 @@ class PersistenceMixin:
         if not hasattr(self, 'notify_sessions'):
             self.notify_sessions = {}
         filled = 0
-        for gid in getattr(self, 'group_steam_ids', {}) or {}:
+        group_ids = set(getattr(self, 'group_steam_ids', {}) or {})
+        for targets in (getattr(self, 'push_groups', {}) or {}).values():
+            group_ids.update(str(gid) for gid in (targets or []))
+        for gid in group_ids:
             if not is_valid_group_id(gid):
                 continue
             current = self.notify_sessions.get(gid)

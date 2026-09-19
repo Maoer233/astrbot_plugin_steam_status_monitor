@@ -69,6 +69,40 @@ def test_push_group_uses_primary_group_play_time_cache(monkeypatch):
     assert captured["user_list"][0]["play_str"] != "获取失败"
 
 
+def test_handle_steam_list_uses_passed_group_id(monkeypatch):
+    captured = {}
+
+    async def fake_render(plugin, event, user_list, **kwargs):
+        captured["user_list"] = user_list
+        return "rendered.png"
+
+    monkeypatch.setattr(
+        "src.application.services.steam_list.render_user_list_image",
+        fake_render,
+    )
+
+    class Event:
+        def get_group_id(self):
+            return None
+
+        def image_result(self, path):
+            return ("image", path)
+
+    async def run():
+        result = [
+            item
+            async for item in handle_steam_list(
+                ListMonitor(),
+                Event(),
+                group_id="push",
+            )
+        ]
+        assert result == [("image", "rendered.png")]
+
+    asyncio.run(run())
+    assert captured["user_list"][0]["sid"] == "sid-primary"
+
+
 class _StatusMonitor:
     def __init__(self, personastate, gameid=None):
         self.config = {}

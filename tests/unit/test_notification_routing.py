@@ -104,6 +104,52 @@ class NotificationRoutingTests(unittest.TestCase):
 
         self.assertEqual([], self.get_notify_sessions(plugin, "", sid))
 
+    def test_qq_official_openid_session_is_kept(self):
+        sid = "test-steam-id"
+        plugin = type("Plugin", (), {})()
+        plugin.notify_sessions = {
+            "GROUP_OPENID_1": "4013550048:GroupMessage:GROUP_OPENID_1",
+        }
+        plugin.group_steam_ids = {"GROUP_OPENID_1": [sid]}
+        plugin.push_groups = {}
+
+        self.assertEqual(
+            ["4013550048:GroupMessage:GROUP_OPENID_1"],
+            self.get_notify_sessions(plugin, "GROUP_OPENID_1", sid),
+        )
+
+    def test_qq_official_push_group_receives_notification(self):
+        sid = "test-steam-id"
+        plugin = type("Plugin", (), {})()
+        plugin.notify_sessions = {
+            "GROUP_OPENID_1": "4013550048:GroupMessage:GROUP_OPENID_1",
+            "GROUP_OPENID_2": "4013550048:GroupMessage:GROUP_OPENID_2",
+        }
+        plugin.group_steam_ids = {"GROUP_OPENID_1": [sid], "GROUP_OPENID_2": []}
+        plugin.push_groups = {sid: ["GROUP_OPENID_2"]}
+
+        self.assertEqual(
+            [
+                "4013550048:GroupMessage:GROUP_OPENID_1",
+                "4013550048:GroupMessage:GROUP_OPENID_2",
+            ],
+            self.get_notify_sessions(plugin, "GROUP_OPENID_1", sid),
+        )
+
+    def test_push_group_without_notify_session_is_skipped(self):
+        sid = "test-steam-id"
+        plugin = type("Plugin", (), {})()
+        plugin.notify_sessions = {
+            "GROUP_OPENID_1": "4013550048:GroupMessage:GROUP_OPENID_1",
+        }
+        plugin.group_steam_ids = {"GROUP_OPENID_1": [sid]}
+        plugin.push_groups = {sid: ["GROUP_OPENID_2"]}
+
+        self.assertEqual(
+            ["4013550048:GroupMessage:GROUP_OPENID_1"],
+            self.get_notify_sessions(plugin, "GROUP_OPENID_1", sid),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

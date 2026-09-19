@@ -286,13 +286,51 @@ def test_add_push_route_requires_primary_and_is_idempotent():
     assert missing.changed is False
     assert "未找到已轮询该SteamID的主群" in missing.message
 
-    added = service.add_push_route("222", sid)
+    added = service.add_push_route(
+        "222",
+        sid,
+        notify_session="3640631607:GroupMessage:0_222",
+    )
     assert added.changed is True
     assert plugin.push_groups[sid] == ["222"]
+    assert plugin.notify_sessions["222"] == "3640631607:GroupMessage:0_222"
+    assert plugin.notify_saves == 1
 
     again = service.add_push_route("222", sid)
     assert again.changed is False
     assert again.message == "本群已在该SteamID的推送组中。"
+
+
+def test_add_push_route_accepts_qq_official_group_openid():
+    sid = "76561198000000001"
+    plugin = PluginStub({"GROUP_OPENID_1": [sid]})
+    service = MonitorAdminService(plugin)
+
+    result = service.add_push_route(
+        "GROUP_OPENID_2",
+        sid,
+        notify_session="4013550048:GroupMessage:GROUP_OPENID_2",
+    )
+
+    assert result.changed is True
+    assert plugin.push_groups[sid] == ["GROUP_OPENID_2"]
+    assert plugin.notify_sessions["GROUP_OPENID_2"] == "4013550048:GroupMessage:GROUP_OPENID_2"
+
+
+def test_add_player_push_group_records_notify_session():
+    sid = "76561198000000001"
+    plugin = PluginStub({"GROUP_OPENID_1": [sid], "GROUP_OPENID_2": []})
+    service = MonitorAdminService(plugin)
+
+    result = service.add_player(
+        "GROUP_OPENID_2",
+        sid,
+        notify_session="4013550048:GroupMessage:GROUP_OPENID_2",
+    )
+
+    assert result.message == "added as push group"
+    assert plugin.push_groups[sid] == ["GROUP_OPENID_2"]
+    assert plugin.notify_sessions["GROUP_OPENID_2"] == "4013550048:GroupMessage:GROUP_OPENID_2"
 
 
 def test_remove_push_route_uses_explicit_target_message():

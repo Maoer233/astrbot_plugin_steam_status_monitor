@@ -49,7 +49,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.8.1"
+        self._plugin_version = "4.8.2"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -188,7 +188,7 @@ class SteamStatusMonitorV3(
     @filter.command("steam addid")
     async def steam_addid(self, event: AstrMessageEvent, steamid: str, at_user: str = "", nickname: str = ""):
         '''添加SteamID到本群监控列表（分群），支持逗号分隔多个ID，支持SteamID/个人资料链接/自定义ID/好友码
-        末尾可加 @用户 [备注名] 绑定QQ与SteamID'''
+        末尾可加 @用户 [备注名] 绑定 QQ / 官方机器人用户 OpenID 与 SteamID'''
         async for result in monitor.addid(self, event, steamid, at_user, nickname):
             yield result
 
@@ -312,14 +312,14 @@ class SteamStatusMonitorV3(
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("steamwho")
-    async def steam_who(self, event: AstrMessageEvent, qq: str):
+    async def steam_who(self, event: AstrMessageEvent, qq: str = ""):
         '''查询指定QQ绑定的Steam玩家状态（ /steamwho @用户 或 /在干嘛 @用户 ）'''
         async for result in monitor.who(self, event, qq):
             yield result
 
     @filter.permission_type(filter.PermissionType.MEMBER)
     @filter.command("在干嘛")
-    async def steam_zai_gan_ma(self, event: AstrMessageEvent, qq: str):
+    async def steam_zai_gan_ma(self, event: AstrMessageEvent, qq: str = ""):
         '''/在干嘛 @用户 —— steamwho 的别名'''
         async for result in monitor.who(self, event, qq):
             yield result

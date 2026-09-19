@@ -107,6 +107,22 @@ class RankViewTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("请在群聊中开启排行榜推送。", result.message)
         self.assertEqual([], plugin.rank_push_groups)
 
+    def test_configure_push_accepts_qq_official_group_openid(self):
+        plugin = SimpleNamespace(
+            rank_push_groups=[],
+            rank_push_all=False,
+            saves=0,
+            _save_rank_push_groups=lambda: setattr(plugin, "saves", plugin.saves + 1),
+        )
+        view = RankViewService(plugin)
+        result = view.configure_push("", "GROUP_OPENID_1")
+        self.assertEqual("已开启本群每日排行榜自动推送。", result.message)
+        self.assertEqual(["GROUP_OPENID_1"], plugin.rank_push_groups)
+
+        deleted = view.configure_push("del GROUP_OPENID_1", "other")
+        self.assertEqual("已关闭群 GROUP_OPENID_1 的每日排行榜推送。", deleted.message)
+        self.assertEqual([], plugin.rank_push_groups)
+
     async def test_push_daily_skips_empty_and_sends_once_per_scope(self):
         sent = []
 

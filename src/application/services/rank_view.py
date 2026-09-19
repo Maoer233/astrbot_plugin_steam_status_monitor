@@ -149,7 +149,8 @@ class RankViewService:
 
     def configure_push(self, param: str, group_id: Optional[str] = None) -> "RankPushConfigResult":
         plugin = self._plugin
-        action = (param or "").strip().lower()
+        raw = (param or "").strip()
+        action = raw.split()[0].lower() if raw else ""
         groups = list(getattr(plugin, "rank_push_groups", []) or [])
         if action == "list":
             if groups:
@@ -163,7 +164,7 @@ class RankViewService:
         if action == "test":
             return RankPushConfigResult("正在生成昨日排行榜，稍等...", should_push=True)
         if action.startswith("del"):
-            parts = action.split()
+            parts = raw.split()
             target = parts[1] if len(parts) >= 2 else (group_id or "default")
             if target in plugin.rank_push_groups:
                 plugin.rank_push_groups.remove(target)

@@ -4,6 +4,7 @@ from typing import Optional
 
 from ...presentation.renderers.steam_list import render_steam_list_image
 from ...presentation.renderers.game_start import get_avatar_frame_url, get_avatar_frame_path
+from ...shared.utils.mentions import qq_avatar_url
 from .player_status_view import PlayerStatusViewService, build_player_row
 
 __all__ = ["build_player_row", "handle_steam_list", "render_user_list_image", "list_parent"]
@@ -16,7 +17,7 @@ def list_parent(event):
         sender_name = event.get_sender_name()
     except Exception:
         return None, None
-    url = f"https://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640" if sender_id else None
+    url = qq_avatar_url(sender_id)
     return sender_name, url
 
 
@@ -79,15 +80,23 @@ async def render_user_list_image(plugin, event, user_list, *, font_path: Optiona
             return tmp.name
 
 
-async def handle_steam_list(self, event, *, font_path: Optional[str] = None, proxy: str = None, **_kwargs):
+async def handle_steam_list(
+    self,
+    event,
+    *,
+    group_id: Optional[str] = None,
+    font_path: Optional[str] = None,
+    proxy: str = None,
+    **_kwargs,
+):
     """列出所有玩家当前状态（图片美化版，分群支持）"""
-    group_id = None
-    if hasattr(event, "get_group_id"):
-        group_id = str(event.get_group_id())
-    elif hasattr(event, "group_id"):
-        group_id = str(event.group_id)
-    else:
-        group_id = "default"
+    if not group_id:
+        if hasattr(event, "get_group_id"):
+            group_id = str(event.get_group_id() or "default")
+        elif hasattr(event, "group_id"):
+            group_id = str(event.group_id or "default")
+        else:
+            group_id = "default"
     view = getattr(self, "player_status_view", None) or PlayerStatusViewService(self)
     user_list = await view.build_group_rows(group_id)
     tmp_path = await render_user_list_image(self, event, user_list, font_path=font_path, proxy=proxy)

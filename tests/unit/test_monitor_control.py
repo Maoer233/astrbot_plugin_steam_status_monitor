@@ -60,6 +60,23 @@ class MonitorControlServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.ok)
         self.assertEqual("empty_watchlist", result.code)
 
+    async def test_start_accepts_qq_official_group_openid(self):
+        plugin = PluginStub()
+        plugin.group_steam_ids = {"GROUP_OPENID_1": ["s1"]}
+        service = MonitorControlService(plugin)
+
+        result = await service.start(
+            "GROUP_OPENID_1",
+            notify_session="4013550048:GroupMessage:GROUP_OPENID_1",
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual("started", result.code)
+        self.assertEqual(
+            "4013550048:GroupMessage:GROUP_OPENID_1",
+            plugin.notify_sessions["GROUP_OPENID_1"],
+        )
+
     def test_stop_clears_runtime_and_cancels_achievement_tasks(self):
         plugin = PluginStub()
         plugin.running_groups.add("111")
