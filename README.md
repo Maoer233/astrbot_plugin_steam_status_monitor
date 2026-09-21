@@ -20,7 +20,7 @@
 - **多种 ID 输入格式**：`addid` 现支持 SteamID64、个人资料链接、自定义 vanity URL、`s.team` 短链、8 位好友码等多种格式
 - **通知开关精细化**：可独立控制游戏结束通知、成就推送、以及图片/文本推送方式
 - **结束卡长名**：长游戏名按开始卡同一套策略拉长画布并换行，不再截断
-- **无效会话过滤**：跳过空群号 / `GroupMessage:0_` 等无法投递的 QQ 会话，避免主动推送报错
+- **无效会话过滤**：跳过空群号 / `GroupMessage:0_` 等无法投递的 QQ 会话；QQ 官方机器人群 OpenID 可作为监控键和推送目标
 - **超时不堵结束卡**：Steam 查询超时期间仍结算到期会话并立刻推送结束通知，不会攒到下次开局
 - **网络代理支持**：可配置 http / https / socks5 代理，改善网络环境下的数据获取稳定性
 - **字体运行时下载**：商店包不含约 39MB CJK 字体；启动后后台从 [fonts-bundle](https://github.com/Maoer233/astrbot_plugin_steam_status_monitor/releases/tag/fonts-bundle) 下载并校验，可用 `/steam fonts` 查看进度。下载完成前卡片可能暂时缺字
@@ -81,7 +81,8 @@
 - 如果出现未知的轮询错误可以使用 `/steam clear_allids` 来清除所有群聊的轮询 id。
 - 修改插件参数后如出现重复通知，重载插件即可停掉旧轮询；仍异常时再重启 AstrBot。
 - 如果出现未知的无法提醒，但轮询显示正常的情况，请使用 `/steam on/off` 进行修复。`/steam off` 会持久保存，重启后本群仍保持关闭。
-- `/steam addid`、`/steam on`、排行榜推送只能在群聊使用。私聊写入空群号会导致 QQ 主动推送缺少数字 `session_id`。
+- `/steam addid`、`/steam on`、`/steam push_group`、排行榜推送只能在群聊使用。NapCat / go-cqhttp 用数字群号；QQ 官方机器人用群 OpenID（不要填普通 QQ 群号）。联动群也要在目标群里执行一次命令，才能记下该群的投递会话。
+- `/steam addid ... @用户`、`/steamwho`、`/在干嘛` 在官方机器人下绑定的是用户 OpenID，不是普通 QQ 号。`/steam rank_on del` 删除推送时不要改 OpenID 大小写。
 - Steam 查询出现 `ConnectTimeout` / `ReadTimeout` 时，结束卡仍会按时发出，不会等到下次开局才补发。网络不稳定时建议开启代理。
 - 监控人数较多时，建议适当调高 `max_group_size` 并保持智能轮询，以兼顾时效与 Steam 限流。
 - Steam 摘要同一时刻只有一个 `gameid`，插件不能识别「同时玩多款游戏」，A→B 会视为切换并立即结算 A。
@@ -208,6 +209,10 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V4.8.2
+  - **QQ 官方机器人监控**：`/steam on`、`/steam addid`、排行榜推送和 WebUI 加群不再只认纯数字群号。官方机器人群 OpenID 可作为监控键；主动推送保留完整 OpenID 会话，不再按下划线拆成数字 `session_id`。
+  - **多群主子路由**：子群 `/steam addid` 或 `/steam push_group` 会登记本群投递会话；主群状态变化可推到官方机器人群 OpenID 联动群。子群没有会话时仍只推主群。
+  - **官方机器人指令**：`/steam addid @用户`、`/steamwho`、`/在干嘛` 可解析用户 OpenID；`/steam rank_on del` 删除推送时保留 OpenID 大小写。`/steam list` 使用传入的群 OpenID，不再只从事件里重取群号。
 - V4.8.1
   - **热重载重复推送**：AstrBot 只调用入口类自身 `__dict__` 里的 `terminate`。V4.8.0 把实现拆到父类后，商店升级/热重载不会取消旧轮询，导致同一状态推送两条。在 `Main` 上转发 `terminate`，并等待已取消的后台任务结束。
 - V4.8.0（2026/09/13）

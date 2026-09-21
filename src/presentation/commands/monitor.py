@@ -4,6 +4,7 @@ from ...application.services.steam_list import handle_steam_list, render_user_li
 from ...application.services.player_status_view import format_alllist_text, sort_rows_for_image
 from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
+from ...shared.utils.mentions import parse_mentioned_user_id
 from ...shared.utils.notify_session import is_valid_group_id
 from . import group_id_of
 
@@ -21,13 +22,8 @@ async def addid(plugin, event, steamid: str, at_user: str = "", nickname: str = 
     if not is_valid_group_id(group_id):
         yield event.plain_result("请在群聊中使用该命令，或到 WebUI 填写有效群号后再添加。")
         return
-    bind_qq = None
-    bind_nickname = None
-    if at_user:
-        match = re.search(r'\[CQ:at,qq=(\d+)\]|\[At:(\d+)\]|@.+?\((\d+)\)|@(\d+)', at_user.strip())
-        bind_qq = (match.group(1) or match.group(2) or match.group(3) or match.group(4)) if match else None
-    if nickname:
-        bind_nickname = nickname.strip()
+    bind_qq = parse_mentioned_user_id(at_user, event=event)
+    bind_nickname = nickname.strip() if nickname else None
     raw_list = [item.strip() for item in re.split(r'[,，]+', steamid) if item.strip()]
     resolved_list = []
     invalid_list = []
@@ -97,9 +93,11 @@ async def list_status(plugin, event):
         yield result
 
 
-async def who(plugin, event, qq: str):
-    match = re.search(r'\[CQ:at,qq=(\d+)\]|\[At:(\d+)\]|@.+?\((\d+)\)|@(\d+)', qq.strip())
-    qq_clean = match.group(1) or match.group(2) or match.group(3) or match.group(4) if match else qq.strip().lstrip('@')
+async def who(plugin, event, qq: str = ""):
+    qq_clean = parse_mentioned_user_id(qq, event=event)
+    if not qq_clean:
+        yield event.plain_result("请 @用户 或提供 QQ 号 / 官方机器人用户 OpenID。")
+        return
     info = getattr(plugin, "_bind_data", {}).get(qq_clean)
     if not info:
         yield event.plain_result(f"QQ {qq_clean} 未绑定任何SteamID，请先使用 /steam addid SteamID @{qq_clean}")
@@ -161,7 +159,18 @@ async def alllist(plugin, event, mode: str = "img"):
 
 
 async def push_group(plugin, event, steamid: str):
-    yield event.plain_result(plugin.monitor_admin.add_push_route(group_id_of(event), steamid).message)
+    sid = await plugin.resolve_steam_input(steamid)
+    if not sid or not sid.isdigit() or len(sid) != 17:
+        yield event.plain_result("无法解析为有效SteamID，支持格式：17位SteamID64 / 个人资料链接 / 8位好友码")
+        return
+    result = plugin.monitor_admin.add_push_route(
+        group_id_of(event),
+        sid,
+        notify_session=event.unified_msg_origin,
+    )
+    if result.changed:
+        plugin._record_platform_id(event)
+    yield event.plain_result(result.message)
 
 
 async def delpush_group(plugin, event, steamid: str, target_group: str = ''):

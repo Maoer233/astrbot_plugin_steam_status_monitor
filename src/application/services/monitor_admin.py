@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 from ...domain.monitoring import MonitorStateStore
 from ...shared.logging import logger
-from ...shared.utils.notify_session import is_valid_group_id
+from ...shared.utils.notify_session import is_sendable_group_session, is_valid_group_id
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,22 @@ class MonitorAdminService:
     def max_group_size(self) -> int:
         return self._plugin.max_group_size
 
-    def add_player(self, group_id: str, steam_id: str) -> GroupMutationResult:
+    def _remember_notify_session(self, group_id: str, notify_session: Optional[str] = None) -> None:
+        if not notify_session or not is_sendable_group_session(notify_session):
+            return
+        plugin = self._plugin
+        if not hasattr(plugin, "notify_sessions") or plugin.notify_sessions is None:
+            plugin.notify_sessions = {}
+        plugin.notify_sessions[group_id] = notify_session
+        plugin._save_notify_session()
+
+    def add_player(
+        self,
+        group_id: str,
+        steam_id: str,
+        *,
+        notify_session: Optional[str] = None,
+    ) -> GroupMutationResult:
         if not is_valid_group_id(group_id):
             return GroupMutationResult(False, "invalid group_id")
         steam_ids = self.groups.setdefault(group_id, [])
@@ -61,7 +76,9 @@ class MonitorAdminService:
             if group_id not in targets:
                 targets.append(group_id)
                 self._plugin._save_push_groups()
+                self._remember_notify_session(group_id, notify_session)
                 return GroupMutationResult(True, "added as push group")
+            self._remember_notify_session(group_id, notify_session)
             return GroupMutationResult(False, "already push group")
 
         if len(steam_ids) >= self.max_group_size:
@@ -90,7 +107,7 @@ class MonitorAdminService:
         pushed_primary_groups = {}
         limit = self.max_group_size
         for sid in steam_ids:
-            result = self.add_player(group_id, sid)
+            result = self.add_player(group_id, sid, notify_session=notify_session)
             if result.message == "already exists":
                 already.append(sid)
                 if bind_qq or bind_nickname:
@@ -267,7 +284,15 @@ class MonitorAdminService:
         self._plugin._save_group_steam_ids()
         return GroupMutationResult(True)
 
-    def add_push_route(self, group_id: str, steam_id: str) -> GroupMutationResult:
+    def add_push_route(
+        self,
+        group_id: str,
+        steam_id: str,
+        *,
+        notify_session: Optional[str] = None,
+    ) -> GroupMutationResult:
+        if not is_valid_group_id(group_id):
+            return GroupMutationResult(False, "请在群聊中使用该命令，私聊无法设置联动推送。")
         if not str(steam_id).isdigit() or len(str(steam_id)) != 17:
             return GroupMutationResult(False, "SteamID无效（需为64位数字串，17位）")
         if self.primary_group_of(steam_id) is None:
@@ -276,10 +301,13 @@ class MonitorAdminService:
         if push_groups is None:
             push_groups = self._plugin.push_groups = {}
         targets = push_groups.setdefault(steam_id, [])
-        if group_id in targets:
+        already = group_id in targets
+        if not already:
+            targets.append(group_id)
+            self._plugin._save_push_groups()
+        self._remember_notify_session(group_id, notify_session)
+        if already:
             return GroupMutationResult(False, "本群已在该SteamID的推送组中。")
-        targets.append(group_id)
-        self._plugin._save_push_groups()
         return GroupMutationResult(True, f"本群已加入SteamID {steam_id} 的联动推送组。")
 
     def remove_push_route(
