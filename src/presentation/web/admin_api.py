@@ -175,6 +175,7 @@ class WebAdminAPI:
         r("GET", "/heatmap/data", self._api_heatmap_data)
         r("GET", "/heatmap/player/<steamid>", self._api_heatmap_player)
         r("GET", "/groups", self._api_groups_list)
+        r("GET", "/groups/names", self._api_groups_names)
         r("POST", "/groups/add", self._api_groups_add)
         r("POST", "/groups/delete", self._api_groups_delete)
         r("POST", "/groups/add-group", self._api_groups_add_group)
@@ -609,6 +610,47 @@ class WebAdminAPI:
             lambda: asyncio.to_thread(build_groups, self.plugin),
         )
         return json_response({"groups": groups})
+
+    async def _api_groups_names(self, request):
+        """获取所有群聊的名称（通过 AstrBot API）"""
+        p = self.plugin
+        group_names = {}
+        
+        for group_id in (p.group_steam_ids or {}).keys():
+            try:
+                # 尝试从 notify_sessions 获取 session 信息
+                session = (p.notify_sessions or {}).get(group_id, "")
+                if not session:
+                    group_names[group_id] = group_id
+                    continue
+                
+                # 解析 session 获取 platform_id
+                parts = session.split(":", 2)
+                if len(parts) < 3:
+                    group_names[group_id] = group_id
+                    continue
+                
+                platform_id = parts[0]
+                
+                # 调用 AstrBot API 获取群信息
+                try:
+                    platform = p.context.get_platform_inst(platform_id)
+                    if platform and hasattr(platform, "get_group_info"):
+                        info = await platform.get_group_info(group_id)
+                        if info and isinstance(info, dict):
+                            group_names[group_id] = info.get("group_name", group_id)
+                        else:
+                            group_names[group_id] = group_id
+                    else:
+                        group_names[group_id] = group_id
+                except Exception as e:
+                    logger.debug(f"获取群 {group_id} 名称失败: {e}")
+                    group_names[group_id] = group_id
+            except Exception as e:
+                logger.debug(f"处理群 {group_id} 时出错: {e}")
+                group_names[group_id] = group_id
+        
+        return json_response({"group_names": group_names})
 
     async def _api_groups_add(self, request):
         p = self.plugin
