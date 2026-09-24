@@ -194,7 +194,7 @@ class MonitorAdminService:
         return True
 
     def remove_player(self, group_id: str, steam_id: str) -> GroupMutationResult:
-        """删除当前群关系：分发群只移除自身路由，主群删除全局主监控与路由。"""
+        """删除当前群关系：分发群只移除自身路由，主群删除时若有分发路由则晋升其一为新主群。"""
         push_groups = getattr(self._plugin, "push_groups", {}) or {}
         direct_owner = next(
             (
@@ -205,6 +205,7 @@ class MonitorAdminService:
             None,
         )
 
+        # 场景1: 删除分发路由群 - 仅移除自身路由，保留主群监控
         targets = push_groups.get(steam_id, [])
         if str(group_id) != str(direct_owner):
             if str(group_id) not in {str(target) for target in targets}:
@@ -215,6 +216,45 @@ class MonitorAdminService:
             self._plugin._save_push_groups()
             return GroupMutationResult(True, "removed push route")
 
+        # 场景2: 删除主群监控 - 检查是否需要状态晋升
+        if targets:
+            # 存在分发路由群，执行状态晋升
+            new_primary = self._select_promotion_candidate(targets)
+            logger.info(f"[状态晋升] SteamID {steam_id} 主群 {group_id} 删除，晋升 {new_primary} 为新主群")
+            
+            # 2.1 迁移主监控关系
+            self.groups.setdefault(new_primary, []).append(steam_id)
+            targets.remove(new_primary)
+            if not targets:
+                push_groups.pop(steam_id, None)
+            
+            # 2.2 迁移状态数据
+            self._migrate_state_data(group_id, new_primary, steam_id)
+            
+            # 2.3 清理原主群记录
+            self.groups[group_id] = [sid for sid in self.groups[group_id] if sid != steam_id]
+            if not self.groups[group_id]:
+                del self.groups[group_id]
+                # 原主群已空，停止该群的监控轮询
+                running_groups = getattr(self._plugin, 'running_groups', set())
+                running_groups.discard(group_id)
+                monitor_enabled = getattr(self._plugin, 'group_monitor_enabled', {})
+                monitor_enabled.pop(group_id, None)
+                notify_sessions = getattr(self._plugin, 'notify_sessions', {})
+                notify_sessions.pop(group_id, None)
+                self._plugin._save_notify_session()
+                self._plugin._save_group_switches()
+            
+            # 持久化
+            self._plugin._save_group_steam_ids()
+            self._plugin._save_push_groups()
+            
+            return GroupMutationResult(
+                True,
+                f"removed primary monitor, promoted {new_primary} as new primary"
+            )
+        
+        # 场景3: 无分发路由群 - 完全删除
         for owner, owner_ids in list(self.groups.items()):
             self.groups[owner] = [sid for sid in owner_ids if sid != steam_id]
             if not self.groups[owner]:
@@ -235,6 +275,36 @@ class MonitorAdminService:
         self._clear_runtime_state(steam_id)
         self._remove_bindings(steam_id)
         return GroupMutationResult(True, "removed primary monitor and all push routes")
+    
+    def _select_promotion_candidate(self, targets: list) -> str:
+        """从分发路由群中选择晋升候选。优先选择已启用监控的群，否则返回第一个。"""
+        running_groups = getattr(self._plugin, 'running_groups', set())
+        for target in targets:
+            if target in running_groups:
+                return target
+        return targets[0]
+    
+    def _migrate_state_data(self, old_group: str, new_group: str, steam_id: str) -> None:
+        """迁移状态数据从原主群到新主群。"""
+        state = self._state
+        
+        # 迁移玩家状态
+        if old_group in state.group_last_states and steam_id in state.group_last_states[old_group]:
+            old_state = state.group_last_states[old_group][steam_id]
+            state.group_last_states.setdefault(new_group, {})[steam_id] = old_state
+            logger.info(f"[状态晋升] 迁移 group_last_states: {old_group}[{steam_id}] -> {new_group}[{steam_id}]")
+        
+        # 迁移退出时间
+        if old_group in state.group_last_quit_times and steam_id in state.group_last_quit_times[old_group]:
+            quit_times = state.group_last_quit_times[old_group][steam_id]
+            state.group_last_quit_times.setdefault(new_group, {})[steam_id] = quit_times
+            logger.info(f"[状态晋升] 迁移 group_last_quit_times: {old_group}[{steam_id}] -> {new_group}[{steam_id}]")
+        
+        # 迁移轮询时间
+        if old_group in state.next_poll_time and steam_id in state.next_poll_time[old_group]:
+            poll_time = state.next_poll_time[old_group][steam_id]
+            state.next_poll_time.setdefault(new_group, {})[steam_id] = poll_time
+            logger.info(f"[状态晋升] 迁移 next_poll_time: {old_group}[{steam_id}] -> {new_group}[{steam_id}]")
 
     def _clear_runtime_state(self, steam_id: str) -> None:
         state = self._state
