@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from src.infrastructure.clients.itad import ITADClient
+from src.infrastructure.clients.itad import ITADClient, ITADGame
 from src.shared.utils.price import extract_price_query
 
 
@@ -153,6 +153,57 @@ class SteamItemRankingTests(unittest.TestCase):
         filtered = client._filter_steam_items(items, "ELDEN RING", 6)
 
         self.assertEqual(["1245620", "3655690"], [item["id"] for item in filtered])
+
+
+class SearchAssociationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_deduplicates_same_itad_id_and_binds_appid(self):
+        client = ITADClient(api_key="test")
+        steam_items = [
+            {"id": "1245620", "name": "ELDEN RING", "tiny_image": "base.jpg"},
+            {"id": "1245621", "name": "ELDEN RING", "tiny_image": "alt.jpg"},
+        ]
+        with (
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
+            patch.object(client, "_steam_english_title", AsyncMock(return_value="ELDEN RING™")),
+            patch.object(client, "_get", AsyncMock(return_value=[
+                {"id": "itad-elden", "title": "ELDEN RING\x99"},
+            ])),
+        ):
+            games = await client.search_games("ELDEN RING")
+
+        self.assertEqual(1, len(games))
+        self.assertEqual("itad-elden", games[0].id)
+        self.assertEqual("1245620", games[0].appid)
+        self.assertEqual("base.jpg", games[0].image)
+        self.assertFalse(hasattr(client, "resolve_query"))
+        self.assertFalse(hasattr(client, "match_itad_game"))
+        self.assertFalse(hasattr(client, "deduplicate_games"))
+
+    async def test_itad_fallback_binds_exact_steam_appid(self):
+        client = ITADClient(api_key="test")
+        with (
+            patch.object(client, "_lookup_steam_items", AsyncMock(return_value=[])),
+            patch.object(client, "_get", AsyncMock(return_value=[
+                {"id": "itad-elden", "title": "ELDEN RING"},
+            ])),
+            patch.object(client, "_steam_search", AsyncMock(return_value=[
+                {"id": "1245620", "name": "ELDEN RING", "tiny_image": "base.jpg"},
+                {"id": "3655690", "name": "ELDEN RING Tarnished Pack"},
+            ])),
+        ):
+            games = await client.search_games("ELDEN RING")
+
+        self.assertEqual("itad-elden", games[0].id)
+        self.assertEqual("1245620", games[0].appid)
+
+    def test_temporary_identity_is_not_matched_as_itad_id(self):
+        matched = ITADClient._match_itad_game("ELDEN RING™", [
+            ITADGame("steam:1245620", "ELDEN RING™"),
+            ITADGame("itad-elden", "ELDEN RING\x99"),
+        ])
+
+        self.assertEqual("itad-elden", matched.id)
 
 
 class SteamEnglishTitleTests(unittest.IsolatedAsyncioTestCase):

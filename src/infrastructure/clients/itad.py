@@ -404,6 +404,89 @@ class ITADClient:
                 return items
         return []
 
+    @staticmethod
+    def _steam_only_id(appid: str) -> str:
+        """临时身份只表示 Steam-only，不能当作真实 ITAD ID。"""
+        return f"steam:{appid}"
+
+    @classmethod
+    def _match_itad_game(cls, steam_title: str, candidates: list[ITADGame]) -> Optional[ITADGame]:
+        """只接受归一化后完全相同的标题，避免模糊命中绑错 ITAD ID。"""
+        normalized_title = cls._normalize_title(steam_title)
+        if not normalized_title:
+            return None
+        return next(
+            (candidate for candidate in candidates
+             if candidate.id and not str(candidate.id).startswith("steam:")
+             and cls._normalize_title(candidate.title) == normalized_title),
+            None,
+        )
+
+    def _bind_steam_appid(self, game: ITADGame, appid: str, image: str = "") -> ITADGame:
+        game.appid = str(appid or "")
+        if image and not game.image:
+            game.image = image
+        return game
+
+    def _deduplicate_games(self, games: list[ITADGame]) -> list[ITADGame]:
+        result = []
+        seen: set[str] = set()
+        for game in games:
+            key = game.id or self._steam_only_id(game.appid)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(game)
+        return result
+
+    async def _associate_steam_item(self, item: dict, query: str) -> Optional[ITADGame]:
+        """关联 Steam 候选和 ITAD 搜索结果；无精确映射时保留 steam:<appid>。"""
+        appid = str(item.get("id") or "")
+        if not appid:
+            return None
+        english_title = await self._steam_english_title(appid)
+        local_title = str(item.get("name") or "").strip()
+        search_title = english_title or local_title
+        if not search_title:
+            return None
+        if not (
+            self._title_matches_query(english_title or search_title, query)
+            or self._title_matches_query(local_title, query)
+            or (
+                not english_title
+                and self._keep_localized_steam_item(item, local_title, query)
+            )
+        ):
+            return None
+        itad_games = await self._parse_search_payload(
+            await self._get("/games/search/v1", {"title": search_title, "results": 3}), 3
+        )
+        game = self._match_itad_game(search_title, itad_games)
+        if game is None:
+            game = ITADGame(self._steam_only_id(appid), search_title)
+        game.title = english_title or game.title
+        return self._bind_steam_appid(game, appid, item.get("tiny_image", ""))
+
+    async def _bind_itad_fallback_appids(self, games: list[ITADGame]) -> list[ITADGame]:
+        for game in games:
+            if game.appid:
+                continue
+            candidates = self._filter_steam_items(
+                await self._steam_search(game.title, "english", 3), game.title, 3
+            )
+            if candidates:
+                self._bind_steam_appid(
+                    game,
+                    str(candidates[0].get("id") or ""),
+                    candidates[0].get("tiny_image", ""),
+                )
+        return games
+
+    def _rank_games(self, games: list[ITADGame], query: str, limit: int) -> list[ITADGame]:
+        ranked = list(enumerate(self._deduplicate_games(games)))
+        ranked.sort(key=lambda pair: self._game_sort_key(pair[1], query, pair[0]))
+        return [game for _, game in ranked[:limit]]
+
     async def search_games(self, query: str, limit: int = 6) -> list[ITADGame]:
         """先通过 Steam 商店解析本地化名称，再用英文标题查询 ITAD。"""
         steam_items = await self._lookup_steam_items(query, max(limit * 2, 10))
@@ -414,57 +497,15 @@ class ITADClient:
                 await self._get("/games/search/v1", {"title": query, "results": limit}), limit
             )
             matched = [game for game in fallback if self._title_matches_query(game.title, query)]
-            for game in matched:
-                candidates = self._filter_steam_items(
-                    await self._steam_search(game.title, "english", 3), game.title, 3
-                )
-                if candidates:
-                    game.appid = str(candidates[0].get("id") or "")
-                    game.image = game.image or candidates[0].get("tiny_image", "")
-            ranked = list(enumerate(matched))
-            ranked.sort(key=lambda pair: self._game_sort_key(pair[1], query, pair[0]))
-            return [game for _, game in ranked[:limit]]
+            await self._bind_itad_fallback_appids(matched)
+            return self._rank_games(matched, query, limit)
 
-        result: list[ITADGame] = []
-        seen_keys: set[str] = set()
+        associated = []
         for item in steam_items:
-            appid = str(item.get("id") or "")
-            english_title = await self._steam_english_title(appid)
-            local_title = str(item.get("name") or "").strip()
-            search_title = english_title or local_title
-            if not search_title:
-                continue
-            if not (
-                self._title_matches_query(english_title or search_title, query)
-                or self._title_matches_query(local_title, query)
-                or (
-                    not english_title
-                    and self._keep_localized_steam_item(item, local_title, query)
-                )
-            ):
-                continue
-            itad_games = await self._parse_search_payload(
-                await self._get("/games/search/v1", {"title": search_title, "results": 3}), 3
-            )
-            normalized_title = self._normalize_title(search_title)
-            game = next(
-                (candidate for candidate in itad_games
-                 if self._normalize_title(candidate.title) == normalized_title),
-                None,
-            )
-            if game is None:
-                game = ITADGame(f"steam:{appid}", search_title)
-            dedupe_key = game.id or f"steam:{appid}"
-            if dedupe_key in seen_keys:
-                continue
-            game.appid = appid
-            game.title = english_title or game.title
-            game.image = game.image or item.get("tiny_image", "")
-            seen_keys.add(dedupe_key)
-            result.append(game)
-        ranked = list(enumerate(result))
-        ranked.sort(key=lambda pair: self._game_sort_key(pair[1], query, pair[0]))
-        return [game for _, game in ranked[:limit]]
+            game = await self._associate_steam_item(item, query)
+            if game is not None:
+                associated.append(game)
+        return self._rank_games(associated, query, limit)
 
     async def lookup_steam_appid(self, appid: str) -> Optional[ITADGame]:
         """按 Steam appid 直接查 ITAD 游戏（用于商店链接查询）。"""
