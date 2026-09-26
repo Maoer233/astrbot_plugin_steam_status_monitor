@@ -35,9 +35,10 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
             search_games=AsyncMock(return_value=[]),
         )
 
-        games = await service.resolve_games("https://store.steampowered.com/app/1245620/")
+        resolved = await service.resolve_games("https://store.steampowered.com/app/1245620/")
 
-        self.assertEqual([game], games)
+        self.assertEqual([game], resolved["games"])
+        self.assertEqual("SUCCESS", resolved["status"])
         plugin.ITAD_CLIENT.lookup_steam_appid.assert_awaited_once_with("1245620")
         plugin.ITAD_CLIENT.search_games.assert_not_called()
 
@@ -47,9 +48,11 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
             search_games=AsyncMock(return_value=[]),
         )
 
-        games = await service.resolve_games("https://store.steampowered.com/app/1245620/")
+        resolved = await service.resolve_games("https://store.steampowered.com/app/1245620/")
 
+        games = resolved["games"]
         self.assertEqual(1, len(games))
+        self.assertEqual("SUCCESS", resolved["status"])
         self.assertEqual("steam:1245620", games[0].id)
         self.assertEqual("", games[0].itad_id)
         self.assertEqual("1245620", games[0].appid)
@@ -77,19 +80,44 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
         translator = AsyncMock(return_value="Elden Ring")
         client = SimpleNamespace(
             lookup_steam_appid=AsyncMock(),
-            search_games=AsyncMock(side_effect=[[], [translated]]),
+            search_games=AsyncMock(side_effect=[
+                {"games": [], "status": "EMPTY", "provider": "steam", "retryable": False, "used_fallback": False},
+                {"games": [translated], "status": "SUCCESS", "provider": "itad", "retryable": False, "used_fallback": False},
+            ]),
         )
         plugin = SimpleNamespace(ITAD_CLIENT=client, config={})
         service = PriceQueryService(plugin, translator=translator)
 
-        games = await service.resolve_games("艾尔登法环")
+        resolved = await service.resolve_games("艾尔登法环")
 
-        self.assertEqual([translated], games)
+        self.assertEqual([translated], resolved["games"])
+        self.assertTrue(resolved["used_fallback"])
         translator.assert_awaited_once_with("艾尔登法环")
         self.assertEqual(
             [call("艾尔登法环"), call("Elden Ring")],
             client.search_games.await_args_list,
         )
+
+    async def test_resolve_games_does_not_translate_timeout(self):
+        translator = AsyncMock(return_value="Elden Ring")
+        client = SimpleNamespace(
+            lookup_steam_appid=AsyncMock(),
+            search_games=AsyncMock(return_value={
+                "games": [],
+                "status": "TIMEOUT",
+                "provider": "itad",
+                "retryable": True,
+                "used_fallback": True,
+            }),
+        )
+        plugin = SimpleNamespace(ITAD_CLIENT=client, config={})
+        service = PriceQueryService(plugin, translator=translator)
+
+        resolved = await service.resolve_games("艾尔登法环")
+
+        self.assertEqual("TIMEOUT", resolved["status"])
+        translator.assert_not_awaited()
+        client.search_games.assert_awaited_once_with("艾尔登法环")
 
     async def test_build_card_falls_back_when_primary_itad_region_has_no_price(self):
         game = ITADGame(id="itad1", title="Locked", appid="1")

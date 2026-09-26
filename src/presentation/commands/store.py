@@ -7,7 +7,7 @@ from ...application.services.price_query import contains_chinese
 from ...presentation.renderers.game_detail import render_game_detail_image
 from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
-from ...shared.utils.price import extract_price_query, extract_steam_appid
+from ...shared.utils.price import extract_price_query
 
 
 def search_session_key(event) -> str:
@@ -117,12 +117,10 @@ async def price(plugin, event, auto_first: bool, prefix: str):
             yield event.plain_result("候选序号无效，请重新回复序号。")
             return
     else:
-        games = await plugin.price_query.resolve_games(query)
+        resolved = await plugin.price_query.resolve_games(query)
+        games = list(resolved.get("games") or [])
         if not games:
-            if extract_steam_appid(query):
-                yield event.plain_result("未能通过该商店链接查到 ITAD 价格，请改用游戏名查询。")
-            else:
-                yield event.plain_result("未找到匹配游戏，或 ITAD 暂时无法访问。")
+            yield event.plain_result(plugin.price_query._search_message(resolved.get("status")))
             return
         game_item = games[0]
     if not auto_first and not selected_from_cache and len(games) > 1:

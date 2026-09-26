@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from src.infrastructure.clients.errors import ProviderError
 from src.infrastructure.clients.itad import ITADClient, ITADGame
 from src.shared.utils.price import extract_price_query
 
@@ -79,7 +80,7 @@ class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
             },
         ]
         with (
-            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[(steam_items, "SUCCESS"), ([], "EMPTY")])),
             patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
             patch.object(client, "_steam_english_title", AsyncMock(side_effect=lambda appid: {
                 "1126320": "Being a DIK - Season 1",
@@ -88,8 +89,10 @@ class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
             }.get(appid, ""))),
             patch.object(client, "_get", AsyncMock(return_value=[])),
         ):
-            games = await client.search_games("being a dik")
+            result = await client.search_games("being a dik")
 
+        games = result["games"]
+        self.assertEqual("SUCCESS", result["status"])
         self.assertEqual(["1126320", "1807120"], [game.appid for game in games])
         self.assertTrue(all(game.id.startswith("steam:") for game in games))
 
@@ -100,15 +103,16 @@ class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
             {"id": "2509780", "name": "汉武大帝传-国士无双礼包"},
         ]
         with (
-            patch.object(client, "_steam_storesearch", AsyncMock(return_value=[])),
+            patch.object(client, "_steam_storesearch", AsyncMock(return_value=([], "EMPTY"))),
             patch.object(client, "_steam_search_html", AsyncMock(return_value=html_items)),
             patch.object(client, "_get", AsyncMock(return_value=[
                 {"id": "itad-wrong", "title": "The New Han Prince 3: Brother-in-Law's Steamy Indulgence"},
             ])),
         ):
-            games = await client.search_games("being a dik")
+            result = await client.search_games("being a dik")
 
-        self.assertEqual([], games)
+        self.assertEqual([], result["games"])
+        self.assertEqual("EMPTY", result["status"])
 
     async def test_itad_exact_title_is_kept_fuzzy_mismatch_is_not(self):
         client = ITADClient(api_key="test")
@@ -116,7 +120,7 @@ class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
             {"id": "1126320", "name": "Being a DIK - Season 1", "tiny_image": "s1.jpg"},
         ]
         with (
-            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[(steam_items, "SUCCESS"), ([], "EMPTY")])),
             patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
             patch.object(client, "_steam_english_title", AsyncMock(return_value="Being a DIK - Season 1")),
             patch.object(client, "_get", AsyncMock(return_value=[
@@ -124,8 +128,9 @@ class SearchGamesTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "itad-wrong", "title": "The New Han Prince 3: Brother-in-Law's Steamy Indulgence"},
             ])),
         ):
-            games = await client.search_games("being a dik")
+            result = await client.search_games("being a dik")
 
+        games = result["games"]
         self.assertEqual(["1126320"], [game.appid for game in games])
         self.assertEqual(["itad-s1"], [game.id for game in games])
 
@@ -163,15 +168,16 @@ class SearchAssociationTests(unittest.IsolatedAsyncioTestCase):
             {"id": "1245621", "name": "ELDEN RING", "tiny_image": "alt.jpg"},
         ]
         with (
-            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[(steam_items, "SUCCESS"), ([], "EMPTY")])),
             patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
             patch.object(client, "_steam_english_title", AsyncMock(return_value="ELDEN RING™")),
             patch.object(client, "_get", AsyncMock(return_value=[
                 {"id": "itad-elden", "title": "ELDEN RING\x99"},
             ])),
         ):
-            games = await client.search_games("ELDEN RING")
+            result = await client.search_games("ELDEN RING")
 
+        games = result["games"]
         self.assertEqual(1, len(games))
         self.assertEqual("itad-elden", games[0].id)
         self.assertEqual("1245620", games[0].appid)
@@ -192,8 +198,12 @@ class SearchAssociationTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "3655690", "name": "ELDEN RING Tarnished Pack"},
             ])),
         ):
-            games = await client.search_games("ELDEN RING")
+            result = await client.search_games("ELDEN RING")
 
+        games = result["games"]
+        self.assertEqual("SUCCESS", result["status"])
+        self.assertEqual("itad", result["provider"])
+        self.assertTrue(result["used_fallback"])
         self.assertEqual("itad-elden", games[0].id)
         self.assertEqual("1245620", games[0].appid)
 
@@ -249,7 +259,7 @@ class SearchGamesRankingTests(unittest.IsolatedAsyncioTestCase):
             "1245620": "ELDEN RING",
         }
         with (
-            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[(steam_items, "SUCCESS"), ([], "EMPTY")])),
             patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
             patch.object(
                 client,
@@ -258,8 +268,9 @@ class SearchGamesRankingTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(client, "_get", AsyncMock(return_value=[])),
         ):
-            games = await client.search_games("ELDEN RING")
+            result = await client.search_games("ELDEN RING")
 
+        games = result["games"]
         self.assertEqual(["1245620", "3655690"], [game.appid for game in games])
         self.assertEqual("ELDEN RING", games[0].title)
 
@@ -270,11 +281,27 @@ class SearchGamesRankingTests(unittest.IsolatedAsyncioTestCase):
             {"id": "1245620", "name": "艾尔登法环", "type": "app"},
         ]
         with (
-            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[steam_items, []])),
+            patch.object(client, "_steam_storesearch", AsyncMock(side_effect=[(steam_items, "SUCCESS"), ([], "EMPTY")])),
             patch.object(client, "_steam_search_html", AsyncMock(return_value=[])),
             patch.object(client, "_steam_english_title", AsyncMock(return_value="")),
             patch.object(client, "_get", AsyncMock(return_value=[])),
         ):
-            games = await client.search_games("ELDEN RING")
+            result = await client.search_games("ELDEN RING")
 
+        games = result["games"]
         self.assertEqual("1245620", games[0].appid)
+
+    async def test_itad_direct_search_failure_is_not_empty(self):
+        client = ITADClient(api_key="test")
+        with (
+            patch.object(client, "_lookup_steam_items", AsyncMock(return_value=[])),
+            patch.object(client, "_get", AsyncMock(side_effect=ProviderError("TIMEOUT", retryable=True))),
+        ):
+            result = await client.search_games("ELDEN RING")
+
+        self.assertEqual([], result["games"])
+        self.assertEqual("TIMEOUT", result["status"])
+        self.assertEqual("itad", result["provider"])
+        self.assertTrue(result["retryable"])
+        self.assertTrue(result["used_fallback"])
+        self.assertFalse(hasattr(client, "SearchResult"))

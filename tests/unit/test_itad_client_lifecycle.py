@@ -21,7 +21,7 @@ class ITADClientLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_request_falls_back_when_client_not_initialized(self):
         client = ITADClient(api_key="test")
         fake = AsyncMock()
-        response = AsyncMock()
+        response = unittest.mock.Mock()
         response.json.return_value = {"ok": True}
         response.raise_for_status.return_value = None
         fake.get.return_value = response

@@ -115,17 +115,19 @@ class ITADClient:
     async def _get(self, path: str, params: dict[str, Any], timeout=None):
         if not self.api_key:
             logger.warning("ITAD 未配置 API Key，跳过请求 %s", path)
-            return None
+            raise ProviderError("NOT_CONFIGURED", f"ITAD 未配置 API Key: {path}")
         params = {**params, "key": self.api_key}
         client, owned = await self._request_client()
         try:
             response = await client.get(f"{self.base_url}{path}", params=params, timeout=timeout)
             response.raise_for_status()
             return response.json()
+        except ProviderError:
+            raise
         except Exception as exc:
             error = self._provider_error(exc, path)
-            logger.warning("ITAD 请求失败 %s [%s]: %s", path, error.code, exc)
-            return None
+            logger.warning("ITAD 请求失败 %s [%s]: %s", path, error.code, type(exc).__name__)
+            raise error from exc
         finally:
             if owned:
                 await client.aclose()
@@ -133,7 +135,7 @@ class ITADClient:
     async def _post(self, path: str, body, params: dict[str, Any], timeout=None):
         if not self.api_key:
             logger.warning("ITAD 未配置 API Key，跳过请求 %s", path)
-            return None
+            raise ProviderError("NOT_CONFIGURED", f"ITAD 未配置 API Key: {path}")
         params = {**params, "key": self.api_key}
         client, owned = await self._request_client()
         try:
@@ -142,10 +144,12 @@ class ITADClient:
             )
             response.raise_for_status()
             return response.json()
+        except ProviderError:
+            raise
         except Exception as exc:
             error = self._provider_error(exc, path)
-            logger.warning("ITAD 请求失败 %s [%s]: %s", path, error.code, exc)
-            return None
+            logger.warning("ITAD 请求失败 %s [%s]: %s", path, error.code, type(exc).__name__)
+            raise error from exc
         finally:
             if owned:
                 await client.aclose()
@@ -177,11 +181,12 @@ class ITADClient:
                 payload = response.json()
                 items = payload.get("items", []) if isinstance(payload, dict) else []
                 if isinstance(items, list) and items:
-                    return items[:limit]
-                return []
+                    return items[:limit], "SUCCESS"
+                return [], "EMPTY"
         except Exception as exc:
-            logger.warning("Steam storesearch 失败: %s", exc)
-            return []
+            error = self._provider_error(exc, "/api/storesearch")
+            logger.warning("Steam storesearch 失败 [%s]: %s", error.code, type(exc).__name__)
+            return [], error.code
 
     async def _steam_search_html(self, query: str, language: str = "english", limit: int = 6):
         """商店搜索页兜底；国区成人内容经常被过滤，调用方需再做标题相关度校验。"""
@@ -211,9 +216,11 @@ class ITADClient:
             return []
 
     async def _steam_search(self, query: str, language: str = "english", limit: int = 6):
-        items = await self._steam_storesearch(query, language, limit)
+        items, status = await self._steam_storesearch(query, language, limit)
         if items:
             return items
+        if status not in {"SUCCESS", "EMPTY"}:
+            logger.info("Steam storesearch 状态为 %s，继续尝试 HTML 搜索", status)
         return await self._steam_search_html(query, language, limit)
 
     @staticmethod
@@ -389,8 +396,9 @@ class ITADClient:
         merged: list[dict] = []
         seen: set[str] = set()
         for language in ("schinese", "english"):
+            items, _status = await self._steam_storesearch(query, language, fetch_limit)
             for item in self._filter_steam_items(
-                await self._steam_storesearch(query, language, fetch_limit),
+                items,
                 query,
                 fetch_limit,
                 keep_localized=True,
@@ -466,9 +474,12 @@ class ITADClient:
             )
         ):
             return None
-        itad_games = await self._parse_search_payload(
-            await self._get("/games/search/v1", {"title": search_title, "results": 3}), 3
-        )
+        try:
+            payload = await self._get("/games/search/v1", {"title": search_title, "results": 3})
+        except ProviderError as exc:
+            logger.info("ITAD 关联失败，保留 Steam-only 身份 [%s]", exc.code)
+            payload = []
+        itad_games = await self._parse_search_payload(payload, 3)
         game = self._match_itad_game(search_title, itad_games)
         if game is None:
             game = ITADGame(self._steam_only_id(appid), search_title)
@@ -495,29 +506,57 @@ class ITADClient:
         ranked.sort(key=lambda pair: self._game_sort_key(pair[1], query, pair[0]))
         return [game for _, game in ranked[:limit]]
 
-    async def search_games(self, query: str, limit: int = 6) -> list[ITADGame]:
+    @staticmethod
+    def _search_state(games, status: str, *, provider: str, used_fallback: bool = False) -> dict:
+        """搜索状态挂在现有返回值上，不新建 SearchResult。"""
+        return {
+            "games": list(games or []),
+            "status": status,
+            "provider": provider,
+            "retryable": status in {"TIMEOUT", "UPSTREAM_ERROR", "INVALID_RESPONSE"},
+            "used_fallback": used_fallback,
+        }
+
+    async def search_games(self, query: str, limit: int = 6) -> dict:
         """先通过 Steam 商店解析本地化名称，再用英文标题查询 ITAD。"""
         steam_items = await self._lookup_steam_items(query, max(limit * 2, 10))
 
         # Steam 中文索引可能暂时没有结果；保留 ITAD 直搜作为兜底，避免中文查询完全失败。
         if not steam_items:
-            fallback = await self._parse_search_payload(
-                await self._get("/games/search/v1", {"title": query, "results": limit}), limit
-            )
+            try:
+                payload = await self._get("/games/search/v1", {"title": query, "results": limit})
+            except ProviderError as exc:
+                return self._search_state([], exc.code, provider="itad", used_fallback=True)
+            fallback = await self._parse_search_payload(payload, limit)
             matched = [game for game in fallback if self._title_matches_query(game.title, query)]
             await self._bind_itad_fallback_appids(matched)
-            return self._rank_games(matched, query, limit)
+            ranked = self._rank_games(matched, query, limit)
+            return self._search_state(
+                ranked,
+                "SUCCESS" if ranked else "EMPTY",
+                provider="itad",
+                used_fallback=True,
+            )
 
         associated = []
         for item in steam_items:
             game = await self._associate_steam_item(item, query)
             if game is not None:
                 associated.append(game)
-        return self._rank_games(associated, query, limit)
+        ranked = self._rank_games(associated, query, limit)
+        return self._search_state(
+            ranked,
+            "SUCCESS" if ranked else "EMPTY",
+            provider="steam",
+        )
 
     async def lookup_steam_appid(self, appid: str) -> Optional[ITADGame]:
         """按 Steam appid 直接查 ITAD 游戏（用于商店链接查询）。"""
-        payload = await self._get("/games/lookup/v1", {"appid": str(appid)})
+        try:
+            payload = await self._get("/games/lookup/v1", {"appid": str(appid)})
+        except ProviderError as exc:
+            logger.info("ITAD lookup 失败，调用方可走 Steam-only [%s]", exc.code)
+            return None
         game = (payload or {}).get("game") if isinstance(payload, dict) else None
         if isinstance(game, dict) and game.get("id"):
             itad = ITADGame(str(game.get("id")), str(game.get("title") or ""))
@@ -531,7 +570,11 @@ class ITADClient:
         if not game_id or game_id.startswith("steam:"):
             logger.warning("拒绝把 Steam-only 身份当作 ITAD ID 查询价格: %s", game_id)
             return {}
-        payload = await self._post("/games/prices/v3", [game_id], {"country": country}, timeout=timeout)
+        try:
+            payload = await self._post("/games/prices/v3", [game_id], {"country": country}, timeout=timeout)
+        except ProviderError as exc:
+            logger.warning("ITAD 价格查询失败 [%s]", exc.code)
+            return {}
         if isinstance(payload, list):
             for item in payload:
                 if isinstance(item, dict) and item.get("id") == game_id:

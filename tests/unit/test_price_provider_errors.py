@@ -27,7 +27,6 @@ class ITADProviderErrorTests(unittest.TestCase):
 class ITADProviderFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_unconfigured_client_returns_empty_compatible_result(self):
         client = ITADClient()
-        client.get_prices = AsyncMock(return_value=None)
         self.assertEqual({}, await client.get_prices("game", "CN"))
 
 

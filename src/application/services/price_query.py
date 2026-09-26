@@ -75,26 +75,48 @@ class PriceQueryService:
             compare_region=compare_region,
         )
 
-    async def resolve_games(self, query: str) -> List[ITADGame]:
+    @staticmethod
+    def _search_message(status: str) -> str:
+        return {
+            "EMPTY": "未找到匹配游戏。",
+            "NOT_CONFIGURED": "ITAD 未配置，已无法查询完整价格。",
+            "TIMEOUT": "价格搜索超时，请稍后重试。",
+            "RATE_LIMITED": "价格搜索请求受限，请稍后重试。",
+            "AUTH_ERROR": "ITAD 鉴权失败，请管理员检查配置。",
+            "UPSTREAM_ERROR": "价格搜索暂时不可用，请稍后重试。",
+            "INVALID_RESPONSE": "价格搜索返回异常，请稍后重试。",
+        }.get(status, "未找到匹配游戏。")
+
+    async def resolve_games(self, query: str) -> dict:
         query = str(query or "").strip()
         if not query:
-            return []
+            return {"games": [], "status": "EMPTY", "provider": "", "retryable": False, "used_fallback": False}
         client = self._plugin.ITAD_CLIENT
         url_appid = extract_steam_appid(query)
         if url_appid:
             game = await client.lookup_steam_appid(url_appid)
             if game is not None:
-                return [game]
+                return {"games": [game], "status": "SUCCESS", "provider": "itad", "retryable": False, "used_fallback": False}
             # lookup 失败不要求 ITAD 价格接口可用，直接用 AppID 出 Steam-only 详情卡。
-            return [ITADGame(id=f"steam:{url_appid}", title="", appid=url_appid)]
-        games = await client.search_games(query)
-        if games:
-            return games
-        if self._translator is not None and contains_chinese(query):
-            translated = await self._translator(query)
-            if translated and translated != query:
-                games = await client.search_games(translated)
-        return games or []
+            return {
+                "games": [ITADGame(id=f"steam:{url_appid}", title="", appid=url_appid)],
+                "status": "SUCCESS",
+                "provider": "steam",
+                "retryable": False,
+                "used_fallback": True,
+            }
+        result = await client.search_games(query)
+        games = list(result.get("games") or [])
+        status = str(result.get("status") or "EMPTY")
+        if games or status != "EMPTY" or self._translator is None or not contains_chinese(query):
+            return result
+        translated = await self._translator(query)
+        if not translated or translated == query or contains_chinese(translated):
+            return result
+        retried = await client.search_games(translated)
+        retried = dict(retried)
+        retried["used_fallback"] = True
+        return retried
 
     async def build_card(
         self,
