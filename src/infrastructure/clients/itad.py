@@ -104,14 +104,14 @@ class ITADClient:
             return ProviderError("INVALID_RESPONSE", f"ITAD 响应解析失败: {path}")
         return ProviderError("UPSTREAM_ERROR", f"ITAD 请求失败: {path}", retryable=True)
 
-    async def _get(self, path: str, params: dict[str, Any]):
+    async def _get(self, path: str, params: dict[str, Any], timeout=None):
         if not self.api_key:
             logger.warning("ITAD 未配置 API Key，跳过请求 %s", path)
             return None
         params = {**params, "key": self.api_key}
         client, owned = await self._request_client()
         try:
-            response = await client.get(f"{self.base_url}{path}", params=params)
+            response = await client.get(f"{self.base_url}{path}", params=params, timeout=timeout)
             response.raise_for_status()
             return response.json()
         except Exception as exc:
@@ -122,14 +122,16 @@ class ITADClient:
             if owned:
                 await client.aclose()
 
-    async def _post(self, path: str, body, params: dict[str, Any]):
+    async def _post(self, path: str, body, params: dict[str, Any], timeout=None):
         if not self.api_key:
             logger.warning("ITAD 未配置 API Key，跳过请求 %s", path)
             return None
         params = {**params, "key": self.api_key}
         client, owned = await self._request_client()
         try:
-            response = await client.post(f"{self.base_url}{path}", json=body, params=params)
+            response = await client.post(
+                f"{self.base_url}{path}", json=body, params=params, timeout=timeout
+            )
             response.raise_for_status()
             return response.json()
         except Exception as exc:
@@ -474,8 +476,8 @@ class ITADClient:
             return itad
         return None
 
-    async def get_prices(self, game_id: str, country: str = "CN") -> dict[str, Any]:
-        payload = await self._post("/games/prices/v3", [game_id], {"country": country})
+    async def get_prices(self, game_id: str, country: str = "CN", timeout=None) -> dict[str, Any]:
+        payload = await self._post("/games/prices/v3", [game_id], {"country": country}, timeout=timeout)
         if isinstance(payload, list):
             for item in payload:
                 if isinstance(item, dict) and item.get("id") == game_id:
@@ -499,8 +501,8 @@ class ITADClient:
             return True
         return str(shop.get("name") or "").strip().lower() == "steam"
 
-    async def get_price_summary(self, game_id: str, country: str = "CN") -> dict[str, Any]:
-        current = await self.get_prices(game_id, country)
+    async def get_price_summary(self, game_id: str, country: str = "CN", timeout=None) -> dict[str, Any]:
+        current = await self.get_prices(game_id, country, timeout=timeout)
         current_price = None
         current_regular = None
         currency = None

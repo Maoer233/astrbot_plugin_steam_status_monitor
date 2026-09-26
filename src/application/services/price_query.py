@@ -37,6 +37,8 @@ class PriceCard:
     region_prices: dict = field(default_factory=dict)
     detail: Optional[dict] = None
     reviews: Optional[dict] = None
+    history_low: dict = field(default_factory=dict)
+    current_price: dict = field(default_factory=dict)
     card_data: dict = field(default_factory=dict)
     store_url: str = ""
     store_message: str = ""
@@ -45,6 +47,10 @@ class PriceCard:
 
 class PriceQueryService:
     """价格/详情用例：搜索、ITAD 无价换区、拼卡片 DTO。区回退与 DLC 过滤仍在 client。"""
+
+    TOTAL_BUDGET_SECONDS = 20
+    CORE_BUDGET_SECONDS = 12
+    REGION_ATTEMPT_SECONDS = 4
 
     def __init__(self, plugin, translator: Optional[Translator] = None):
         self._plugin = plugin
@@ -94,18 +100,93 @@ class PriceQueryService:
         include_itad: bool = True,
         include_reviews: Optional[bool] = None,
     ) -> PriceCard:
+        started = asyncio.get_running_loop().time()
+        core_deadline = started + self.CORE_BUDGET_SECONDS
+        core_task = asyncio.create_task(
+            self._build_core_card(game, include_itad=include_itad, deadline=core_deadline)
+        )
         try:
-            async with asyncio.timeout(20):
-                return await self._build_card_with_budget(
+            card = await asyncio.wait_for(core_task, self.CORE_BUDGET_SECONDS)
+        except TimeoutError:
+            core_task.cancel()
+            logger.warning("价格卡核心数据超时 (game=%s, appid=%s)", game.id, game.appid)
+            raise
+        if include_reviews is None:
+            include_reviews = True
+        remaining = self.TOTAL_BUDGET_SECONDS - (asyncio.get_running_loop().time() - started)
+        enhancement_deadline = asyncio.get_running_loop().time() + remaining
+        if remaining <= 0:
+            logger.info("价格卡增强数据预算已用尽，返回核心结果 (game=%s)", game.id)
+            return card
+        core_regions = dict(card.region_prices)
+        try:
+            async with asyncio.timeout(remaining):
+                await self._attach_enhancements(
+                    card,
                     game,
                     include_itad=include_itad,
                     include_reviews=include_reviews,
+                    deadline=enhancement_deadline,
                 )
         except TimeoutError:
-            logger.warning("价格卡查询超时 (game=%s, appid=%s)", game.id, game.appid)
-            raise
+            logger.info("价格卡增强数据超时，返回核心结果 (game=%s, appid=%s)", game.id, game.appid)
+            card.reviews = None
+            card.region_prices = core_regions
+            card.card_data["review_all"] = {}
+            card.card_data["review_schinese"] = {}
+        return card
 
-    async def _fetch_itad_summary(self, game: ITADGame, settings: PriceQuerySettings) -> dict:
+    @staticmethod
+    def _select_current_price(detail: Optional[dict], summary: dict) -> dict:
+        if summary.get("current_price") is not None:
+            return {
+                "value": summary.get("current_price"),
+                "regular": summary.get("current_regular"),
+                "currency": summary.get("currency") or "",
+                "cut": summary.get("cut") or 0,
+                "source": "itad_steam",
+            }
+        price = (detail or {}).get("price_overview") or {}
+        if price:
+            return {
+                "value": price.get("final", 0) / 100,
+                "regular": price.get("initial", 0) / 100,
+                "currency": price.get("currency") or "",
+                "cut": price.get("discount_percent") or 0,
+                "source": "steam_store",
+            }
+        return {"value": None, "regular": None, "currency": "", "cut": 0, "source": "none"}
+
+    @staticmethod
+    def _select_history_low(summary: dict) -> dict:
+        if summary.get("steam_low") is not None:
+            return {
+                "value": summary.get("steam_low"),
+                "currency": summary.get("steam_low_currency") or summary.get("currency") or "",
+                "cut": summary.get("steam_low_cut"),
+                "source": "itad_steam_store_low",
+            }
+        value = summary.get("history_low")
+        if value is None:
+            value = summary.get("lowest")
+        return {
+            "value": value,
+            "currency": summary.get("history_low_currency") or summary.get("lowest_currency") or summary.get("currency") or "",
+            "cut": None,
+            "source": "itad_history" if value is not None else "none",
+        }
+
+    def _attempt_timeout(self, deadline):
+        if deadline is None:
+            return self.REGION_ATTEMPT_SECONDS
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError("价格查询区域回退预算已用尽")
+        return min(self.REGION_ATTEMPT_SECONDS, remaining)
+
+    async def _fetch_itad_summary(
+        self, game: ITADGame, settings: PriceQuerySettings, deadline=None
+    ) -> dict:
         if not game.id:
             return {}
         cache_key = f"{game.id}:{settings.region}"
@@ -113,7 +194,9 @@ class PriceQueryService:
         if cached is not None:
             return dict(cached)
         async def request_summary():
-            return await self._plugin.ITAD_CLIENT.get_price_summary(game.id, settings.region) or {}
+            return await self._plugin.ITAD_CLIENT.get_price_summary(
+                game.id, settings.region, timeout=self._attempt_timeout(deadline)
+            ) or {}
 
         summary = await self._inflight.get_or_create(
             f"itad_summary:{game.id}:{settings.region}", request_summary
@@ -126,7 +209,7 @@ class PriceQueryService:
                 if fallback_summary is None:
                     async def request_fallback(region=fallback_region):
                         return await self._plugin.ITAD_CLIENT.get_price_summary(
-                            game.id, region
+                            game.id, region, timeout=self._attempt_timeout(deadline)
                         ) or {}
                     fallback_summary = await self._inflight.get_or_create(
                         f"itad_summary:{game.id}:{fallback_region}", request_fallback
@@ -146,35 +229,13 @@ class PriceQueryService:
             self._cache.set("itad_summary", cache_key, summary)
         return summary_to_currency(summary, settings.currency)
 
-    async def _fetch_region_prices(self, game: ITADGame, settings: PriceQuerySettings) -> dict:
-        if not game.appid:
-            return {}
-        region_codes = [settings.region]
-        if (
-            settings.compare_region
-            and settings.compare_region != "NONE"
-            and settings.compare_region != settings.region
-        ):
-            region_codes.append(settings.compare_region)
-        region_summaries = await asyncio.gather(
-            *[self._fetch_region_price_cached(game.appid, code) for code in region_codes],
-            return_exceptions=True,
-        )
-        region_prices = {}
-        for code, region_summary in zip(region_codes, region_summaries):
-            if isinstance(region_summary, BaseException) or not region_summary:
-                continue
-            actual = str(region_summary.get("region") or code).upper()
-            region_prices[actual] = summary_to_currency(region_summary, settings.currency)
-        return region_prices
-
-    async def _fetch_region_price_cached(self, appid: str, region: str):
+    async def _fetch_region_price_cached(self, appid: str, region: str, deadline=None):
         key = f"{appid}:{region}"
         cached = self._cache.get("region_price", key)
         if cached is not None:
             return dict(cached)
         async def request_price():
-            return await self._plugin.fetch_region_price(appid, region)
+            return await self._plugin.fetch_region_price(appid, region, deadline=deadline)
 
         result = await self._inflight.get_or_create(
             f"region_price:{appid}:{region}", request_price
@@ -184,7 +245,9 @@ class PriceQueryService:
             self._cache.set("region_price", key, result)
         return result
 
-    async def _fetch_store_details(self, game: ITADGame, settings: PriceQuerySettings):
+    async def _fetch_store_details(
+        self, game: ITADGame, settings: PriceQuerySettings, deadline=None
+    ):
         if not game.appid:
             return None
         key = f"{game.appid}:{settings.region}:schinese"
@@ -192,7 +255,9 @@ class PriceQueryService:
         if cached is not None:
             return dict(cached)
         async def request_detail():
-            return await self._plugin.fetch_game_details(game.appid, country=settings.region)
+            return await self._plugin.fetch_game_details(
+                game.appid, country=settings.region, deadline=deadline
+            )
         detail = await self._inflight.get_or_create(
             f"store_detail:{game.appid}:{settings.region}:schinese", request_detail
         )
@@ -209,20 +274,24 @@ class PriceQueryService:
             logger.warning("Steam 评价获取失败，继续生成价格卡 (appid=%s): %s", game.appid, exc)
             return None
 
-    async def _build_card_with_budget(
-        self,
-        game: ITADGame,
-        *,
-        include_itad: bool,
-        include_reviews: Optional[bool],
+    async def _build_core_card(
+        self, game: ITADGame, *, include_itad: bool, deadline=None
     ) -> PriceCard:
-        if include_reviews is None:
-            include_reviews = True
         settings = self._settings()
-        summary = await self._fetch_itad_summary(game, settings) if include_itad else {}
-        region_prices = await self._fetch_region_prices(game, settings) if include_itad else {}
-        detail = await self._fetch_store_details(game, settings)
-        reviews = await self._fetch_reviews(game, include_reviews)
+        summary = (
+            await self._fetch_itad_summary(game, settings, deadline=deadline)
+            if include_itad else {}
+        )
+        detail = await self._fetch_store_details(game, settings, deadline=deadline)
+        region_prices = {}
+        if include_itad and game.appid:
+            primary = await self._fetch_region_price_cached(
+                game.appid, settings.region, deadline=deadline
+            )
+            if primary:
+                actual = str(primary.get("region") or settings.region).upper()
+                region_prices[actual] = summary_to_currency(primary, settings.currency)
+        reviews = None
         if detail:
             detail["review_all"] = (reviews or {}).get("all") or {}
             detail["review_schinese"] = (reviews or {}).get("schinese") or {}
@@ -245,17 +314,72 @@ class PriceQueryService:
             "review_all": (reviews or {}).get("all") or {},
             "review_schinese": (reviews or {}).get("schinese") or {},
         }
+        current_price = self._select_current_price(detail, summary)
+        history_low = self._select_history_low(summary)
         return PriceCard(
             game=game,
             summary=summary,
             region_prices=region_prices,
             detail=detail,
             reviews=reviews,
+            history_low=history_low,
+            current_price=current_price,
             card_data=card_data,
             store_url=store_url,
             store_message=store_message,
             locked=locked,
         )
+
+    async def _attach_enhancements(
+        self,
+        card: PriceCard,
+        game: ITADGame,
+        *,
+        include_itad: bool,
+        include_reviews: bool,
+        deadline=None,
+    ):
+        settings = self._settings()
+        compare_task = None
+        if (
+            include_itad
+            and game.appid
+            and settings.compare_region
+            and settings.compare_region not in {"NONE", settings.region}
+            and settings.compare_region not in card.region_prices
+        ):
+            compare_task = asyncio.create_task(
+                self._fetch_region_price_cached(
+                    game.appid, settings.compare_region, deadline=deadline
+                )
+            )
+        review_task = (
+            asyncio.create_task(self._fetch_reviews(game, include_reviews))
+            if include_reviews else None
+        )
+        pending = [task for task in (compare_task, review_task) if task is not None]
+        try:
+            if pending:
+                await asyncio.gather(*pending)
+        except BaseException:
+            for task in pending:
+                task.cancel()
+            raise
+        if compare_task is not None and compare_task.done() and not compare_task.cancelled():
+            compare = compare_task.result()
+            if isinstance(compare, BaseException):
+                logger.warning("对比区价格获取失败，继续生成价格卡 (appid=%s): %s", game.appid, compare)
+            elif compare:
+                actual = str(compare.get("region") or settings.compare_region).upper()
+                card.region_prices[actual] = summary_to_currency(compare, settings.currency)
+        if review_task is not None and review_task.done() and not review_task.cancelled():
+            reviews = review_task.result()
+            if isinstance(reviews, BaseException):
+                logger.warning("Steam 评价获取失败，继续生成价格卡 (appid=%s): %s", game.appid, reviews)
+                reviews = None
+            card.reviews = reviews
+            card.card_data["review_all"] = (reviews or {}).get("all") or {}
+            card.card_data["review_schinese"] = (reviews or {}).get("schinese") or {}
 
     async def build_store_card(self, appid: str) -> Optional[PriceCard]:
         appid = str(appid or "").strip()

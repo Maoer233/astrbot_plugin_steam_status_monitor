@@ -54,7 +54,7 @@ class _ScriptedClient:
     async def aclose(self):
         return None
 
-    async def get(self, url, params=None):
+    async def get(self, url, params=None, timeout=None):
         params = params or {}
         region = str(params.get("cc") or "").upper()
         _ScriptedClient.calls.append((url, params.get("cc"), params.get("l"), params.get("language")))

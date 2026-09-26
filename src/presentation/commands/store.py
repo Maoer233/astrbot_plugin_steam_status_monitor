@@ -155,6 +155,8 @@ async def price(plugin, event, auto_first: bool, prefix: str):
             proxy=plugin.proxy,
             itad_summary=card.summary,
             region_prices=card.region_prices,
+            current_price=card.current_price,
+            history_low=card.history_low,
         )
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
             tmp.write(img_bytes)

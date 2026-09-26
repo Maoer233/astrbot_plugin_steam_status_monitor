@@ -151,7 +151,8 @@ async def _download_image(url, proxy=None):
 
 
 async def render_game_detail_image(
-    game, font_path=None, proxy=None, itad_summary=None, region_prices=None
+    game, font_path=None, proxy=None, itad_summary=None, region_prices=None,
+    current_price=None, history_low=None,
 ):
     """将 Steam appdetails 数据与可选的 ITAD 价格信息渲染为详情卡片。"""
     title_font = _font(font_path, 25)
@@ -166,13 +167,20 @@ async def render_game_detail_image(
     region_prices = region_prices or {}
     price = game.get("price_overview") or {}
     currency = itad_summary.get("currency") or price.get("currency") or ""
+    current_price = current_price or {}
+    history_low = history_low or {}
+    price_source = current_price.get("source")
+    price_decided = price_source not in (None, "")
+    selected_current = current_price.get("value")
     if game.get("is_free"):
         current_text, discount_text, regular_text = "免费", "", ""
-    elif itad_summary.get("current_price") is not None:
-        current_text = _value_text(itad_summary.get("current_price"), currency)
-        discount = itad_summary.get("cut") or 0
+    elif price_decided and selected_current is not None:
+        current_text = _value_text(selected_current, current_price.get("currency") or currency)
+        discount = current_price.get("cut") or 0
         discount_text = f"-{int(discount)}%" if discount else ""
-        regular_text = _value_text(itad_summary.get("current_regular"), currency) if discount and itad_summary.get("current_regular") is not None else ""
+        regular_text = _value_text(current_price.get("regular"), current_price.get("currency") or currency) if discount and current_price.get("regular") is not None else ""
+    elif price_decided:
+        current_text, discount_text, regular_text = "暂无价格", "", ""
     elif price:
         current_text = price.get("final_formatted") or _value_text(price.get("final", 0) / 100, currency)
         discount = price.get("discount_percent") or 0
@@ -181,11 +189,25 @@ async def render_game_detail_image(
     else:
         current_text, discount_text, regular_text = "暂无价格", "", ""
 
-    history_low = itad_summary.get("steam_low")
-    if history_low is None:
-        history_low = itad_summary.get("history_low") or itad_summary.get("lowest")
-    history_text = _value_text(history_low, currency)
-    history_low_cut = itad_summary.get("steam_low_cut")
+    history_source = history_low.get("source")
+    history_selected = history_source not in (None, "")
+    selected_history_low = history_low.get("value")
+    history_cut = history_low.get("cut")
+    if history_selected:
+        history_currency = history_low.get("currency") or currency
+        history_low = selected_history_low
+        history_low_cut = history_cut
+    elif not price_decided:
+        history_low = itad_summary.get("steam_low")
+        if history_low is None:
+            history_low = itad_summary.get("history_low") or itad_summary.get("lowest")
+        history_currency = currency
+        history_low_cut = itad_summary.get("steam_low_cut")
+    else:
+        history_low = None
+        history_currency = currency
+        history_low_cut = None
+    history_text = _value_text(history_low, history_currency)
 
     title = game.get("name") or "未知游戏"
     english_title = game.get("english_name") or game.get("original_name") or ""

@@ -85,6 +85,16 @@ def continue_store_region_fallback(error: ProviderError) -> bool:
     return error.code in {"REGION_LOCKED", "NOT_FOUND", "TIMEOUT", "UPSTREAM_ERROR"}
 
 
+def _region_attempt_timeout(deadline):
+    """单次回退不能用满客户端默认超时，否则五个区会吃光查询预算。"""
+    if deadline is None:
+        return None
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError("Steam 商店区域回退预算已用尽")
+    return remaining
+
+
 def classify_steam_store_error(exc) -> ProviderError:
     """把 Steam 商店请求异常分成可诊断状态，不包含锁区或无商品。"""
     if isinstance(exc, ProviderError):
@@ -374,7 +384,7 @@ class SteamClientMixin:
         )
         return {"all": all_review, "schinese": zh_review}
 
-    async def _request_appdetails(self, client, gid, language=None, country=None):
+    async def _request_appdetails(self, client, gid, language=None, country=None, timeout=None):
         """请求 appdetails。
 
         锁区返回 REGION_LOCKED，响应里没有该商品返回 NOT_FOUND。
@@ -389,7 +399,7 @@ class SteamClientMixin:
             params["cc"] = str(country).lower()
         url = f"{self.STEAM_STORE_BASE}/api/appdetails"
         try:
-            response = await client.get(url, params=params)
+            response = await client.get(url, params=params, timeout=timeout)
             response.raise_for_status()
             payload = response.json()
         except Exception as exc:
@@ -404,7 +414,7 @@ class SteamClientMixin:
             raise ProviderError("NOT_FOUND", "Steam 商店未返回商品详情")
         return data
 
-    async def fetch_game_details(self, appid, language="schinese", country="CN"):
+    async def fetch_game_details(self, appid, language="schinese", country="CN", deadline=None):
         """获取 Steam 商店游戏详情。主区锁区时按港/台/日/美回退；简体失败再试英文。"""
         gid = str(appid).strip()
         if not gid.isdigit():
@@ -422,8 +432,19 @@ class SteamClientMixin:
             for lang in languages:
                 for cc in store_region_candidates(preferred):
                     try:
+                        attempt_timeout = _region_attempt_timeout(deadline)
+                    except TimeoutError:
+                        self._remember_store_error(
+                            ProviderError("TIMEOUT", "Steam 商店区域回退预算已用尽", retryable=True)
+                        )
+                        return None
+                    try:
                         data = await self._request_appdetails(
-                            client, gid, language=lang, country=cc
+                            client,
+                            gid,
+                            language=lang,
+                            country=cc,
+                            timeout=attempt_timeout,
                         )
                     except ProviderError as exc:
                         errors.append({"region": cc, "language": lang, "code": exc.code})
@@ -467,7 +488,7 @@ class SteamClientMixin:
             if owned:
                 await client.aclose()
 
-    async def fetch_region_price(self, appid, country="CN"):
+    async def fetch_region_price(self, appid, country="CN", deadline=None):
         """获取指定国家区 Steam 商店价格（含币种、折后价/原价/折扣）。
         主区锁区或无价时回退未锁区，返回 dict 的 region 为实际命中区。"""
         gid = str(appid).strip()
@@ -481,7 +502,16 @@ class SteamClientMixin:
         try:
             for cc in store_region_candidates(preferred):
                 try:
-                    data = await self._request_appdetails(client, gid, country=cc)
+                    attempt_timeout = _region_attempt_timeout(deadline)
+                except TimeoutError:
+                    self._remember_store_error(
+                        ProviderError("TIMEOUT", "Steam 商店区域回退预算已用尽", retryable=True)
+                    )
+                    return None
+                try:
+                    data = await self._request_appdetails(
+                        client, gid, country=cc, timeout=attempt_timeout
+                    )
                 except ProviderError as exc:
                     errors.append({"region": cc, "code": exc.code})
                     self._remember_store_error(exc)
