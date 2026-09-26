@@ -83,7 +83,10 @@ class PriceQueryService:
         url_appid = extract_steam_appid(query)
         if url_appid:
             game = await client.lookup_steam_appid(url_appid)
-            return [game] if game is not None else []
+            if game is not None:
+                return [game]
+            # lookup 失败不要求 ITAD 价格接口可用，直接用 AppID 出 Steam-only 详情卡。
+            return [ITADGame(id=f"steam:{url_appid}", title="", appid=url_appid)]
         games = await client.search_games(query)
         if games:
             return games
@@ -187,32 +190,32 @@ class PriceQueryService:
     async def _fetch_itad_summary(
         self, game: ITADGame, settings: PriceQuerySettings, deadline=None
     ) -> dict:
-        if not game.id:
+        if not game.itad_id:
             return {}
-        cache_key = f"{game.id}:{settings.region}"
+        cache_key = f"{game.itad_id}:{settings.region}"
         cached = self._cache.get("itad_summary", cache_key)
         if cached is not None:
             return dict(cached)
         async def request_summary():
             return await self._plugin.ITAD_CLIENT.get_price_summary(
-                game.id, settings.region, timeout=self._attempt_timeout(deadline)
+                game.itad_id, settings.region, timeout=self._attempt_timeout(deadline)
             ) or {}
 
         summary = await self._inflight.get_or_create(
-            f"itad_summary:{game.id}:{settings.region}", request_summary
+            f"itad_summary:{game.itad_id}:{settings.region}", request_summary
         )
         summary = dict(summary)
         if summary.get("current_price") is None:
             for fallback_region in store_region_candidates(settings.region)[1:]:
-                fallback_key = f"{game.id}:{fallback_region}"
+                fallback_key = f"{game.itad_id}:{fallback_region}"
                 fallback_summary = self._cache.get("itad_summary", fallback_key)
                 if fallback_summary is None:
                     async def request_fallback(region=fallback_region):
                         return await self._plugin.ITAD_CLIENT.get_price_summary(
-                            game.id, region, timeout=self._attempt_timeout(deadline)
+                            game.itad_id, region, timeout=self._attempt_timeout(deadline)
                         ) or {}
                     fallback_summary = await self._inflight.get_or_create(
-                        f"itad_summary:{game.id}:{fallback_region}", request_fallback
+                        f"itad_summary:{game.itad_id}:{fallback_region}", request_fallback
                     )
                     if fallback_summary:
                         self._cache.set("itad_summary", fallback_key, fallback_summary)
@@ -221,7 +224,7 @@ class PriceQueryService:
                         "ITAD %s 区无价格，改用 %s 区 (game=%s)",
                         settings.region,
                         fallback_region,
-                        game.id,
+                        game.itad_id,
                     )
                     summary = dict(fallback_summary)
                     break

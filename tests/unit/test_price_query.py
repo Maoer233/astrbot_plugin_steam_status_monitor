@@ -41,6 +41,37 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
         plugin.ITAD_CLIENT.lookup_steam_appid.assert_awaited_once_with("1245620")
         plugin.ITAD_CLIENT.search_games.assert_not_called()
 
+    async def test_resolve_games_keeps_steam_only_when_lookup_fails(self):
+        service, plugin = self._service(
+            lookup_steam_appid=AsyncMock(return_value=None),
+            search_games=AsyncMock(return_value=[]),
+        )
+
+        games = await service.resolve_games("https://store.steampowered.com/app/1245620/")
+
+        self.assertEqual(1, len(games))
+        self.assertEqual("steam:1245620", games[0].id)
+        self.assertEqual("", games[0].itad_id)
+        self.assertEqual("1245620", games[0].appid)
+        plugin.ITAD_CLIENT.search_games.assert_not_called()
+
+    async def test_build_card_skips_itad_price_for_steam_only_identity(self):
+        game = ITADGame(id="steam:1245620", title="ELDEN RING", appid="1245620")
+        service, plugin = self._service(get_price_summary=AsyncMock(return_value={"current_price": 99}))
+        plugin.fetch_game_details = AsyncMock(return_value={
+            "name": "ELDEN RING",
+            "store_appid": "1245620",
+            "price_overview": {"final": 29800, "initial": 29800, "currency": "CNY", "discount_percent": 0},
+        })
+
+        card = await service.build_card(game, include_reviews=False)
+
+        plugin.ITAD_CLIENT.get_price_summary.assert_not_called()
+        self.assertEqual("ELDEN RING", card.detail["name"])
+        self.assertEqual("steam_store", card.current_price["source"])
+        self.assertEqual(298, card.current_price["value"])
+        self.assertEqual({}, card.summary)
+
     async def test_resolve_games_translates_chinese_when_search_empty(self):
         translated = ITADGame(id="itad1", title="Elden Ring", appid="1245620")
         translator = AsyncMock(return_value="Elden Ring")

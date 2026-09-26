@@ -43,6 +43,14 @@ class ITADGame:
     image: str = ""
     appid: str = ""
 
+    @property
+    def itad_id(self) -> str:
+        """真实 ITAD ID。steam:<appid> 只表示 Steam-only，不能进入价格接口。"""
+        game_id = str(self.id or "")
+        if not game_id or game_id.startswith("steam:"):
+            return ""
+        return game_id
+
 
 class ITADClient:
     BASE_URL = "https://api.isthereanydeal.com"
@@ -519,6 +527,10 @@ class ITADClient:
         return None
 
     async def get_prices(self, game_id: str, country: str = "CN", timeout=None) -> dict[str, Any]:
+        game_id = str(game_id or "")
+        if not game_id or game_id.startswith("steam:"):
+            logger.warning("拒绝把 Steam-only 身份当作 ITAD ID 查询价格: %s", game_id)
+            return {}
         payload = await self._post("/games/prices/v3", [game_id], {"country": country}, timeout=timeout)
         if isinstance(payload, list):
             for item in payload:
