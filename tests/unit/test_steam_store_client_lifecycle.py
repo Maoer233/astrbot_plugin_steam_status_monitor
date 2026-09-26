@@ -30,8 +30,8 @@ class SteamStoreClientLifecycleTests(unittest.IsolatedAsyncioTestCase):
         owner = SteamStoreClientOwner()
         fake = AsyncMock()
         response = AsyncMock()
-        response.json.return_value = {"730": {"success": False}}
-        response.raise_for_status.return_value = None
+        response.json = lambda: {"730": {"success": False}}
+        response.raise_for_status = lambda: None
         fake.get.return_value = response
         with patch("src.infrastructure.clients.steam.httpx.AsyncClient", return_value=fake):
             self.assertIsNone(await owner.fetch_game_details("730"))

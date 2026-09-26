@@ -45,6 +45,9 @@ class _RegionClient:
     async def __aexit__(self, *args):
         return False
 
+    async def aclose(self):
+        return None
+
     async def get(self, url, params=None):
         params = params or {}
         if not params.get("appids"):
