@@ -28,6 +28,30 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("CN", settings.region)
         self.assertEqual("NONE", settings.compare_region)
 
+    async def test_settings_rejects_unknown_values_and_keeps_twd(self):
+        service, plugin = self._service()
+        plugin.config = {
+            "price_currency": "TWD",
+            "price_region": "ZZ",
+            "price_compare_regions": "XX,UA",
+        }
+
+        settings = service._settings()
+
+        self.assertEqual("TWD", settings.currency)
+        self.assertEqual("TW", settings.region)
+        self.assertEqual("NONE", settings.compare_region)
+
+    async def test_settings_missing_compare_region_means_no_compare(self):
+        service, plugin = self._service()
+        plugin.config = {"price_currency": "JPY"}
+
+        settings = service._settings()
+
+        self.assertEqual("JPY", settings.currency)
+        self.assertEqual("JP", settings.region)
+        self.assertEqual("NONE", settings.compare_region)
+
     async def test_resolve_games_uses_store_url_lookup(self):
         game = ITADGame(id="itad1", title="Elden Ring", appid="1245620")
         service, plugin = self._service(

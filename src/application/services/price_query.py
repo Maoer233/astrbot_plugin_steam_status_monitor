@@ -61,14 +61,29 @@ class PriceQueryService:
     async def close(self):
         await self._inflight.clear()
 
+    SUPPORTED_CURRENCIES = frozenset(CURRENCY_REGION)
+    SUPPORTED_REGIONS = frozenset({
+        "CN", "US", "JP", "KR", "RU", "UA", "TR", "HK", "TW", "GB", "DE", "PL", "BR", "IN",
+    })
+
     def _settings(self) -> PriceQuerySettings:
         config = getattr(self._plugin, "config", {}) or {}
         currency = (config.get("price_currency", "CNY") or "CNY").strip().upper() or "CNY"
+        if currency not in self.SUPPORTED_CURRENCIES:
+            logger.warning("价格主货币 %s 不受支持，回退 CNY", currency)
+            currency = "CNY"
         region = (config.get("price_region", "") or "").strip().upper()
         if not region:
             region = CURRENCY_REGION.get(currency, "CN")
-        compare_raw = (config.get("price_compare_regions", "UA") or "NONE").strip()
-        compare_region = compare_raw.split(",")[0].strip().upper()
+        elif region not in self.SUPPORTED_REGIONS:
+            fallback = CURRENCY_REGION.get(currency, "CN")
+            logger.warning("价格对比区1 %s 不受支持，回退 %s", region, fallback)
+            region = fallback
+        compare_raw = (config.get("price_compare_regions", "NONE") or "NONE").strip()
+        compare_region = compare_raw.split(",")[0].strip().upper() or "NONE"
+        if compare_region not in self.SUPPORTED_REGIONS | {"NONE"}:
+            logger.warning("价格对比区2 %s 不受支持，回退 NONE", compare_region)
+            compare_region = "NONE"
         return PriceQuerySettings(
             currency=currency,
             region=region,
