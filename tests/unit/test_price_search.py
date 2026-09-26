@@ -155,6 +155,37 @@ class SteamItemRankingTests(unittest.TestCase):
         self.assertEqual(["1245620", "3655690"], [item["id"] for item in filtered])
 
 
+class SteamEnglishTitleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_title_without_identity_or_ranking(self):
+        client = ITADClient(api_key="test")
+
+        class _Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"1245620": {"success": True, "data": {"name": "ELDEN RING"}}}
+
+        class _Client:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                return None
+
+            async def get(self, url, params=None):
+                self.params = params
+                return _Response()
+
+        http = _Client()
+        with patch("src.infrastructure.clients.itad.httpx.AsyncClient", return_value=http):
+            title = await client._steam_english_title("1245620")
+
+        self.assertEqual("ELDEN RING", title)
+        self.assertIsInstance(title, str)
+        self.assertEqual("english", http.params["l"])
+
+
 class SearchGamesRankingTests(unittest.IsolatedAsyncioTestCase):
     async def test_prefers_elden_ring_over_tarnished_pack(self):
         client = ITADClient(api_key="test")

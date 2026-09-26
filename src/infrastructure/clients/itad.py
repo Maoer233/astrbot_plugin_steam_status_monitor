@@ -254,6 +254,7 @@ class ITADClient:
         return results
 
     async def _steam_english_title(self, appid: str) -> str:
+        """只返回英文展示标题。ITAD 关联、去重和排序由 search_games() 负责。"""
         try:
             async with httpx.AsyncClient(timeout=15, follow_redirects=True, **steam_store_client_kwargs(self.proxy)) as client:
                 response = await client.get(
