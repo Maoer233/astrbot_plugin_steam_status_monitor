@@ -22,7 +22,7 @@ from ..presentation.renderers.superpower import SuperpowerPicker
 from ..presentation.web.admin_api import WebAdminAPI
 from ..infrastructure.persistence.plugin_data import PersistenceMixin
 from ..infrastructure.fonts import FontPackService
-from ..infrastructure.clients.steam import SteamClientMixin
+from ..infrastructure.clients.steam import SteamClientMixin, initialize_steam_store_client, close_steam_store_client
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH
 from .runtime_config import apply_runtime_config
@@ -128,6 +128,9 @@ class SteamStatusMonitorV3(
             translator=lambda query: store.translate_game_query(self, query),
         )
         self._itad_http_client_task = asyncio.create_task(self.ITAD_CLIENT.initialize_http_client())
+        self._steam_store_http_client_task = asyncio.create_task(
+            initialize_steam_store_client(self)
+        )
         self.monitor_control = MonitorControlService(self)
         self.monitor_admin = MonitorAdminService(self)
         self.player_status_view = PlayerStatusViewService(self)
@@ -158,6 +161,7 @@ class SteamStatusMonitorV3(
             getattr(self, '_font_pack_task', None),
             getattr(self, '_achievement_blacklist_verify_task', None),
             getattr(self, '_itad_http_client_task', None),
+            getattr(self, '_steam_store_http_client_task', None),
         ):
             if t and not t.done():
                 t.cancel()
@@ -168,6 +172,7 @@ class SteamStatusMonitorV3(
         itad_client = getattr(self, 'ITAD_CLIENT', None)
         if itad_client is not None:
             await itad_client.close_http_client()
+        await close_steam_store_client(self)
         if hasattr(self, 'achievement_poll_tasks'):
             for task in self.achievement_poll_tasks.values():
                 if task and not task.done():

@@ -13,6 +13,8 @@ class FakeSteam(SteamClientMixin):
     def __init__(self):
         self.proxy = None
         self.STEAM_STORE_BASE = "https://store.steampowered.com"
+        self._steam_store_http_client = None
+        self._steam_store_http_client_loop = None
 
 
 class _FakeResponse:

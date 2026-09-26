@@ -34,6 +34,46 @@ def steam_store_client_kwargs(proxy=None):
     }
 
 
+async def _get_steam_store_client(owner):
+    """返回当前实例的 Store client；未初始化或跨 loop 时使用临时 client。"""
+    client = getattr(owner, "_steam_store_http_client", None)
+    if client is not None:
+        try:
+            if getattr(owner, "_steam_store_http_client_loop", None) is asyncio.get_running_loop():
+                return client, False
+        except RuntimeError:
+            pass
+    return httpx.AsyncClient(
+        timeout=15,
+        **steam_store_client_kwargs(getattr(owner, "proxy", None)),
+    ), True
+
+
+async def initialize_steam_store_client(owner):
+    """在当前事件循环创建 Steam Store 连接池。"""
+    loop = asyncio.get_running_loop()
+    current = getattr(owner, "_steam_store_http_client", None)
+    if current is not None and getattr(owner, "_steam_store_http_client_loop", None) is loop:
+        return current
+    await close_steam_store_client(owner)
+    owner._steam_store_http_client = httpx.AsyncClient(
+        timeout=15,
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        **steam_store_client_kwargs(owner.proxy),
+    )
+    owner._steam_store_http_client_loop = loop
+    return owner._steam_store_http_client
+
+
+async def close_steam_store_client(owner):
+    """关闭当前实例的 Steam Store 连接池。"""
+    client = getattr(owner, "_steam_store_http_client", None)
+    owner._steam_store_http_client = None
+    owner._steam_store_http_client_loop = None
+    if client is not None:
+        await client.aclose()
+
+
 class SteamClientError(RuntimeError):
     """Steam 客户端调用失败。"""
 
@@ -247,33 +287,36 @@ class SteamClientMixin:
         params = {"json": 1, "filter": "summary"}
         language = language or "all"
         params["language"] = language
+        client, owned = await _get_steam_store_client(self)
         try:
-            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                payload = response.json()
-                summary = payload.get("query_summary") or payload.get("querySummary") or {}
-                total = int(summary.get("total_reviews") or summary.get("totalReviews") or 0)
-                positive = int(summary.get("total_positive") or summary.get("totalPositive") or 0)
-                if total <= 0:
-                    return {"text": "暂无评价", "percent": None, "total": 0}
-                percent = round(positive * 100 / total)
-                if percent >= 95:
-                    label = "好评如潮"
-                elif percent >= 80:
-                    label = "特别好评"
-                elif percent >= 70:
-                    label = "多半好评"
-                elif percent >= 40:
-                    label = "褒贬不一"
-                elif percent >= 20:
-                    label = "多半差评"
-                else:
-                    label = "差评"
-                return {"text": label, "percent": percent, "total": total}
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.json()
+            summary = payload.get("query_summary") or payload.get("querySummary") or {}
+            total = int(summary.get("total_reviews") or summary.get("totalReviews") or 0)
+            positive = int(summary.get("total_positive") or summary.get("totalPositive") or 0)
+            if total <= 0:
+                return {"text": "暂无评价", "percent": None, "total": 0}
+            percent = round(positive * 100 / total)
+            if percent >= 95:
+                label = "好评如潮"
+            elif percent >= 80:
+                label = "特别好评"
+            elif percent >= 70:
+                label = "多半好评"
+            elif percent >= 40:
+                label = "褒贬不一"
+            elif percent >= 20:
+                label = "多半差评"
+            else:
+                label = "差评"
+            return {"text": label, "percent": percent, "total": total}
         except Exception as exc:
             logger.warning(f"获取 Steam 评价摘要失败: {exc} (appid={gid})")
             return None
+        finally:
+            if owned:
+                await client.aclose()
 
     async def fetch_game_reviews_both(self, appid):
         """同时获取「全部语言」与「简体中文」两份评价摘要，供卡片并列显示。"""
@@ -313,37 +356,36 @@ class SteamClientMixin:
             languages.append(language)
         if language not in ("english", "en"):
             languages.append("english")
-        last_error = None
+        client, owned = await _get_steam_store_client(self)
         try:
-            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
-                for lang in languages:
-                    for cc in store_region_candidates(preferred):
-                        try:
-                            data = await self._request_appdetails(
-                                client, gid, language=lang, country=cc
-                            )
-                        except Exception as exc:
-                            last_error = exc
-                            logger.warning(
-                                "获取 Steam %s 区详情失败: %s (appid=%s, lang=%s)",
-                                cc,
-                                exc,
-                                gid,
-                                lang,
-                            )
-                            continue
-                        if not data:
-                            continue
-                        data["_store_region"] = cc
-                        data["_store_language"] = lang
-                        if cc != preferred:
-                            logger.info(
-                                "Steam %s 区锁区或无详情，改用 %s 区 (appid=%s)",
-                                preferred,
-                                cc,
-                                gid,
-                            )
-                        return data
+            for lang in languages:
+                for cc in store_region_candidates(preferred):
+                    try:
+                        data = await self._request_appdetails(
+                            client, gid, language=lang, country=cc
+                        )
+                    except Exception as exc:
+                        last_error = exc
+                        logger.warning(
+                            "获取 Steam %s 区详情失败: %s (appid=%s, lang=%s)",
+                            cc,
+                            exc,
+                            gid,
+                            lang,
+                        )
+                        continue
+                    if not data:
+                        continue
+                    data["_store_region"] = cc
+                    data["_store_language"] = lang
+                    if cc != preferred:
+                        logger.info(
+                            "Steam %s 区锁区或无详情，改用 %s 区 (appid=%s)",
+                            preferred,
+                            cc,
+                            gid,
+                        )
+                    return data
             if last_error:
                 logger.warning(f"获取 Steam 游戏详情失败: {last_error} (appid={gid})")
             else:
@@ -352,6 +394,9 @@ class SteamClientMixin:
         except Exception as exc:
             logger.warning(f"获取 Steam 游戏详情失败: {exc} (appid={gid})")
             return None
+        finally:
+            if owned:
+                await client.aclose()
 
     async def fetch_region_price(self, appid, country="CN"):
         """获取指定国家区 Steam 商店价格（含币种、折后价/原价/折扣）。
@@ -360,42 +405,45 @@ class SteamClientMixin:
         if not gid.isdigit():
             return None
         preferred = str(country or "CN").strip().upper() or "CN"
+        client, owned = await _get_steam_store_client(self)
         try:
-            async with httpx.AsyncClient(timeout=15, **steam_store_client_kwargs(self.proxy)) as client:
-                for cc in store_region_candidates(preferred):
-                    try:
-                        data = await self._request_appdetails(client, gid, country=cc)
-                    except Exception as exc:
-                        logger.warning(
-                            "获取 Steam %s 区价格失败: %s (appid=%s)",
-                            cc,
-                            exc,
-                            gid,
-                        )
-                        continue
-                    if not data:
-                        continue
-                    price_overview = data.get("price_overview") or {}
-                    if not price_overview:
-                        continue
-                    if cc != preferred:
-                        logger.info(
-                            "Steam %s 区无价格，改用 %s 区 (appid=%s)",
-                            preferred,
-                            cc,
-                            gid,
-                        )
-                    return {
-                        "currency": price_overview.get("currency"),
-                        "current_price": price_overview.get("final", 0) / 100,
-                        "current_regular": price_overview.get("initial", 0) / 100,
-                        "cut": price_overview.get("discount_percent", 0),
-                        "region": cc,
-                    }
+            for cc in store_region_candidates(preferred):
+                try:
+                    data = await self._request_appdetails(client, gid, country=cc)
+                except Exception as exc:
+                    logger.warning(
+                        "获取 Steam %s 区价格失败: %s (appid=%s)",
+                        cc,
+                        exc,
+                        gid,
+                    )
+                    continue
+                if not data:
+                    continue
+                price_overview = data.get("price_overview") or {}
+                if not price_overview:
+                    continue
+                if cc != preferred:
+                    logger.info(
+                        "Steam %s 区无价格，改用 %s 区 (appid=%s)",
+                        preferred,
+                        cc,
+                        gid,
+                    )
+                return {
+                    "currency": price_overview.get("currency"),
+                    "current_price": price_overview.get("final", 0) / 100,
+                    "current_regular": price_overview.get("initial", 0) / 100,
+                    "cut": price_overview.get("discount_percent", 0),
+                    "region": cc,
+                }
             return None
         except Exception as exc:
             logger.warning(f"获取 Steam {country} 区价格失败: {exc} (appid={gid})")
             return None
+        finally:
+            if owned:
+                await client.aclose()
 
     async def get_chinese_game_name(self, gameid, fallback_name=None):
         '''
