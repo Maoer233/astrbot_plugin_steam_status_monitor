@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, List, Optional
 
+from ...infrastructure.cache.inflight import InFlightRequests
 from ...infrastructure.cache.price_cache import PriceTTLCache
 from ...infrastructure.clients.itad import ITADGame
 from ...shared.logging import logger
@@ -49,6 +50,10 @@ class PriceQueryService:
         self._plugin = plugin
         self._translator = translator
         self._cache = PriceTTLCache()
+        self._inflight = InFlightRequests()
+
+    async def close(self):
+        await self._inflight.clear()
 
     def _settings(self) -> PriceQuerySettings:
         config = getattr(self._plugin, "config", {}) or {}
@@ -107,15 +112,25 @@ class PriceQueryService:
         cached = self._cache.get("itad_summary", cache_key)
         if cached is not None:
             return dict(cached)
-        summary = await self._plugin.ITAD_CLIENT.get_price_summary(game.id, settings.region) or {}
+        async def request_summary():
+            return await self._plugin.ITAD_CLIENT.get_price_summary(game.id, settings.region) or {}
+
+        summary = await self._inflight.get_or_create(
+            f"itad_summary:{game.id}:{settings.region}", request_summary
+        )
+        summary = dict(summary)
         if summary.get("current_price") is None:
             for fallback_region in store_region_candidates(settings.region)[1:]:
                 fallback_key = f"{game.id}:{fallback_region}"
                 fallback_summary = self._cache.get("itad_summary", fallback_key)
                 if fallback_summary is None:
-                    fallback_summary = await self._plugin.ITAD_CLIENT.get_price_summary(
-                        game.id, fallback_region
-                    ) or {}
+                    async def request_fallback(region=fallback_region):
+                        return await self._plugin.ITAD_CLIENT.get_price_summary(
+                            game.id, region
+                        ) or {}
+                    fallback_summary = await self._inflight.get_or_create(
+                        f"itad_summary:{game.id}:{fallback_region}", request_fallback
+                    )
                     if fallback_summary:
                         self._cache.set("itad_summary", fallback_key, fallback_summary)
                 if fallback_summary.get("current_price") is not None:
@@ -125,7 +140,7 @@ class PriceQueryService:
                         fallback_region,
                         game.id,
                     )
-                    summary = fallback_summary
+                    summary = dict(fallback_summary)
                     break
         if summary:
             self._cache.set("itad_summary", cache_key, summary)
@@ -158,7 +173,13 @@ class PriceQueryService:
         cached = self._cache.get("region_price", key)
         if cached is not None:
             return dict(cached)
-        result = await self._plugin.fetch_region_price(appid, region)
+        async def request_price():
+            return await self._plugin.fetch_region_price(appid, region)
+
+        result = await self._inflight.get_or_create(
+            f"region_price:{appid}:{region}", request_price
+        )
+        result = dict(result) if result else result
         if result:
             self._cache.set("region_price", key, result)
         return result
@@ -170,10 +191,14 @@ class PriceQueryService:
         cached = self._cache.get("store_detail", key)
         if cached is not None:
             return dict(cached)
-        detail = await self._plugin.fetch_game_details(game.appid, country=settings.region)
+        async def request_detail():
+            return await self._plugin.fetch_game_details(game.appid, country=settings.region)
+        detail = await self._inflight.get_or_create(
+            f"store_detail:{game.appid}:{settings.region}:schinese", request_detail
+        )
         if detail:
             self._cache.set("store_detail", key, detail)
-        return detail
+        return dict(detail) if detail else detail
 
     async def _fetch_reviews(self, game: ITADGame, include_reviews: bool):
         if not include_reviews or not game.appid:

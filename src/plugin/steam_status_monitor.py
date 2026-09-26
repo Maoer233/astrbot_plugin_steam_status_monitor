@@ -172,6 +172,8 @@ class SteamStatusMonitorV3(
         itad_client = getattr(self, 'ITAD_CLIENT', None)
         if itad_client is not None:
             await itad_client.close_http_client()
+        if getattr(self, "price_query", None) is not None:
+            await self.price_query.close()
         await close_steam_store_client(self)
         if hasattr(self, 'achievement_poll_tasks'):
             for task in self.achievement_poll_tasks.values():
