@@ -113,6 +113,55 @@ class SteamStoreStructuredErrorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(detail["_store_fallback"])
         self.assertEqual("CN", detail["_requested_region"])
 
+    async def test_aliased_response_key_still_returns_price_and_details(self):
+        _ScriptedClient.scripted_regions = {"CN"}
+        _ScriptedClient.responses = [
+            _FakeResponse({
+                "2855530": {
+                    "success": True,
+                    "data": {
+                        "name": "艾尔登法环",
+                        "steam_appid": 1245620,
+                        "release_date": {"date": "2022 年 2 月 24 日"},
+                        "developers": ["FromSoftware, Inc."],
+                        "price_overview": {
+                            "currency": "CNY",
+                            "final": 29800,
+                            "initial": 29800,
+                            "discount_percent": 0,
+                        },
+                    },
+                }
+            }),
+            _FakeResponse({
+                "2855530": {
+                    "success": True,
+                    "data": {
+                        "name": "艾尔登法环",
+                        "steam_appid": 1245620,
+                        "price_overview": {
+                            "currency": "CNY",
+                            "final": 29800,
+                            "initial": 29800,
+                            "discount_percent": 0,
+                        },
+                    },
+                }
+            }),
+        ]
+        client = FakeSteam()
+        with patch("src.infrastructure.clients.steam.httpx.AsyncClient", _ScriptedClient):
+            detail = await client.fetch_game_details("1245620", country="CN")
+            price = await client.fetch_region_price("1245620", "CN")
+
+        self.assertEqual("艾尔登法环", detail["name"])
+        self.assertEqual("2022 年 2 月 24 日", detail["release_date"]["date"])
+        self.assertEqual("CN", detail["_store_region"])
+        self.assertFalse(detail["_store_fallback"])
+        self.assertEqual(298.0, price["current_price"])
+        self.assertEqual("CNY", price["currency"])
+        self.assertEqual("CN", price["region"])
+
     async def test_missing_product_does_not_look_like_network_failure(self):
         _ScriptedClient.responses = [_FakeResponse({}) for _ in range(10)]
         client = FakeSteam()

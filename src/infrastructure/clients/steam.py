@@ -404,15 +404,40 @@ class SteamClientMixin:
             payload = response.json()
         except Exception as exc:
             raise classify_steam_store_error(exc) from exc
-        if not isinstance(payload, dict) or gid not in payload:
+        item = self._appdetails_item(payload, gid)
+        if item is None:
             raise ProviderError("NOT_FOUND", "Steam 商店未找到商品")
-        item = payload.get(gid) or {}
-        if not isinstance(item, dict) or not item.get("success"):
+        if not item.get("success"):
             raise ProviderError("REGION_LOCKED", "Steam 商店当前区域不可用")
         data = item.get("data")
         if not isinstance(data, dict):
             raise ProviderError("NOT_FOUND", "Steam 商店未返回商品详情")
         return data
+
+    @staticmethod
+    def _appdetails_item(payload, gid):
+        """取出本次请求对应的商店详情。
+
+        Steam 有时把响应挂在另一个商品 ID 上，同时在 data.steam_appid
+        保留请求的 AppID。只按请求键查找会把有价格的详情误判成未找到。
+        """
+        if not isinstance(payload, dict) or not payload:
+            return None
+        direct = payload.get(str(gid))
+        if isinstance(direct, dict):
+            return direct
+        requested = str(gid)
+        for item in payload.values():
+            if not isinstance(item, dict):
+                continue
+            data = item.get("data")
+            if isinstance(data, dict) and str(data.get("steam_appid") or "") == requested:
+                return item
+        if len(payload) == 1:
+            item = next(iter(payload.values()))
+            if isinstance(item, dict):
+                return item
+        return None
 
     async def fetch_game_details(self, appid, language="schinese", country="CN", deadline=None):
         """获取 Steam 商店游戏详情。主区锁区时按港/台/日/美回退；简体失败再试英文。"""
