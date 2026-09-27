@@ -246,12 +246,15 @@ async def render_game_detail_image(
         if region_price is None:
             continue
         label = _country_display(code)
+        if region_summary.get("is_fallback"):
+            label = f"{label}回退"
         region_rows.append({
             "label": label,
             "price": region_price,
             "regular": region_summary.get("current_regular"),
             "currency": region_summary.get("currency") or currency,
             "cut": region_summary.get("cut"),
+            "is_fallback": bool(region_summary.get("is_fallback")),
         })
     region_height = max(86, 26 + len(region_rows) * 36 + 16)
     section_heights = (150, 168, region_height)  # 第二个区段底部多留一个空行（“其它”行下方）
@@ -326,8 +329,18 @@ async def render_game_detail_image(
     draw.text((left_x + 12, section_top[0] + 128), "发行日期", font=small_font, fill=STEAM_MUTED)
     draw.text((left_x + 80, section_top[0] + 128), release_date, font=small_font, fill=STEAM_TEXT)
 
-    price_y = section_top[1] + 28
+    price_y = section_top[1] + 18
     draw.text((left_x + 12, price_y), current_text, font=price_font, fill=STEAM_WHITE)
+    if current_price.get("is_fallback"):
+        actual_label = _country_display(current_price.get("actual_region"))
+        requested_label = _country_display(current_price.get("requested_region"))
+        if actual_label and requested_label:
+            fallback_note = f"{requested_label}不可购买，价格来自{actual_label}回退"
+        elif actual_label:
+            fallback_note = f"价格来自{actual_label}回退"
+        else:
+            fallback_note = "价格来自回退区"
+        draw.text((left_x + 12, price_y + 40), fallback_note, font=mini_font, fill=(255, 178, 44))
     cursor = left_x + 12 + draw.textbbox((0, 0), current_text, font=price_font)[2] + 10
     cursor += _discount_tag(draw, cursor, price_y + 8, discount_text, tag_font)
     if regular_text:

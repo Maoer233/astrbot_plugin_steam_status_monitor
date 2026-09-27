@@ -177,25 +177,61 @@ class PriceQueryService:
         return card
 
     @staticmethod
-    def _select_current_price(detail: Optional[dict], summary: dict) -> dict:
+    def _select_current_price(
+        detail: Optional[dict],
+        summary: dict,
+        *,
+        requested_region: str = "",
+        region_prices: Optional[dict] = None,
+    ) -> dict:
+        requested = str(requested_region or "").upper()
+        primary = (region_prices or {}).get(requested) or {}
         if summary.get("current_price") is not None:
+            actual = str(summary.get("region") or requested).upper()
             return {
                 "value": summary.get("current_price"),
                 "regular": summary.get("current_regular"),
                 "currency": summary.get("currency") or "",
                 "cut": summary.get("cut") or 0,
                 "source": "itad_steam",
+                "requested_region": requested,
+                "actual_region": actual,
+                "is_fallback": bool(requested and actual and actual != requested),
+            }
+        if primary.get("current_price") is not None:
+            return {
+                "value": primary.get("current_price"),
+                "regular": primary.get("current_regular"),
+                "currency": primary.get("currency") or "",
+                "cut": primary.get("cut") or 0,
+                "source": "steam_store",
+                "requested_region": requested,
+                "actual_region": requested,
+                "is_fallback": False,
             }
         price = (detail or {}).get("price_overview") or {}
         if price:
+            actual = str((detail or {}).get("_store_region") or requested).upper()
             return {
                 "value": price.get("final", 0) / 100,
                 "regular": price.get("initial", 0) / 100,
                 "currency": price.get("currency") or "",
                 "cut": price.get("discount_percent") or 0,
                 "source": "steam_store",
+                "requested_region": requested,
+                "actual_region": actual,
+                "is_fallback": bool((detail or {}).get("_store_fallback") or (requested and actual != requested)),
             }
-        return {"value": None, "regular": None, "currency": "", "cut": 0, "source": "none"}
+        return {
+            "value": None,
+            "regular": None,
+            "currency": "",
+            "cut": 0,
+            "source": "none",
+            "requested_region": requested,
+            "actual_region": "",
+            "is_fallback": False,
+        }
 
     @staticmethod
     def _select_history_low(summary: dict) -> dict:
@@ -264,8 +300,17 @@ class PriceQueryService:
                         game.itad_id,
                     )
                     summary = dict(fallback_summary)
+                    summary["region"] = fallback_region
+                    summary["requested_region"] = settings.region
+                    summary["is_fallback"] = True
+                    summary["source"] = "itad"
                     break
         if summary:
+            summary = dict(summary)
+            summary.setdefault("region", settings.region)
+            summary.setdefault("requested_region", settings.region)
+            summary.setdefault("is_fallback", False)
+            summary.setdefault("source", "itad")
             self._cache.set("itad_summary", cache_key, summary)
         return summary_to_currency(summary, settings.currency)
 
@@ -330,7 +375,12 @@ class PriceQueryService:
             )
             if primary:
                 actual = str(primary.get("region") or settings.region).upper()
-                region_prices[actual] = summary_to_currency(primary, settings.currency)
+                priced = summary_to_currency(primary, settings.currency)
+                priced["requested_region"] = settings.region
+                priced["actual_region"] = actual
+                priced["is_fallback"] = bool(primary.get("is_fallback") or actual != settings.region)
+                priced["source"] = "steam_store"
+                region_prices[actual] = priced
         reviews = None
         if detail:
             detail["review_all"] = (reviews or {}).get("all") or {}
@@ -342,7 +392,9 @@ class PriceQueryService:
         store_message = store_url
         if locked and store_url:
             region_label = COUNTRY_LABEL.get(settings.region, settings.region)
-            store_message = f"{store_url}\n当前游戏锁{region_label}"
+            actual_label = COUNTRY_LABEL.get(actual_store_region, actual_store_region)
+            fallback_note = f"，价格来自{actual_label}回退" if actual_store_region and actual_store_region != settings.region else ""
+            store_message = f"{store_url}\n当前游戏锁{region_label}{fallback_note}"
         card_data = detail or {
             "name": game.title,
             "header_image": game.image,
@@ -354,7 +406,12 @@ class PriceQueryService:
             "review_all": (reviews or {}).get("all") or {},
             "review_schinese": (reviews or {}).get("schinese") or {},
         }
-        current_price = self._select_current_price(detail, summary)
+        current_price = self._select_current_price(
+            detail,
+            summary,
+            requested_region=settings.region,
+            region_prices=region_prices,
+        )
         history_low = self._select_history_low(summary)
         return PriceCard(
             game=game,
@@ -411,7 +468,12 @@ class PriceQueryService:
                 logger.warning("对比区价格获取失败，继续生成价格卡 (appid=%s): %s", game.appid, compare)
             elif compare:
                 actual = str(compare.get("region") or settings.compare_region).upper()
-                card.region_prices[actual] = summary_to_currency(compare, settings.currency)
+                priced = summary_to_currency(compare, settings.currency)
+                priced["requested_region"] = settings.compare_region
+                priced["actual_region"] = actual
+                priced["is_fallback"] = bool(compare.get("is_fallback") or actual != settings.compare_region)
+                priced["source"] = "steam_store"
+                card.region_prices[actual] = priced
         if review_task is not None and review_task.done() and not review_task.cancelled():
             reviews = review_task.result()
             if isinstance(reviews, BaseException):

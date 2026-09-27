@@ -160,6 +160,11 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(99, card.summary["current_price"])
         self.assertTrue(card.locked)
         self.assertIn("当前游戏锁", card.store_message)
+        self.assertEqual("CN", card.current_price["requested_region"])
+        self.assertEqual("HK", card.current_price["actual_region"])
+        self.assertTrue(card.current_price["is_fallback"])
+        self.assertEqual("itad", card.summary["source"])
+        self.assertNotIn("CN", card.region_prices)
         self.assertEqual(
             [call("itad1", "CN", timeout=4), call("itad1", "HK", timeout=4)],
             plugin.ITAD_CLIENT.get_price_summary.await_args_list,
@@ -251,8 +256,41 @@ class PriceQueryServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("steam_store", card.current_price["source"])
         self.assertEqual(99, card.current_price["value"])
+        self.assertFalse(card.current_price["is_fallback"])
         self.assertEqual("none", card.history_low["source"])
         self.assertIsNone(card.history_low["value"])
+
+    async def test_store_fallback_price_is_not_shown_as_primary_region(self):
+        game = ITADGame(id="itad1", title="Locked", appid="1")
+        service, plugin = self._service(get_price_summary=AsyncMock(return_value={}))
+        plugin.fetch_game_details = AsyncMock(return_value={
+            "name": "Locked",
+            "store_appid": "1",
+            "_store_region": "HK",
+            "_requested_region": "CN",
+            "_store_fallback": True,
+            "price_overview": {"final": 12800, "initial": 12800, "currency": "HKD", "discount_percent": 0},
+        })
+        plugin.fetch_region_price = AsyncMock(return_value={
+            "current_price": 128,
+            "current_regular": 128,
+            "currency": "HKD",
+            "cut": 0,
+            "region": "HK",
+            "requested_region": "CN",
+            "is_fallback": True,
+            "source": "steam_store",
+        })
+
+        card = await service.build_card(game, include_reviews=False)
+
+        self.assertEqual("HK", card.current_price["actual_region"])
+        self.assertEqual("CN", card.current_price["requested_region"])
+        self.assertTrue(card.current_price["is_fallback"])
+        self.assertEqual("steam_store", card.current_price["source"])
+        self.assertNotIn("CN", card.region_prices)
+        self.assertTrue(card.region_prices["HK"]["is_fallback"])
+        self.assertIn("价格来自港区回退", card.store_message)
 
     async def test_itad_region_fallback_uses_remaining_attempt_budget(self):
         game = ITADGame(id="itad1", title="Fallback", appid="1")
