@@ -33,7 +33,8 @@ class SummaryCurrencyContractTests(unittest.TestCase):
         self.assertEqual(100, converted["current_price"])
         self.assertEqual(67.25, converted["steam_low"])
         self.assertEqual("CNY", converted["steam_low_currency"])
-        self.assertEqual(8.58, converted["history_low"])
+        # history_low 使用独立 HKD 来源：20 * 0.8576 = 17.15
+        self.assertEqual(17.15, converted["history_low"])
         self.assertEqual("CNY", converted["history_low_currency"])
         self.assertEqual(67.25, converted["cdk_amount"])
         self.assertEqual("CNY", converted["cdk_currency"])
