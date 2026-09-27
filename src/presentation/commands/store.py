@@ -82,7 +82,8 @@ async def game(plugin, event, appid: str):
 
 async def handle_selection(plugin, event):
     session_key = search_session_key(event)
-    if not plugin._steam_search_pending.get(session_key):
+    cache = plugin.price_candidates
+    if cache.get(session_key) is None and not cache.has_expired(session_key):
         return
     message = str(event.get_message_str() or "").strip()
     if message.startswith("/"):
@@ -105,47 +106,55 @@ async def price(plugin, event, auto_first: bool, prefix: str):
         yield event.plain_result(f"用法：/steam {prefix} <游戏名或 Steam 链接>")
         return
     session_key = search_session_key(event)
-    pending = plugin._steam_search_pending.get(session_key)
-    selected_from_cache = False
-    if not auto_first and query.isdigit() and pending:
+    cache = plugin.price_candidates
+    selected = None
+    if not auto_first and query.isdigit():
+        selected = cache.get(session_key)
+        if selected is None and cache.has_expired(session_key):
+            cache.take_expired(session_key)
+            yield event.plain_result("候选已过期，请重新查询。")
+            return
+        if selected is None:
+            yield event.plain_result("没有待选择的候选，请重新查询游戏名。")
+            return
         index = int(query) - 1
-        games = plugin._steam_search_cache.get(session_key, [])
-        if 0 <= index < len(games):
-            game_item = games[index]
-            selected_from_cache = True
+        if 0 <= index < len(selected.games):
+            game_item = selected.games[index]
         else:
             yield event.plain_result("候选序号无效，请重新回复序号。")
             return
-    else:
+    if selected is None:
         resolved = await plugin.price_query.resolve_games(query)
         games = list(resolved.get("games") or [])
         if not games:
             yield event.plain_result(plugin.price_query._search_message(resolved.get("status")))
             return
         game_item = games[0]
-    if not auto_first and not selected_from_cache and len(games) > 1:
-        plugin._steam_search_cache[session_key] = games
-        plugin._steam_search_pending[session_key] = True
-        lines = ["找到多个匹配游戏，请回复序号："]
-        for index, item in enumerate(games, 1):
-            lines.append(f"{index}. {item.title}")
-        yield event.plain_result("\n".join(lines))
-        return
+        if not auto_first and len(games) > 1:
+            current = cache.get(session_key)
+            if current is not None:
+                yield event.plain_result(
+                    f"已有未完成的查询 #{current.query_id}，请先回复序号，或等待过期后重新查询。"
+                )
+                return
+            saved = cache.put(session_key, games)
+            lines = [f"找到多个匹配游戏，请回复序号（查询 #{saved.query_id}）："]
+            for index, item in enumerate(saved.games, 1):
+                lines.append(f"{index}. {item.title}")
+            yield event.plain_result("\n".join(lines))
+            return
     try:
         card = await plugin.price_query.build_card(game_item)
     except TimeoutError:
-        plugin._steam_search_pending.pop(session_key, None)
-        plugin._steam_search_cache.pop(session_key, None)
+        cache.pop(session_key)
         yield event.plain_result("价格查询超时，请稍后重试。")
         return
     except Exception:
         logger.exception("构建 Steam 价格卡失败 (query=%s)", query)
-        plugin._steam_search_pending.pop(session_key, None)
-        plugin._steam_search_cache.pop(session_key, None)
+        cache.pop(session_key)
         yield event.plain_result("价格服务暂时不可用，请稍后重试。")
         return
-    plugin._steam_search_pending.pop(session_key, None)
-    plugin._steam_search_cache.pop(session_key, None)
+    cache.pop(session_key)
     try:
         img_bytes = await render_game_detail_image(
             card.card_data,
@@ -166,8 +175,13 @@ async def price(plugin, event, auto_first: bool, prefix: str):
             result.message(card.store_message)
         yield result
         return
-    except Exception as exc:
-        logger.exception("渲染 Steam 价格详情卡片失败: %s", exc)
+    except Exception:
+        logger.exception("渲染 Steam 价格详情卡片失败")
+        if card.store_message:
+            yield event.plain_result(f"价格已获取，但卡片生成失败。\n{card.store_message}")
+        else:
+            yield event.plain_result("价格已获取，但卡片生成失败，请稍后重试。")
+        return
 
     if card.store_message:
         yield event.plain_result(card.store_message)

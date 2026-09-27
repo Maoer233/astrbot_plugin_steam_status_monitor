@@ -7,6 +7,7 @@ import os
 from ..application.services.monitor_admin import MonitorAdminService
 from ..application.services.monitor_control import MonitorControlService
 from ..application.services.ranking import RankingService
+from ..application.services.price_candidates import PriceCandidateCache
 from ..application.services.price_query import PriceQueryService
 from ..application.services.player_status_view import PlayerStatusViewService
 from ..application.services.rank_view import RankViewService
@@ -61,8 +62,7 @@ class SteamStatusMonitorV3(
         self.superpower = SuperpowerPicker(ABILITIES_PATH)
         self._game_name_cache = {}  # 修复: 游戏名缓存，防止 AttributeError
         apply_runtime_config(self, config)
-        self._steam_search_cache = {}
-        self._steam_search_pending = {}
+        self.price_candidates = PriceCandidateCache()
         self.next_poll_time = {}  # {group_id: {steamid: next_time}}
         # 数据持久化目录
         self.data_dir = os.path.join("data", "steam_status_monitor")
@@ -174,6 +174,9 @@ class SteamStatusMonitorV3(
             await itad_client.close_http_client()
         if getattr(self, "price_query", None) is not None:
             await self.price_query.close()
+        candidates = getattr(self, "price_candidates", None)
+        if candidates is not None:
+            candidates.clear()
         await close_steam_store_client(self)
         if hasattr(self, 'achievement_poll_tasks'):
             for task in self.achievement_poll_tasks.values():
