@@ -1,0 +1,299 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1200">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&amp;display=swap');
+    text { font-family: 'JetBrains Mono', 'Noto Sans SC', sans-serif; fill: #e2e8f0; }
+    .title { font-size: 18px; font-weight: 700; fill: #f1f5f9; }
+    .layer-title { font-size: 13px; font-weight: 600; }
+    .module { font-size: 11px; font-weight: 600; }
+    .desc { font-size: 9px; fill: #94a3b8; }
+    .note { font-size: 8px; fill: #64748b; font-style: italic; }
+  </style>
+  
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#475569"/>
+    </marker>
+    <linearGradient id="grad-presentation" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0c4a6e;stop-opacity:0.4" />
+      <stop offset="100%" style="stop-color:#0c4a6e;stop-opacity:0.1" />
+    </linearGradient>
+    <linearGradient id="grad-application" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#065f46;stop-opacity:0.4" />
+      <stop offset="100%" style="stop-color:#065f46;stop-opacity:0.1" />
+    </linearGradient>
+    <linearGradient id="grad-domain" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#5b21b6;stop-opacity:0.4" />
+      <stop offset="100%" style="stop-color:#5b21b6;stop-opacity:0.1" />
+    </linearGradient>
+    <linearGradient id="grad-infra" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#78350f;stop-opacity:0.3" />
+      <stop offset="100%" style="stop-color:#78350f;stop-opacity:0.1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="100%" height="100%" fill="#0f172a"/>
+  <rect width="100%" height="100%" fill="url(#grid)"/>
+  
+  <!-- Title -->
+  <text x="800" y="45" class="title" text-anchor="middle">AstrBot Steam 监控插件 - 分层架构</text>
+  <text x="800" y="65" class="desc" text-anchor="middle">自上而下：Presentation → Application → Domain → Infrastructure</text>
+  
+  <!-- Layer 1: Presentation (表示层) -->
+  <rect x="100" y="100" width="1400" height="180" rx="8" fill="url(#grad-presentation)" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="120" y="125" class="layer-title" fill="#0ea5e9">Presentation Layer - 表示层</text>
+  <text x="120" y="140" class="note">通道适配 | 命令解析 | 格式化输出</text>
+  
+  <!-- Commands -->
+  <g transform="translate(150, 160)">
+    <rect width="220" height="90" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1.5"/>
+    <text x="110" y="25" class="module" text-anchor="middle" fill="#0ea5e9">commands/</text>
+    <text x="20" y="45" class="desc">monitor.py - 监控管理</text>
+    <text x="20" y="60" class="desc">store.py - 玩家绑定</text>
+    <text x="20" y="75" class="desc">rank.py - 排行榜</text>
+  </g>
+  
+  <!-- Renderers -->
+  <g transform="translate(420, 160)">
+    <rect width="220" height="90" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1.5"/>
+    <text x="110" y="25" class="module" text-anchor="middle" fill="#0ea5e9">renderers/</text>
+    <text x="20" y="45" class="desc">card_render - 游戏卡片</text>
+    <text x="20" y="60" class="desc">formatters - 文本格式化</text>
+    <text x="20" y="75" class="desc">image_crop - 头像裁剪</text>
+  </g>
+  
+  <!-- Web API -->
+  <g transform="translate(690, 160)">
+    <rect width="220" height="90" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1.5"/>
+    <text x="110" y="25" class="module" text-anchor="middle" fill="#0ea5e9">web/admin_api</text>
+    <text x="20" y="45" class="desc">WebUI 管理接口</text>
+    <text x="20" y="60" class="desc">群聊管理 API</text>
+    <text x="20" y="75" class="desc">玩家信息查询</text>
+  </g>
+  
+  <!-- Plugin Entry -->
+  <g transform="translate(960, 160)">
+    <rect width="220" height="90" rx="6" fill="#0f172a" stroke="#0ea5e9" stroke-width="1.5"/>
+    <text x="110" y="25" class="module" text-anchor="middle" fill="#0ea5e9">main.py</text>
+    <text x="20" y="45" class="desc">AstrBot 注册桩</text>
+    <text x="20" y="60" class="desc">插件生命周期</text>
+    <text x="20" y="75" class="desc">Star 子类入口</text>
+  </g>
+  
+  <!-- Commands Output Note -->
+  <g transform="translate(1230, 160)">
+    <rect width="240" height="90" rx="6" fill="rgba(30,41,59,0.6)" stroke="#475569" stroke-width="1" stroke-dasharray="4,2"/>
+    <text x="120" y="25" class="desc" text-anchor="middle" fill="#94a3b8">输出通道</text>
+    <text x="20" y="45" class="note">→ QQ 群消息</text>
+    <text x="20" y="60" class="note">→ WebUI 响应</text>
+    <text x="20" y="75" class="note">→ 格式化卡片</text>
+  </g>
+  
+  <!-- Layer 2: Application (应用层) -->
+  <rect x="100" y="320" width="1400" height="280" rx="8" fill="url(#grad-application)" stroke="#10b981" stroke-width="2"/>
+  <text x="120" y="345" class="layer-title" fill="#10b981">Application Layer - 应用服务层</text>
+  <text x="120" y="360" class="note">业务编排 | 状态管理 | 流程控制</text>
+  
+  <!-- Core Services Row 1 -->
+  <g transform="translate(150, 380)">
+    <rect width="200" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+    <text x="100" y="20" class="module" text-anchor="middle" fill="#10b981">SessionService</text>
+    <text x="100" y="38" class="desc" text-anchor="middle">游戏会话状态机</text>
+    <text x="10" y="55" class="note">playing/confirming_exit</text>
+    <text x="10" y="70" class="note">handle() / tick_due()</text>
+  </g>
+  
+  <g transform="translate(380, 380)">
+    <rect width="200" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+    <text x="100" y="20" class="module" text-anchor="middle" fill="#10b981">MonitorAdminService</text>
+    <text x="100" y="38" class="desc" text-anchor="middle">群聊/玩家管理</text>
+    <text x="10" y="55" class="note">add/remove player</text>
+    <text x="10" y="70" class="note">状态晋升机制 ⭐</text>
+  </g>
+  
+  <g transform="translate(610, 380)">
+    <rect width="200" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+    <text x="100" y="20" class="module" text-anchor="middle" fill="#10b981">MonitorControlService</text>
+    <text x="100" y="38" class="desc" text-anchor="middle">监控启停控制</text>
+    <text x="10" y="55" class="note">start/stop/toggle</text>
+    <text x="10" y="70" class="note">成就/跳过推送</text>
+  </g>
+  
+  <g transform="translate(840, 380)">
+    <rect width="200" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+    <text x="100" y="20" class="module" text-anchor="middle" fill="#10b981">RankingService</text>
+    <text x="100" y="38" class="desc" text-anchor="middle">排行榜逻辑</text>
+    <text x="10" y="55" class="note">时长统计</text>
+    <text x="10" y="70" class="note">排名计算</text>
+  </g>
+  
+  <g transform="translate(1070, 380)">
+    <rect width="200" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+    <text x="100" y="20" class="module" text-anchor="middle" fill="#10b981">PriceQueryService</text>
+    <text x="100" y="38" class="desc" text-anchor="middle">价格查询编排</text>
+    <text x="10" y="55" class="note">resolve_games / build_card</text>
+    <text x="10" y="70" class="note">不新建解析器或聚合器</text>
+  </g>
+  
+  <!-- Tracking Mixins Row 2 -->
+  <g transform="translate(150, 490)">
+    <rect width="240" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="120" y="20" class="module" text-anchor="middle" fill="#34d399">PollingTrackingMixin</text>
+    <text x="120" y="38" class="desc" text-anchor="middle">全局轮询调度</text>
+    <text x="10" y="55" class="note">主群监控 + 分发路由</text>
+    <text x="10" y="70" class="note">check_status_change()</text>
+  </g>
+  
+  <g transform="translate(420, 490)">
+    <rect width="220" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="110" y="20" class="module" text-anchor="middle" fill="#34d399">StatusChangeTracking</text>
+    <text x="110" y="38" class="desc" text-anchor="middle">状态变化检测</text>
+    <text x="10" y="55" class="note">online/offline/gaming</text>
+    <text x="10" y="70" class="note">触发会话处理</text>
+  </g>
+  
+  <g transform="translate(670, 490)">
+    <rect width="220" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="110" y="20" class="module" text-anchor="middle" fill="#34d399">AchievementTracking</text>
+    <text x="110" y="38" class="desc" text-anchor="middle">成就监控</text>
+    <text x="10" y="55" class="note">增量检测</text>
+    <text x="10" y="70" class="note">退出后补偿</text>
+  </g>
+  
+  <g transform="translate(920, 490)">
+    <rect width="220" height="80" rx="6" fill="#0f172a" stroke="#10b981" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="110" y="20" class="module" text-anchor="middle" fill="#34d399">NotificationTracking</text>
+    <text x="110" y="38" class="desc" text-anchor="middle">通知发送</text>
+    <text x="10" y="55" class="note">开始/结束/切换</text>
+    <text x="10" y="70" class="note">主群 + 分发路由推送</text>
+  </g>
+  
+  <!-- Layer 3: Domain (领域层) -->
+  <rect x="100" y="640" width="1400" height="180" rx="8" fill="url(#grad-domain)" stroke="#a78bfa" stroke-width="2"/>
+  <text x="120" y="665" class="layer-title" fill="#a78bfa">Domain Layer - 领域层</text>
+  <text x="120" y="680" class="note">核心业务模型 | 状态容器 | 纯函数逻辑</text>
+  
+  <g transform="translate(150, 700)">
+    <rect width="280" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="140" y="25" class="module" text-anchor="middle" fill="#a78bfa">MonitorStateStore</text>
+    <text x="20" y="45" class="desc">group_steam_ids - 主群监控</text>
+    <text x="20" y="60" class="desc">push_groups - 分发路由</text>
+    <text x="20" y="75" class="desc">playing_sessions - 会话字典</text>
+  </g>
+  
+  <g transform="translate(470, 700)">
+    <rect width="240" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="120" y="25" class="module" text-anchor="middle" fill="#a78bfa">PlayingSession</text>
+    <text x="20" y="45" class="desc">状态机: playing → confirming</text>
+    <text x="20" y="60" class="desc">→ closed (终态)</text>
+    <text x="20" y="75" class="desc">apply() 纯函数转换</text>
+  </g>
+  
+  <g transform="translate(750, 700)">
+    <rect width="200" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="100" y="25" class="module" text-anchor="middle" fill="#a78bfa">game_filter</text>
+    <text x="20" y="45" class="desc">游戏过滤规则</text>
+    <text x="20" y="60" class="desc">黑名单/白名单</text>
+    <text x="20" y="75" class="desc">推送条件判断</text>
+  </g>
+  
+  <g transform="translate(990, 700)">
+    <rect width="200" height="90" rx="6" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="100" y="25" class="module" text-anchor="middle" fill="#a78bfa">value objects</text>
+    <text x="20" y="45" class="desc">GameInfo</text>
+    <text x="20" y="60" class="desc">PlayerStatus</text>
+    <text x="20" y="75" class="desc">Achievement</text>
+  </g>
+  
+  <!-- Layer 4: Infrastructure (基础设施层) -->
+  <rect x="100" y="860" width="1400" height="190" rx="8" fill="url(#grad-infra)" stroke="#f59e0b" stroke-width="2"/>
+  <text x="120" y="885" class="layer-title" fill="#f59e0b">Infrastructure Layer - 基础设施层</text>
+  <text x="120" y="900" class="note">外部依赖 | 数据持久化 | 第三方 API</text>
+  
+  <g transform="translate(150, 920)">
+    <rect width="240" height="90" rx="6" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="120" y="25" class="module" text-anchor="middle" fill="#f59e0b">SteamClientMixin</text>
+    <text x="20" y="45" class="desc">Steam Web API 客户端</text>
+    <text x="20" y="60" class="desc">玩家状态/成就查询</text>
+    <text x="20" y="75" class="desc">游戏信息获取</text>
+  </g>
+  
+  <g transform="translate(430, 920)">
+    <rect width="240" height="90" rx="6" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="120" y="25" class="module" text-anchor="middle" fill="#f59e0b">PersistenceMixin</text>
+    <text x="20" y="45" class="desc">JSON 文件持久化</text>
+    <text x="20" y="60" class="desc">_save_group_steam_ids()</text>
+    <text x="20" y="75" class="desc">_save_push_groups()</text>
+  </g>
+  
+  <g transform="translate(710, 920)">
+    <rect width="240" height="90" rx="6" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="120" y="25" class="module" text-anchor="middle" fill="#f59e0b">FontPackService</text>
+    <text x="20" y="45" class="desc">字体包下载</text>
+    <text x="20" y="60" class="desc">运行时资源管理</text>
+    <text x="20" y="75" class="desc">fonts/ 目录</text>
+  </g>
+  
+  <g transform="translate(990, 900)">
+    <rect width="360" height="130" rx="6" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="180" y="22" class="module" text-anchor="middle" fill="#f59e0b">ITADClient / Steam Store</text>
+    <text x="16" y="44" class="desc">Steam storesearch / appdetails / reviews</text>
+    <text x="16" y="62" class="desc">ITADClient.search_games() / lookup</text>
+    <text x="16" y="80" class="desc">ITAD prices/v3</text>
+    <text x="16" y="98" class="desc">价格来自 Steam Store 与 ITAD</text>
+    <text x="16" y="116" class="desc">QQ 头像服务</text>
+  </g>
+  
+  <!-- Dependency Arrows -->
+  <!-- Presentation → Application -->
+  <path d="M 260 280 L 250 380" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 530 280 L 480 380" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 800 280 L 710 380" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 1070 280 L 950 380" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Application → Domain -->
+  <path d="M 250 600 L 290 700" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 480 600 L 580 700" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 710 600 L 860 700" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Application → Infrastructure -->
+  <path d="M 270 600 L 270 920" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 550 600 L 550 920" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 950 600 L 1110 920" stroke="#475569" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
+  
+  <!-- Legend -->
+  <g transform="translate(100, 1080)">
+    <text x="0" y="0" class="layer-title" fill="#94a3b8">图例</text>
+    
+    <rect x="0" y="15" width="120" height="30" rx="4" fill="#0f172a" stroke="#0ea5e9" stroke-width="1.5"/>
+    <text x="60" y="35" class="desc" text-anchor="middle">Presentation 表示层</text>
+    
+    <rect x="140" y="15" width="120" height="30" rx="4" fill="#0f172a" stroke="#10b981" stroke-width="1.5"/>
+    <text x="200" y="35" class="desc" text-anchor="middle">Application 应用层</text>
+    
+    <rect x="280" y="15" width="120" height="30" rx="4" fill="#0f172a" stroke="#a78bfa" stroke-width="1.5"/>
+    <text x="340" y="35" class="desc" text-anchor="middle">Domain 领域层</text>
+    
+    <rect x="420" y="15" width="120" height="30" rx="4" fill="#0f172a" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="480" y="35" class="desc" text-anchor="middle">Infrastructure 基础设施</text>
+    
+    <rect x="560" y="15" width="120" height="30" rx="4" fill="#0f172a" stroke="#10b981" stroke-width="1" stroke-dasharray="3,2"/>
+    <text x="620" y="35" class="desc" text-anchor="middle">Mixin 组件</text>
+    
+    <line x1="700" y1="30" x2="750" y2="30" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="760" y="35" class="desc">依赖方向</text>
+  </g>
+  
+  <!-- Key Features Note -->
+  <g transform="translate(100, 1140)">
+    <text x="0" y="0" class="desc" fill="#64748b">核心特性：</text>
+    <text x="80" y="0" class="note">① 清晰分层（4层）</text>
+    <text x="220" y="0" class="note">② 依赖单向（自上而下）</text>
+    <text x="400" y="0" class="note">③ 状态晋升机制 (MonitorAdminService)</text>
+    <text x="680" y="0" class="note">④ 会话状态机 (SessionService)</text>
+    <text x="920" y="0" class="note">⑤ 主群监控 + 分发路由架构</text>
+  </g>
+</svg>
