@@ -104,17 +104,31 @@ def convert(price, from_currency, to_currency, rates=None):
 
 
 def summary_to_currency(summary, target="CNY", rates=None):
-    """将 ITAD price summary 的金额字段统一折算为目标币种，返回新 dict。
-    仅当原币种与目标币种都有汇率时才折算并置 currency=target；否则保留原币种与金额，避免错标。"""
+    """将价格摘要金额统一折算为目标币种，返回新 dict。
+
+    顶层当前价使用 ``currency``；Steam 史低、历史最低价和第三方价格
+    分别使用自己的来源币种字段，避免跨来源金额被错误解释或重复换算。
+    """
     out = dict(summary or {})
-    currency = str((out.get("currency") or "")).upper()
     target = str(target or "CNY").upper()
-    if not currency or currency == target:
-        return out
     table = rates or RATES
-    if currency in table and target in table:
-        for field in ("current_price", "current_regular", "history_low", "lowest", "steam_low", "cdk_amount"):
-            if out.get(field) is not None:
-                out[field] = convert(out[field], currency, target, table)
-        out["currency"] = target
+    fields = (
+        ("current_price", "currency"),
+        ("current_regular", "currency"),
+        ("steam_low", "steam_low_currency"),
+        ("history_low", "history_low_currency"),
+        ("lowest", "history_low_currency"),
+        ("cdk_amount", "cdk_currency"),
+    )
+    for field, currency_field in fields:
+        amount = out.get(field)
+        source = str(out.get(currency_field) or "").upper()
+        if amount is None or not source or source == target:
+            continue
+        if source not in table or target not in table:
+            continue
+        out[field] = convert(amount, source, target, table)
+        out[currency_field] = target
+    if out.get("currency"):
+        out["currency"] = str(out["currency"]).upper()
     return out

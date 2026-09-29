@@ -7,6 +7,7 @@ import os
 from ..application.services.monitor_admin import MonitorAdminService
 from ..application.services.monitor_control import MonitorControlService
 from ..application.services.ranking import RankingService
+from ..application.services.price_candidates import PriceCandidateCache
 from ..application.services.price_query import PriceQueryService
 from ..application.services.player_status_view import PlayerStatusViewService
 from ..application.services.rank_view import RankViewService
@@ -22,7 +23,7 @@ from ..presentation.renderers.superpower import SuperpowerPicker
 from ..presentation.web.admin_api import WebAdminAPI
 from ..infrastructure.persistence.plugin_data import PersistenceMixin
 from ..infrastructure.fonts import FontPackService
-from ..infrastructure.clients.steam import SteamClientMixin
+from ..infrastructure.clients.steam import SteamClientMixin, initialize_steam_store_client, close_steam_store_client
 from ..application.services.qq_menu_management import QQMenuManagementMixin
 from ..shared.paths import ABILITIES_PATH
 from .runtime_config import apply_runtime_config
@@ -49,7 +50,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.8.2"
+        self._plugin_version = "4.8.5"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -61,8 +62,7 @@ class SteamStatusMonitorV3(
         self.superpower = SuperpowerPicker(ABILITIES_PATH)
         self._game_name_cache = {}  # 修复: 游戏名缓存，防止 AttributeError
         apply_runtime_config(self, config)
-        self._steam_search_cache = {}
-        self._steam_search_pending = {}
+        self.price_candidates = PriceCandidateCache()
         self.next_poll_time = {}  # {group_id: {steamid: next_time}}
         # 数据持久化目录
         self.data_dir = os.path.join("data", "steam_status_monitor")
@@ -127,6 +127,10 @@ class SteamStatusMonitorV3(
             self,
             translator=lambda query: store.translate_game_query(self, query),
         )
+        self._itad_http_client_task = asyncio.create_task(self.ITAD_CLIENT.initialize_http_client())
+        self._steam_store_http_client_task = asyncio.create_task(
+            initialize_steam_store_client(self)
+        )
         self.monitor_control = MonitorControlService(self)
         self.monitor_admin = MonitorAdminService(self)
         self.player_status_view = PlayerStatusViewService(self)
@@ -156,6 +160,8 @@ class SteamStatusMonitorV3(
             getattr(self, '_init_poll_task', None),
             getattr(self, '_font_pack_task', None),
             getattr(self, '_achievement_blacklist_verify_task', None),
+            getattr(self, '_itad_http_client_task', None),
+            getattr(self, '_steam_store_http_client_task', None),
         ):
             if t and not t.done():
                 t.cancel()
@@ -163,6 +169,15 @@ class SteamStatusMonitorV3(
         font_pack = getattr(self, 'font_pack', None)
         if font_pack:
             await font_pack.aclose()
+        itad_client = getattr(self, 'ITAD_CLIENT', None)
+        if itad_client is not None:
+            await itad_client.close_http_client()
+        if getattr(self, "price_query", None) is not None:
+            await self.price_query.close()
+        candidates = getattr(self, "price_candidates", None)
+        if candidates is not None:
+            candidates.clear()
+        await close_steam_store_client(self)
         if hasattr(self, 'achievement_poll_tasks'):
             for task in self.achievement_poll_tasks.values():
                 if task and not task.done():

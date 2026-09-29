@@ -495,6 +495,55 @@ class AchievementMonitor:
         # 不读环境代理（trust_env=False），开启 trust_env 让图标请求走系统代理；
         # session.get 仍保留显式 proxy=self.proxy 的兼容路径。
         async with aiohttp.ClientSession(connector=connector, trust_env=True) as session:
+            async def fetch_icon(apiname):
+                detail = achievement_details.get(apiname) or {}
+                icon_url = detail.get("icon")
+                if not icon_url:
+                    return apiname, None
+                candidates = [icon_url]
+                alt = icon_url.replace("steamcdn-a.akamaihd.net", "cdn.akamai.steamstatic.com")
+                if alt not in candidates:
+                    candidates.append(alt)
+                gray = detail.get("icon_gray")
+                if gray and gray not in candidates:
+                    candidates.append(gray)
+                for cand in candidates:
+                    try:
+                        async with session.get(cand, proxy=self.proxy) as response:
+                            if response.status != 200:
+                                continue
+                            icon_data = await response.read()
+                        icon_img = Image.open(io.BytesIO(icon_data)).convert("RGBA")
+                        icon_img = icon_img.resize((icon_size, icon_size), Image.LANCZOS)
+                        mask_icon = Image.new("L", (icon_size, icon_size), 0)
+                        ImageDraw.Draw(mask_icon).rounded_rectangle((0, 0, icon_size, icon_size), 12, fill=255)
+                        icon_img.putalpha(mask_icon)
+                        return apiname, icon_img
+                    except Exception:
+                        continue
+                logger.warning("[成就图标] 下载失败（含备选域名与灰图回退） url=%s", icon_url)
+                try:
+                    icon_path = str(IMAGES_DIR / "unknown_avatar.jpg")
+                    if os.path.exists(icon_path):
+                        icon_img = Image.open(icon_path).convert("RGBA").resize((icon_size, icon_size), Image.LANCZOS)
+                        mask_icon = Image.new("L", (icon_size, icon_size), 0)
+                        ImageDraw.Draw(mask_icon).rounded_rectangle((0, 0, icon_size, icon_size), 12, fill=255)
+                        icon_img.putalpha(mask_icon)
+                        return apiname, icon_img
+                except Exception:
+                    pass
+                return apiname, None
+
+            icon_results = await asyncio.gather(
+                *(fetch_icon(apiname) for apiname in new_achievements),
+                return_exceptions=True,
+            )
+            icon_images = {
+                apiname: icon_img
+                for result in icon_results
+                if not isinstance(result, Exception)
+                for apiname, icon_img in [result]
+            }
             idx = 0
             for apiname in new_achievements:
                 detail = achievement_details.get(apiname)
@@ -550,43 +599,8 @@ class AchievementMonitor:
 
                 img.alpha_composite(card, (card_x0, card_y0))
 
-                # icon
-                icon_url = detail.get("icon")
-                icon_img = None
-                if icon_url:
-                    # 图标下载健壮化：原域名失败则试备选域名，再回退灰图，避免因单域名失效而产生空白
-                    candidates = [icon_url]
-                    alt = icon_url.replace("steamcdn-a.akamaihd.net", "cdn.akamai.steamstatic.com")
-                    if alt not in candidates:
-                        candidates.append(alt)
-                    gray = detail.get("icon_gray")
-                    if gray and gray not in candidates:
-                        candidates.append(gray)
-                    for cand in candidates:
-                        try:
-                            async with session.get(cand, proxy=self.proxy) as response:
-                                if response.status == 200:
-                                    icon_data = await response.read()
-                                    icon_img = Image.open(io.BytesIO(icon_data)).convert("RGBA")
-                                    icon_img = icon_img.resize((icon_size, icon_size), Image.LANCZOS)
-                                    mask_icon = Image.new("L", (icon_size, icon_size), 0)
-                                    ImageDraw.Draw(mask_icon).rounded_rectangle((0, 0, icon_size, icon_size), 12, fill=255)
-                                    icon_img.putalpha(mask_icon)
-                                    break
-                        except Exception:
-                            continue
-                    if icon_img is None:
-                        logger.warning(f"[成就图标] 下载失败（含备选域名与灰图回退） url={icon_url}")
-                        # 找不到成就图标时用 unknown_avatar 占位，避免空白
-                        try:
-                            _icon_path = str(IMAGES_DIR / "unknown_avatar.jpg")
-                            if os.path.exists(_icon_path):
-                                icon_img = Image.open(_icon_path).convert("RGBA").resize((icon_size, icon_size), Image.LANCZOS)
-                                mask_icon = Image.new("L", (icon_size, icon_size), 0)
-                                ImageDraw.Draw(mask_icon).rounded_rectangle((0, 0, icon_size, icon_size), 12, fill=255)
-                                icon_img.putalpha(mask_icon)
-                        except Exception:
-                            pass
+                # 使用前面并发预取的图标，绘制阶段不再等待网络请求。
+                icon_img = icon_images.get(apiname)
                 icon_x = card_x0 + 12
                 icon_y = card_y0 + (card_h - icon_size) // 2
                 if icon_img:

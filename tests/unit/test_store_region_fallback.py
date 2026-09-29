@@ -1,5 +1,8 @@
+import asyncio
 import unittest
 from unittest.mock import patch
+
+import httpx
 
 from src.infrastructure.clients.steam import STEAM_STORE_COOKIES, SteamClientMixin
 from src.shared.utils.price import (
@@ -13,6 +16,8 @@ class FakeSteam(SteamClientMixin):
     def __init__(self):
         self.proxy = None
         self.STEAM_STORE_BASE = "https://store.steampowered.com"
+        self._steam_store_http_client = None
+        self._steam_store_http_client_loop = None
 
 
 class _FakeResponse:
@@ -43,7 +48,10 @@ class _RegionClient:
     async def __aexit__(self, *args):
         return False
 
-    async def get(self, url, params=None):
+    async def aclose(self):
+        return None
+
+    async def get(self, url, params=None, timeout=None):
         params = params or {}
         if not params.get("appids"):
             raise RuntimeError("400 Bad Request: missing appids")
@@ -143,7 +151,7 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("HK", [cc for _appid, cc, _lang in _RegionClient.calls])
 
     async def test_cn_timeout_still_tries_hk(self):
-        _RegionClient.errors["CN"] = TimeoutError("cn timeout")
+        _RegionClient.errors["CN"] = httpx.ReadTimeout("cn timeout")
         client = FakeSteam()
         with patch("src.infrastructure.clients.steam.httpx.AsyncClient", _RegionClient):
             detail = await client.fetch_game_details("1034140", country="CN")
@@ -153,6 +161,16 @@ class StoreRegionFallbackTests(unittest.IsolatedAsyncioTestCase):
             [("1034140", "CN", "schinese"), ("1034140", "HK", "schinese")],
             _RegionClient.calls,
         )
+
+    async def test_region_fallback_stops_when_attempt_budget_is_spent(self):
+        client = FakeSteam()
+        deadline = asyncio.get_running_loop().time() - 0.01
+        with patch("src.infrastructure.clients.steam.httpx.AsyncClient", _RegionClient):
+            detail = await client.fetch_game_details("1034140", country="CN", deadline=deadline)
+
+        self.assertIsNone(detail)
+        self.assertEqual([], _RegionClient.calls)
+        self.assertEqual("TIMEOUT", client.last_store_error.code)
 
     async def test_schinese_failure_falls_back_to_english(self):
         _RegionClient.payloads = {}

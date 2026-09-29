@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 import tempfile
 import time
@@ -112,38 +113,49 @@ class NotificationTrackingMixin:
         sent_events = getattr(self, "_sent_notification_events", None)
         if sent_events is None:
             sent_events = self._sent_notification_events = {}
-        key = self._notification_event_key(notification, session)
-        if key in sent_events and now - sent_events[key] < 600:
-            return False
-        sent_events[key] = now
+        inflight_events = getattr(self, "_inflight_notification_events", None)
+        if inflight_events is None:
+            inflight_events = self._inflight_notification_events = set()
         for old_key, sent_at in list(sent_events.items()):
             if now - sent_at >= 600:
                 del sent_events[old_key]
+        key = self._notification_event_key(notification, session)
+        if key in sent_events or key in inflight_events:
+            return False
+        inflight_events.add(key)
         return True
+
+    def _finish_notification(self, notification, session, *, success):
+        key = self._notification_event_key(notification, session)
+        inflight_events = getattr(self, "_inflight_notification_events", set())
+        inflight_events.discard(key)
+        if success:
+            self._sent_notification_events[key] = time.time()
 
     async def _send_merged_notification(self, group_id, notifications):
         if not notifications:
-            return
+            return []
         session_notifications = {}
         for notification in notifications:
-            for session in self._get_notify_sessions(group_id, notification["sid"]):
+            targets = self._get_notify_sessions(group_id, notification["sid"])
+            if "_target_session" in notification:
+                targets = [session for session in targets if session == notification["_target_session"]]
+            for session in targets:
                 if not self._should_send_notification(notification, session):
-                    logger.info(
-                        "Skipping duplicate Steam status notification "
-                        "(session=%s, sid=%s, gameid=%s, type=%s)",
-                        session, notification.get("sid"),
-                        notification.get("gameid"), notification.get("type"),
-                    )
                     continue
                 session_notifications.setdefault(session, []).append(notification)
-        for session, matched_notifications in session_notifications.items():
-            if not is_sendable_group_session(session):
-                logger.warning(
-                    "跳过无效通知会话 (group_id=%s, session=%r)",
-                    group_id,
-                    session,
-                )
-                continue
+
+        if not session_notifications:
+            return []
+        images = {}
+        if self.config.get("notify_send_image", True):
+            for matched in session_notifications.values():
+                for notification in matched:
+                    key = id(notification)
+                    if key not in images:
+                        images[key] = await self._render_notification_image(notification)
+
+        async def send_one(session, matched_notifications):
             msg_chain = []
             for notification in matched_notifications:
                 if notification["type"] == "start":
@@ -152,22 +164,59 @@ class NotificationTrackingMixin:
                     line = f"👋 {notification['name']} 不玩 {notification['game']}，游玩时间 {notification['duration_str']}\n"
                 if self.config.get("notify_send_text", True):
                     msg_chain.append(Plain(line))
-                if self.config.get("notify_send_image", True):
-                    img_path = await self._render_notification_image(notification)
-                    if img_path:
-                        msg_chain.append(Image.fromFileSystem(img_path))
-            if msg_chain:
-                try:
-                    await self.context.send_message(session, MessageChain(msg_chain))
-                except Exception:
-                    logger.exception(f"推送合并通知失败 (group_id={group_id}, session={session})")
+                img_path = images.get(id(notification))
+                if img_path:
+                    msg_chain.append(Image.fromFileSystem(img_path))
+            if not msg_chain:
+                if self.config.get("notify_send_image", True) and not self.config.get("notify_send_text", True):
+                    for notification in matched_notifications:
+                        self._finish_notification(notification, session, success=False)
+                    return matched_notifications
+                for notification in matched_notifications:
+                    self._finish_notification(notification, session, success=False)
+                return []
+            try:
+                await self.context.send_message(session, MessageChain(msg_chain))
+            except Exception:
+                for notification in matched_notifications:
+                    self._finish_notification(notification, session, success=False)
+                logger.exception("推送合并通知失败 (group_id=%s, session=%s)", group_id, session)
+                return matched_notifications
+            for notification in matched_notifications:
+                self._finish_notification(notification, session, success=True)
+            return []
+
+        sessions = list(session_notifications.items())
+        results = await asyncio.gather(
+            *(send_one(session, matched) for session, matched in sessions),
+            return_exceptions=True,
+        )
+        failed = []
+        for (session, matched), result in zip(sessions, results):
+            if isinstance(result, BaseException):
+                logger.error("推送通知异常 (group_id=%s, session=%s): %s", group_id, session, result)
+                result = matched
+            for notification in result:
+                retry = dict(notification, _target_session=session)
+                failed.append(retry)
+        return failed
 
     async def _flush_pending_end_notifications(self):
-        if not self._pending_end_notifications:
-            return
-        pending = self._pending_end_notifications
-        self._pending_end_notifications = {}
-        for group_id, notifications in pending.items():
-            if not (getattr(self, "group_monitor_enabled", {}) or {}).get(str(group_id), True):
-                continue
-            await self._send_merged_notification(group_id, notifications)
+        lock = getattr(self, "_notification_flush_lock", None)
+        if lock is None:
+            lock = self._notification_flush_lock = asyncio.Lock()
+        async with lock:
+            if not self._pending_end_notifications:
+                return
+            pending = self._pending_end_notifications
+            self._pending_end_notifications = {}
+            for group_id, notifications in pending.items():
+                if not (getattr(self, "group_monitor_enabled", {}) or {}).get(str(group_id), True):
+                    continue
+                try:
+                    failed = await self._send_merged_notification(group_id, notifications)
+                except BaseException:
+                    self._pending_end_notifications.setdefault(group_id, []).extend(notifications)
+                    raise
+                if failed:
+                    self._pending_end_notifications.setdefault(group_id, []).extend(failed)

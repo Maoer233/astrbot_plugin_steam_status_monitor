@@ -1,10 +1,27 @@
 import unittest
 from unittest.mock import AsyncMock
 
-from src.infrastructure.clients.itad import ITADClient
+from unittest.mock import patch
+
+from src.infrastructure.clients.itad import ITADClient, ITADGame
 
 
 class ITADPriceSummaryTests(unittest.IsolatedAsyncioTestCase):
+    def test_steam_only_id_is_not_real_itad_id(self):
+        steam_only = ITADGame(id="steam:1245620", title="ELDEN RING", appid="1245620")
+        mapped = ITADGame(id="itad-elden", title="ELDEN RING", appid="1245620")
+
+        self.assertEqual("", steam_only.itad_id)
+        self.assertEqual("itad-elden", mapped.itad_id)
+        self.assertFalse(hasattr(ITADGame, "GameIdentity"))
+
+    async def test_prices_rejects_steam_only_identity(self):
+        client = ITADClient(api_key="test")
+        with patch.object(client, "_post", AsyncMock()) as post:
+            result = await client.get_prices("steam:1245620", "CN")
+
+        self.assertEqual({}, result)
+        post.assert_not_awaited()
     async def test_steam_low_uses_store_low_not_recent_history(self):
         client = ITADClient(api_key="test")
         client.get_prices = AsyncMock(return_value={

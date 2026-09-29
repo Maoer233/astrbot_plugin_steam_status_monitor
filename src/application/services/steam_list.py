@@ -1,3 +1,4 @@
+import asyncio
 import io
 import tempfile
 from typing import Optional
@@ -22,28 +23,27 @@ def list_parent(event):
 
 
 async def collect_list_assets(plugin, user_list, *, proxy=None):
-    avatar_frame_paths = {}
-    for user in user_list:
-        sid = user.get("sid", "")
-        if not sid:
-            continue
-        fp = await get_avatar_frame_path(plugin.data_dir, sid, proxy=proxy)
-        if not fp:
-            frame_url = await get_avatar_frame_url(sid, proxy=proxy)
-            if frame_url:
-                fp = await get_avatar_frame_path(plugin.data_dir, sid, frame_url, proxy=proxy)
-        if fp:
-            avatar_frame_paths[sid] = fp
     steam_style = (getattr(plugin, "config", {}) or {}).get("enable_steam_style", False)
-    covers = {}
-    if not steam_style:
-        from ...presentation.renderers.game_start import get_cover_path
+    from ...presentation.renderers.game_start import get_cover_path
 
-        for user in user_list:
-            gid = user.get("gameid", "")
-            if not gid:
-                continue
-            cp = await get_cover_path(
+    async def collect_user_assets(user):
+        sid = user.get("sid", "")
+        gid = user.get("gameid", "")
+        if not sid:
+            return sid, None, None
+
+        async def resolve_frame():
+            fp = await get_avatar_frame_path(plugin.data_dir, sid, proxy=proxy)
+            if fp:
+                return fp
+            frame_url = await get_avatar_frame_url(sid, proxy=proxy)
+            if not frame_url:
+                return None
+            return await get_avatar_frame_path(plugin.data_dir, sid, frame_url, proxy=proxy)
+
+        frame_task = resolve_frame()
+        cover_task = (
+            get_cover_path(
                 plugin.data_dir,
                 gid,
                 user.get("game", ""),
@@ -52,9 +52,24 @@ async def collect_list_assets(plugin, user_list, *, proxy=None):
                 proxy=proxy,
                 sgdb_api_base=getattr(plugin, "SGDB_API_BASE", None),
             )
-            if cp:
-                covers[user["sid"]] = cp
+            if gid and not steam_style
+            else _async_none()
+        )
+        frame_path, cover_path = await asyncio.gather(frame_task, cover_task)
+        return sid, frame_path, cover_path
+
+    assets = await asyncio.gather(*(collect_user_assets(user) for user in user_list))
+    avatar_frame_paths = {
+        sid: frame_path for sid, frame_path, _ in assets if sid and frame_path
+    }
+    covers = {
+        sid: cover_path for sid, _, cover_path in assets if sid and cover_path
+    }
     return avatar_frame_paths, covers, steam_style
+
+
+async def _async_none():
+    return None
 
 
 async def render_user_list_image(plugin, event, user_list, *, font_path: Optional[str] = None, proxy=None):

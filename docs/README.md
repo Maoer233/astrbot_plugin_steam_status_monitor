@@ -16,6 +16,7 @@
 
 - [删除透传中介并内联单次私有辅助](adr/adr-inline-passthrough-helpers.md)
 - [命令层拆分：先抽应用服务，再挪 AstrBot 胶水](adr/adr-command-layer-split.md)
+- [价格查询留在现有边界，不新建聚合器和解析器](adr/adr-price-query-boundaries.md)
 
 ## 设计
 

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import io
 import time
@@ -539,21 +540,43 @@ def render_game_start_image(player_name, avatar_path, game_name, cover_path, pla
     return img.convert("RGB")
 async def render_game_start(data_dir, steamid, player_name, avatar_url, gameid, game_name, api_key=None, superpower=None, online_count=None, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, version=None, sgdb_api_base=None, steam_store_base=None, steam_api_base=None):
     print(f"[render_game_start] superpower参数: {superpower}")
-    avatar_path = await get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
-    cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key, sgdb_api_base=sgdb_api_base, steam_api_base=steam_api_base)
-    # 获取横版封面（竖版缺失时叠加用）
-    horizontal_cover_path = await get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
-    playtime_hours = None
-    playtime_unowned = False
-    if api_key:
-        playtime_hours = await get_playtime_hours(api_key, steamid, gameid, proxy=proxy)
-        playtime_unowned = (playtime_hours == 0.0)
-    avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
-    if not avatar_frame_path:
+
+    async def resolve_avatar_frame():
+        avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
+        if avatar_frame_path:
+            return avatar_frame_path
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
-        avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
-    img = render_game_start_image(player_name, avatar_path, game_name, cover_path, playtime_hours, superpower, online_count, font_path=font_path, playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path, version=version)
+        if not avatar_frame_url:
+            return None
+        return await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy)
+
+    avatar_path, cover_path, horizontal_cover_path, playtime_hours, avatar_frame_path = await asyncio.gather(
+        get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy),
+        get_cover_path(
+            data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key,
+            sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy,
+            api_key=api_key, sgdb_api_base=sgdb_api_base,
+            steam_api_base=steam_api_base,
+        ),
+        get_horizontal_cover_path(
+            data_dir, gameid, appid=appid, proxy=proxy,
+            steam_store_base=steam_store_base,
+        ),
+        get_playtime_hours(api_key, steamid, gameid, proxy=proxy) if api_key else _async_none(),
+        resolve_avatar_frame(),
+    )
+    playtime_unowned = api_key is not None and playtime_hours == 0.0
+    img = render_game_start_image(
+        player_name, avatar_path, game_name, cover_path, playtime_hours,
+        superpower, online_count, font_path=font_path,
+        playtime_unowned=playtime_unowned, avatar_frame_path=avatar_frame_path,
+        horizontal_cover_path=horizontal_cover_path, version=version,
+    )
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf.getvalue()
+
+
+async def _async_none():
+    return None

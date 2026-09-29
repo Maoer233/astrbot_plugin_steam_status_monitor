@@ -3,7 +3,7 @@ import tempfile
 import time
 
 from astrbot.api.event import MessageChain
-from astrbot.api.message_components import Image
+from astrbot.api.message_components import Image, Plain
 
 from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
@@ -39,14 +39,19 @@ class AchievementTrackingMixin:
                     new_achievements = set(achievements_b) - set(achievements_a)
                     if new_achievements:
                         logger.info(f"[成就定时对比] {player_name} 在 {game_name} 解锁新成就：{', '.join(new_achievements)}")
-                        await self.notify_new_achievements(group_id, sid, player_name, gameid, game_name, new_achievements)
-                        self.achievement_snapshots[key] = list(achievements_b)
+                        delivered = await self.notify_new_achievements(group_id, sid, player_name, gameid, game_name, new_achievements)
+                        if delivered:
+                            self.achievement_snapshots[key] = list(achievements_b)
                     else:
                         logger.info(f"[成就定时对比] {player_name} 在 {game_name} 未发现新成就")
         except asyncio.CancelledError:
             logger.info(f"[成就定时对比] 任务已取消 group_id={group_id} sid={sid} gameid={gameid}")
         except Exception as e:
             logger.error(f"[成就定时对比] group_id={group_id} sid={sid} gameid={gameid} 异常: {e}")
+        finally:
+            task = getattr(self, "achievement_poll_tasks", {}).get(key)
+            if task is asyncio.current_task():
+                self.achievement_poll_tasks.pop(key, None)
 
     async def achievement_delayed_final_check(self, group_id, sid, gameid, player_name, game_name, achievements_a=None):
         key = (group_id, sid, gameid)
@@ -67,26 +72,29 @@ class AchievementTrackingMixin:
             if cnt >= 10:
                 self.achievement_blacklist.add(gameid)
                 logger.info(f"[成就黑名单] 游戏 {gameid} 当天累计获取失败10次，已加入黑名单")
-                return
-        if achievements_a is not None and achievements_b is not None:
+            return
+        delivered = True
+        if achievements_a is not None:
             new_achievements = set(achievements_b) - set(achievements_a)
             if new_achievements:
                 logger.info(f"[成就结束冗余对比] {player_name} 在 {game_name} 解锁新成就：{', '.join(new_achievements)}")
-                await self.notify_new_achievements(group_id, sid, player_name, gameid, game_name, new_achievements)
+                delivered = await self.notify_new_achievements(
+                    group_id, sid, player_name, gameid, game_name, new_achievements
+                )
             else:
                 logger.info(f"[成就结束冗余对比] {player_name} 在 {game_name} 未发现新成就")
-        # 若该 key 已被新的成就轮询/会话占用（如重开同游戏或 A→B→A 切回），则跳过清理，避免误清新局数据
+        # 若该 key 已被新的成就轮询/会话占用（如重开同游戏或 A→B→A 切回），则跳过清理，避免误清新局数据。
         if key in getattr(self, "achievement_poll_tasks", {}):
             return
-        self.achievement_snapshots.pop(key, None)
-        self.achievement_poll_tasks.pop(key, None)
-        self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
+        if delivered:
+            self.achievement_snapshots.pop(key, None)
+            self.achievement_monitor.clear_game_achievements(group_id, sid, gameid)
 
     async def notify_new_achievements(self, group_id, steamid, player_name, gameid, game_name, new_achievements):
+        if not new_achievements:
+            return True
         if not self.group_achievement_enabled.get(group_id, True):
-            return
-        if not new_achievements or not self.notify_sessions:
-            return
+            return True
         achievements_to_notify = list(new_achievements)[:self.max_achievement_notifications]
         details = self.achievement_monitor.details_cache.get((group_id, gameid))
         if not details:
@@ -100,28 +108,27 @@ class AchievementTrackingMixin:
         if details and game_name:
             for detail in details.values():
                 detail["game_name"] = game_name
-        font_path = resolve_font_path('NotoSansHans-Regular.otf')
+
         notify_sessions = []
-        notify_session = getattr(self, 'notify_sessions', {}).get(group_id)
+        notify_session = getattr(self, "notify_sessions", {}).get(group_id)
         if notify_session:
             notify_sessions.append(notify_session)
-        for push_gid in self.push_groups.get(steamid, []):
-            push_session = getattr(self, 'notify_sessions', {}).get(push_gid)
+        for push_gid in (getattr(self, "push_groups", {}) or {}).get(steamid, []):
+            push_session = getattr(self, "notify_sessions", {}).get(push_gid)
             if push_session and push_session not in notify_sessions:
                 notify_sessions.append(push_session)
-        notify_sessions = [
-            session for session in notify_sessions
-            if is_sendable_group_session(session)
-        ]
+        notify_sessions = [session for session in notify_sessions if is_sendable_group_session(session)]
         if not notify_sessions:
-            logger.warning(
-                "成就通知无有效会话，已跳过 (group_id=%s, steamid=%s)",
-                group_id,
-                steamid,
-            )
-            return
+            logger.warning("成就通知无有效会话，已跳过 (group_id=%s, steamid=%s)", group_id, steamid)
+            return False
+
+        msg_parts = []
+        if self.config.get("notify_send_text", True):
+            names = ", ".join(str(name) for name in achievements_to_notify)
+            msg_parts.append(Plain(f"🏆【{player_name}】在 {game_name} 解锁成就：{names}"))
+
         tmp_path = None
-        if self.config.get('notify_send_image', True) and details:
+        if self.config.get("notify_send_image", True) and details:
             unlocked_set = await self.achievement_monitor.get_player_achievements(
                 self.API_KEY, group_id, steamid, gameid
             )
@@ -131,17 +138,26 @@ class AchievementTrackingMixin:
                 img_bytes = await self.achievement_monitor.render_achievement_image(
                     details, set(achievements_to_notify), player_name=player_name,
                     steamid=steamid, appid=gameid, unlocked_set=unlocked_set or set(),
-                    font_path=font_path,
+                    font_path=resolve_font_path("NotoSansHans-Regular.otf"),
                 )
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                     tmp.write(img_bytes)
                     tmp_path = tmp.name
+                msg_parts.append(Image.fromFileSystem(tmp_path))
             except Exception as e:
                 logger.error(f"成就图片渲染失败: {e}")
-        if not tmp_path:
-            return
-        for session in notify_sessions:
+
+        if not msg_parts:
+            logger.warning("成就通知没有可发送内容 (group_id=%s, steamid=%s)", group_id, steamid)
+            return False
+
+        async def send_one(session):
             try:
-                await self.context.send_message(session, MessageChain([Image.fromFileSystem(tmp_path)]))
+                await self.context.send_message(session, MessageChain(msg_parts))
+                return True
             except Exception as e:
-                logger.error(f"发送成就通知失败: {e}")
+                logger.error("发送成就通知失败 (session=%s): %s", session, e)
+                return False
+
+        results = await asyncio.gather(*(send_one(session) for session in notify_sessions))
+        return all(results)

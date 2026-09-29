@@ -1,4 +1,5 @@
 # filepath: c:\Users\Maoer\Desktop\AstrBotLauncher-0.1.5.6\AstrBot\data\plugins\steam_status_monitor_V2\game_end_render.py
+import asyncio
 import os
 import io
 import time
@@ -412,15 +413,35 @@ def render_game_end_image(player_name, avatar_path, game_name, cover_path, end_t
 
 # render_game_end 里 await get_cover_path
 async def render_game_end(data_dir, steamid, player_name, avatar_url, gameid, game_name, end_time_str, tip_text, duration_h, sgdb_api_key=None, font_path=None, sgdb_game_name=None, appid=None, proxy=None, api_key=None, sgdb_api_base=None, steam_store_base=None):
-    avatar_path = await get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy)
-    cover_path = await get_cover_path(data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key, sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy, api_key=api_key, sgdb_api_base=sgdb_api_base, steam_store_base=steam_store_base)
-    # 获取横版封面（竖版缺失时叠加用）
-    horizontal_cover_path = await get_horizontal_cover_path(data_dir, gameid, appid=appid, proxy=proxy, steam_store_base=steam_store_base)
-    avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
-    if not avatar_frame_path:
+    async def resolve_avatar_frame():
+        avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, proxy=proxy)
+        if avatar_frame_path:
+            return avatar_frame_path
         avatar_frame_url = await get_avatar_frame_url(steamid, proxy=proxy)
-        avatar_frame_path = await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy) if avatar_frame_url else None
-    img = render_game_end_image(player_name, avatar_path, game_name, cover_path, end_time_str, tip_text, duration_h, font_path=font_path, avatar_frame_path=avatar_frame_path, horizontal_cover_path=horizontal_cover_path)
+        if not avatar_frame_url:
+            return None
+        return await get_avatar_frame_path(data_dir, steamid, avatar_frame_url, proxy=proxy)
+
+    avatar_path, cover_path, horizontal_cover_path, avatar_frame_path = await asyncio.gather(
+        get_avatar_path(data_dir, steamid, avatar_url, proxy=proxy),
+        get_cover_path(
+            data_dir, gameid, game_name, sgdb_api_key=sgdb_api_key,
+            sgdb_game_name=sgdb_game_name, appid=appid, proxy=proxy,
+            api_key=api_key, sgdb_api_base=sgdb_api_base,
+            steam_store_base=steam_store_base,
+        ),
+        get_horizontal_cover_path(
+            data_dir, gameid, appid=appid, proxy=proxy,
+            steam_store_base=steam_store_base,
+        ),
+        resolve_avatar_frame(),
+    )
+    img = render_game_end_image(
+        player_name, avatar_path, game_name, cover_path, end_time_str,
+        tip_text, duration_h, font_path=font_path,
+        avatar_frame_path=avatar_frame_path,
+        horizontal_cover_path=horizontal_cover_path,
+    )
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
