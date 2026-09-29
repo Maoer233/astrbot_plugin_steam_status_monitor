@@ -8,11 +8,7 @@ import unicodedata
 
 import httpx
 
-try:
-    from ...shared.logging import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ...shared.logging import logger
 try:
     from ...infrastructure.clients.errors import ProviderError
 except ImportError:

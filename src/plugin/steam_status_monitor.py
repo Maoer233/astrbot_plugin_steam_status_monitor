@@ -50,7 +50,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.9.0"
+        self._plugin_version = "4.9.1"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -64,8 +64,10 @@ class SteamStatusMonitorV3(
         apply_runtime_config(self, config)
         self.price_candidates = PriceCandidateCache()
         self.next_poll_time = {}  # {group_id: {steamid: next_time}}
-        # 数据持久化目录
-        self.data_dir = os.path.join("data", "steam_status_monitor")
+        # 数据持久化目录：统一到 AstrBot 规范的 data/plugin_data/<plugin_name>/；
+        # 升级后首次启动自动迁移旧目录 data/steam_status_monitor/ 的数据（仅一次，旧目录保留作备份）
+        from ..infrastructure.persistence.data_dir import ensure_plugin_data_dir
+        self.data_dir = str(ensure_plugin_data_dir())
         os.makedirs(self.data_dir, exist_ok=True)
         self.font_pack = FontPackService(
             self.data_dir,

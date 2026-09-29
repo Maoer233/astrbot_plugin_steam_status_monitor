@@ -6,13 +6,11 @@ import os
 import io
 import asyncio
 import httpx
-import logging
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont
 from .game_start import get_avatar_frame_url, get_avatar_frame_path
 from ...shared.fonts import load_truetype
-
-logger = logging.getLogger(__name__)
+from ...shared.logging import logger
 
 # Steam 深色主题色板（参考 steam_list_render）
 BG_TOP = (44, 62, 80)        # #2c3e50

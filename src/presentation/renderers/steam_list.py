@@ -2,13 +2,11 @@ import os
 import io
 import math
 import asyncio
-import logging
 import httpx
 from PIL import Image, ImageDraw, ImageFont
 from ...shared.fonts import load_truetype
 from ...shared.paths import IMAGES_DIR
-
-logger = logging.getLogger(__name__)
+from ...shared.logging import logger
 
 # ============ 样式参考 nonebot-plugin-steam-info 的 draw_friends_status ============
 WIDTH = 400

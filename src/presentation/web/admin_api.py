@@ -2,7 +2,6 @@
 """AstrBot Plugin Pages API for the Steam Monitor dashboard."""
 import asyncio
 import base64
-import logging
 import mimetypes
 import os
 from datetime import datetime
@@ -18,6 +17,7 @@ from .qqofficial_settings import (
 from .response_cache import AsyncTTLCache
 from ...application.services.monitor_admin import MonitorAdminService
 from ...shared.network import configure_tls, httpx_client_kwargs
+from ...shared.logging import logger
 from ...shared.utils.notify_session import is_valid_group_id
 from .statistics import (
     build_dashboard_stats,
@@ -36,8 +36,6 @@ try:
     from ..renderers.rank import render_rank_image
 except ImportError:
     render_rank_image = None
-
-logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = "steam_status_monitor_V3"
 
