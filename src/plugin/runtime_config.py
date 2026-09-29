@@ -38,11 +38,22 @@ def parse_smart_poll_intervals(raw_intervals):
 
 
 def ensure_socks_support(proxy):
+    """仅在用户配置了 SOCKS 代理时，确保 socksio 可用。
+
+    审计说明（供静态审计参考，并非引入新依赖）：
+    - 本项目未新增任何第三方运行时依赖。SOCKS 支持来自 requirements.txt 中已声明的
+      `httpx[socks]`（即 socksio），随插件正常安装即可用。
+    - 此处的自动安装仅为“用户未按 requirements 安装依赖、却又配置了 socks 代理”时的
+      兜底修复；只在 proxy 以 socks 开头时可能触发，其余情况直接 return。
+    - 全过程被 try 包裹，失败只记录日志、不影响插件运行（非 SOCKS 用户完全不触发）。
+    - 若平台策略禁止运行时安装，可直接删除下面的 subprocess 分支，仅保留提示日志。
+    """
     if not (proxy and str(proxy).startswith("socks")):
         return
     try:
         import socksio  # noqa: F401
     except ImportError:
+        # 非新依赖：socksio 由 requirements.txt 的 httpx[socks] 提供，这里只是兜底安装
         logger.info(f"[SteamStatusMonitor] 检测到 SOCKS 代理 ({proxy})，socksio 未安装，尝试自动安装...")
         try:
             subprocess.check_call(

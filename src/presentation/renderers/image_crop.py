@@ -1,22 +1,31 @@
 import io
 
 import numpy as np
-import requests
+import httpx
 from PIL import Image as PILImage
 
-from ...shared.network import requests_verify
+from ...shared.network import httpx_client_kwargs
+
+
+async def fetch_image(url, proxy=None):
+    """异步下载远端图片为 bytes（httpx），供裁剪前获取图片使用。
+
+    使用异步客户端，避免在异步命令处理路径中做同步网络 I/O 阻塞事件循环。
+    """
+    async with httpx.AsyncClient(timeout=15, **httpx_client_kwargs(proxy)) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.content
 
 
 def crop_image_auto(img_path_or_bytes, bg_color=(20, 26, 33), threshold=25):
-    """自动裁剪图片内容区域，去除边缘与背景相近的空白。"""
+    """自动裁剪图片内容区域，去除边缘与背景相近的空白。
+
+    入参支持 PIL.Image / 本地路径 / bytes。若需处理远端图片，请先用
+    ``fetch_image``（httpx 异步）下载为 bytes 再传入，避免同步网络 I/O。
+    """
     if isinstance(img_path_or_bytes, PILImage.Image):
         img = img_path_or_bytes.convert("RGB")
-    elif isinstance(img_path_or_bytes, str) and (
-        img_path_or_bytes.startswith("http://") or img_path_or_bytes.startswith("https://")
-    ):
-        resp = requests.get(img_path_or_bytes, timeout=15, verify=requests_verify())
-        resp.raise_for_status()
-        img = PILImage.open(io.BytesIO(resp.content)).convert("RGB")
     elif isinstance(img_path_or_bytes, bytes):
         img = PILImage.open(io.BytesIO(img_path_or_bytes)).convert("RGB")
     else:

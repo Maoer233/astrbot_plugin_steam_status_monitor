@@ -1,12 +1,48 @@
 """统一使用 AstrBot 日志，并在输出前清理敏感信息。"""
-import logging
+import os
 import re
+import sys
 from urllib.parse import urlsplit, urlunsplit
 
 try:
     from astrbot.api import logger as _astrbot_logger
-except ImportError:  # 允许在未安装 AstrBot 的开发环境运行单元测试
-    _astrbot_logger = logging.getLogger("steam_status_monitor")
+except ImportError:
+    # 仅在脱离 AstrBot 的单元测试 / 开发环境触发（检测到 astrbot.api 不可用）。
+    # 刻意不引入 logging 模块，改用极简 fallback：默认静默，
+    # 设 STEAM_MONITOR_TEST_LOG=1 时输出到 stderr，便于测试排查。
+    class _MinimalLogger:
+        def _log(self, level, message, *args, **kwargs):
+            try:
+                if os.environ.get("STEAM_MONITOR_TEST_LOG") != "1":
+                    return
+                text = str(message)
+                if args:
+                    try:
+                        text = text % args if "%" in text else text + " " + " ".join(str(a) for a in args)
+                    except Exception:
+                        text = f"{text} {args}"
+                print(f"[steam_status_monitor][{level}] {text}", file=sys.stderr)
+            except Exception:
+                pass
+
+        def debug(self, message, *args, **kwargs):
+            self._log("DEBUG", message, *args)
+
+        def info(self, message, *args, **kwargs):
+            self._log("INFO", message, *args)
+
+        def warning(self, message, *args, **kwargs):
+            self._log("WARN", message, *args)
+
+        warn = warning
+
+        def error(self, message, *args, **kwargs):
+            self._log("ERROR", message, *args)
+
+        def exception(self, message, *args, **kwargs):
+            self._log("ERROR", message, *args)
+
+    _astrbot_logger = _MinimalLogger()
 
 
 _SENSITIVE_QUERY = re.compile(

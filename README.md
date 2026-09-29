@@ -212,7 +212,8 @@ pip install httpx pillow
 - V4.9.1（2026/09/29）
   - **数据目录合规**：插件持久化数据统一到 AstrBot 规范的 `data/plugin_data/<plugin_name>/`（原为 `data/steam_status_monitor/`）；字体包与全部数据文件随之迁移。
   - **历史数据自动迁移**：老用户升级后首次启动自动迁移一次（复制旧目录数据到新目录、旧目录保留作备份），数据不丢失、重复启动不重复迁移。
-  - **日志合规**：所有模块统一经 `astrbot.api` 输出日志（`shared.logging`），不再自行创建 `logging` logger。
+  - **日志合规**：所有模块统一经 `astrbot.api` 输出日志（`shared.logging`），不再自行创建 `logging` logger；脱离 AstrBot 的测试环境改用不依赖 `logging` 的轻量 fallback。
+  - **图片裁剪异步化**：`crop_image_auto` 的远端图片下载改为 httpx 异步（`fetch_image`），移除同步 `requests` 依赖（`requirements.txt` 同步移除）。
 
 - V4.9.0（2026/09/27）
   - **价格查询重构**：拆分价格卡查询编排；复用 ITAD / Steam Store 网络连接池，合并重复请求并加 TTL 缓存；限制区域回退预算、固定搜索关联与去重边界，查询更快更稳。

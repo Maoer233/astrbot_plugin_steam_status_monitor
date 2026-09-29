@@ -7,9 +7,6 @@ aiohttp>=3.9,<4
 # 图片生成、裁剪与渲染
 Pillow>=9.5,<13
 
-# 同步图片下载（crop_image_auto）
-requests>=2.28,<3
-
 # 图片自动边界检测（crop_image_auto）
 numpy>=1.21,<3
 
