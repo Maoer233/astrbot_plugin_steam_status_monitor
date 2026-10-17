@@ -68,6 +68,8 @@
 | `enable_achievement_poll` | 成就轮询推送开关 | true |
 | `enable_steam_style` | Steam列表渲染风格开关（开启=steam风格；关闭=原卡片风格） | true |
 | `enable_game_end_notify` | 游戏结束通知开关 | true |
+| `enable_user_online_notify` | 用户上线通知开关（纯文本；同一轮开始游玩时不再重复推送） | true |
+| `enable_user_offline_notify` | 用户下线通知开关（纯文本，附本次在线时长；180秒防抖，确认期内心回归上线不推送） | true |
 | `notify_send_image` | 通知发送图片开关 | true |
 | `notify_send_text` | 通知发送文本开关 | true |
 | `enable_proxy` | 启用网络代理 | false |
@@ -221,6 +223,10 @@ pip install httpx pillow
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V4.10.2（2026/10/17）
+  - **用户上下线推送（新功能，默认开启）**：监控玩家上线/离线时推送「已上线 / 已离线」纯文本通知（`enable_user_online_notify` / `enable_user_offline_notify`，修改后立即生效）。基于轮询快照的 `personastate` 差分实现，与游戏会话状态机解耦；上线推送与同一轮"开始游玩"互斥，避免同一事件打扰两次。
+  - **已知边界**：Steam 隐身（invisible）状态在 API 下表现为离线，无法识别；隐身但正在游戏时不会误报下线。
+
 - V4.10.1（2026/10/17）
   - **游戏库新入库播报（新功能，默认关闭）**：独立后台任务默认每 30 分钟（可配）检测被监控玩家 Steam 库新增游戏并播报「新入库」卡片；新玩家首轮只建立基线不播报，重启后自动补播停机期间的新增；`/steam set enable_owned_games_notify true` 可即时开启。
   - **富卡设计**：卡片含玩家头像、头像框、名称、游戏库总数，以及商店页面描述与双语言评价（复用价格查询数据管线与缓存）；商店数据获取失败自动降级为精简卡片；每款新增独立发送一条消息（单轮最多渲染 5 张卡片，超出仅文本列出）。

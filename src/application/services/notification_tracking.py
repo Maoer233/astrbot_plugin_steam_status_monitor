@@ -9,6 +9,7 @@ from astrbot.api.message_components import Plain, Image
 from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
 from ...shared.utils.notify_session import is_sendable_group_session
+from ...presentation.formatters.status import format_play_duration
 from ...presentation.renderers.game_start import render_game_start
 from ...presentation.renderers.game_end import render_game_end
 from ...presentation.renderers.owned_game import render_owned_game
@@ -61,6 +62,9 @@ class NotificationTrackingMixin:
 
     async def _render_notification_image(self, noti):
         try:
+            if noti["type"] in ("online", "offline"):
+                # 上线/下线为纯文本推送，不渲染图片
+                return None
             if noti["type"] == "owned":
                 if not noti.get("render", True):
                     return None  # 超出单轮卡片上限的新增：仅文本，不渲染图片
@@ -117,6 +121,9 @@ class NotificationTrackingMixin:
             event_time = notification.get("quit_time")
         elif notification.get("type") == "owned":
             event_time = notification.get("added_at")
+        elif event_time is None:
+            # 上线/下线通知用检测时刻作键，600 秒窗口内不同次的转换不被误去重
+            event_time = notification.get("event_time")
         return (
             str(session),
             str(notification.get("sid")),
@@ -182,6 +189,12 @@ class NotificationTrackingMixin:
                         f"📚【{notification['name']}】新入库 {notification['game']}"
                         f"（当前共 {notification.get('owned_count') or 0} 款）\n"
                     )
+                elif notification["type"] == "online":
+                    line = f"🔵【{notification['name']}】已上线"
+                elif notification["type"] == "offline":
+                    minutes = notification.get("online_minutes")
+                    suffix = f"（本次在线 {format_play_duration(minutes)}）" if minutes is not None else ""
+                    line = f"🌑【{notification['name']}】 已离线{suffix}"
                 else:
                     line = f"👋 {notification['name']} 不玩 {notification['game']}，游玩时间 {notification['duration_str']}\n"
                 if self.config.get("notify_send_text", True):

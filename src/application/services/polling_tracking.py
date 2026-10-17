@@ -97,6 +97,8 @@ class PollingTrackingMixin:
                 # 离线玩家可能数十分钟才再入轮询，deadline 必须每分钟单独检查。
                 # 必须在 Steam 请求之前结算并立刻 flush，否则超时会把结束卡拖到下一局开始才发出。
                 await self.session_service.tick_due(int(now2))
+                # 下线防抖待定到期结算（180 秒确认窗），结果随本轮 flush 发出
+                self._settle_pending_offline_presence(int(now2))
                 await self._flush_pending_end_notifications()
                 if not group_sids:
                     await asyncio.sleep(40)  # 本轮无到点，跳过

@@ -102,6 +102,18 @@
     "hint": "开启后当检测到网络波动时发送纯文本提醒，关闭则不发送（修改后重启AstrBot生效）",
     "default": true
   },
+  "enable_user_online_notify": {
+    "description": "用户上线通知开关",
+    "type": "bool",
+    "hint": "开启后监控玩家从离线变为在线时推送「已上线」纯文本通知；同一轮检测到开始游玩时不再重复推送（修改后立即生效）",
+    "default": true
+  },
+  "enable_user_offline_notify": {
+    "description": "用户下线通知开关",
+    "type": "bool",
+    "hint": "开启后监控玩家从在线变为离线时推送「已离线」纯文本通知（附本次在线时长）；检测到下线后有180秒确认期，期间重新上线则不推送；Steam隐身状态无法识别（修改后立即生效）",
+    "default": true
+  },
   "notify_send_image": {
     "description": "通知发送图片开关",
     "type": "bool",

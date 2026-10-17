@@ -99,6 +99,29 @@ class PersistenceMixin:
                     json.dump(self.session_service.dump(), f, ensure_ascii=False)
             except Exception as e:
                 logger.warning(f"保存首次迁移的 playing_sessions 失败: {e}")
+        # 在线起始时间（presence）：离线推送"本次在线"时长的数据源，跨重启保持计时
+        self._presence_online_since = self._load_plain_json("presence_online_since.json")
+        # 下线防抖待定（presence）：180 秒确认窗内重启不丢，重启后由主循环继续结算
+        self._presence_pending_offline = self._load_plain_json("presence_pending_offline.json")
+
+    def _load_plain_json(self, filename, default=None):
+        """加载 data 目录下的全局 JSON 文件；缺失/损坏返回 default。"""
+        path = os.path.join(self.data_dir, filename)
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            logger.warning(f"加载 {filename} 失败: {e}")
+        return {} if default is None else default
+
+    def _save_plain_json(self, filename, data):
+        """保存 data 目录下的全局 JSON 文件。"""
+        try:
+            with open(os.path.join(self.data_dir, filename), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"保存 {filename} 失败: {e}")
 
     def _save_persistent_data(self, force=False):
         '''分群保存各群的状态数据。
@@ -141,6 +164,9 @@ class PersistenceMixin:
                 json.dump(self.session_service.dump(), f, ensure_ascii=False)
         except Exception as e:
             logger.warning(f"保存 playing_sessions 失败: {e}")
+        # 保存在线起始时间与下线防抖待定（全局，按 sid；presence 推送的数据源）
+        self._save_plain_json("presence_online_since.json", self._presence_online_since)
+        self._save_plain_json("presence_pending_offline.json", self._presence_pending_offline)
         # 保存游玩时长记录（全局，不分群）
         try:
             self._save_play_records()

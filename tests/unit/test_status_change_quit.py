@@ -20,6 +20,8 @@ class FakePlugin(SessionQuitMixin, StatusChangeTrackingMixin):
         self.playing_sessions = {}
         self._session_meta = {}
         self._pending_end_notifications = {}
+        self._presence_online_since = {}
+        self._presence_pending_offline = {}
         self.achievement_poll_tasks = {}
         self.achievement_snapshots = {}
         self.achievement_monitor = None
