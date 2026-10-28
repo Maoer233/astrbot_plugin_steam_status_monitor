@@ -10,6 +10,7 @@ from ...domain.monitoring.presence import (
     is_online,
     presence_transition,
 )
+from .notification_queue import enqueue_notifications
 from ...presentation.formatters.status import format_player_status
 
 _STATUS_UNSET = object()
@@ -302,12 +303,10 @@ class StatusChangeTrackingMixin:
         if not self.config.get("notify_send_text", True):
             # 上线/下线是纯文本通知；文本关闭时没有可发送内容，直接丢弃
             return
-        self._pending_end_notifications.setdefault(group_id, []).append(
-            {
-                "type": kind,
-                "sid": sid,
-                "name": player_name,
-                "event_time": event_time,
-                "online_minutes": online_minutes,
-            }
-        )
+        enqueue_notifications(self, group_id, [{
+            "type": kind,
+            "sid": sid,
+            "name": player_name,
+            "event_time": event_time,
+            "online_minutes": online_minutes,
+        }])

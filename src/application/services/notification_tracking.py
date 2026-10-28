@@ -6,6 +6,7 @@ import time
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Plain, Image
 
+from .notification_queue import enqueue_notifications, trim_notifications, TTL_SECONDS
 from ...shared.fonts import resolve_font_path
 from ...shared.logging import logger
 from ...shared.utils.notify_session import is_sendable_group_session
@@ -229,6 +230,14 @@ class NotificationTrackingMixin:
         if not session_notifications:
             return []
         images = {}
+        cooldowns = getattr(self, "_notification_cooldowns", None)
+        if cooldowns is None:
+            cooldowns = self._notification_cooldowns = {}
+        now = time.monotonic()
+        for target, (_, deadline) in list(cooldowns.items()):
+            if now - deadline > 1800:
+                del cooldowns[target]
+
         async def send_one(session, matched_notifications):
             msg_chain = []
             included = []
@@ -294,18 +303,33 @@ class NotificationTrackingMixin:
 
         async def send_batches(session, matched):
             failed = []
+            managed = any(n["type"] not in ("owned", "owned_batch") for n in matched)
             try:
+                if managed and time.monotonic() < cooldowns.get(session, (0, 0))[1]:
+                    return [dict(n, _target_session=session) for n in matched]
                 for offset in range(0, len(matched), 5):
-                    batch = matched[offset:offset + 5]
+                    batch = [n for n in matched[offset:offset + 5]
+                             if time.time() - n.get("_enqueued_at", time.time()) < TTL_SECONDS]
                     result = await send_one(session, batch)
                     if result:
+                        attempts = min(cooldowns.get(session, (0, 0))[0] + 1, 5)
+                        delay = min(30 * 2 ** (attempts - 1), 300)
+                        if managed:
+                            cooldowns[session] = (attempts, time.monotonic() + delay)
+                            logger.error("通知目标退避 (session=%s, delay=%s, pending=%s)",
+                                         session, delay, len(matched) - offset)
                         failed.extend(result)
                         failed.extend(matched[offset + 5:])
                         break
+                    if batch and managed:
+                        cooldowns.pop(session, None)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("推送通知异常 (group_id=%s, session=%s)", group_id, session)
+                if managed:
+                    attempts = min(cooldowns.get(session, (0, 0))[0] + 1, 5)
+                    cooldowns[session] = (attempts, time.monotonic() + min(30 * 2 ** (attempts - 1), 300))
                 sent = getattr(self, "_sent_notification_events", {})
                 failed = [n for n in matched if self._notification_event_key(n, session) not in sent]
             finally:
@@ -329,19 +353,33 @@ class NotificationTrackingMixin:
         if lock is None:
             lock = self._notification_flush_lock = asyncio.Lock()
         async with lock:
+            trim_notifications(self)
             if not self._pending_end_notifications:
                 return
             pending = self._pending_end_notifications
             self._pending_end_notifications = {}
+            self._active_notification_flush = pending
             groups = list(pending.items())
-            for index, (group_id, notifications) in enumerate(groups):
-                if not (getattr(self, "group_monitor_enabled", {}) or {}).get(str(group_id), True):
-                    continue
-                try:
-                    failed = await self._send_merged_notification(group_id, notifications)
-                except BaseException:
-                    for remaining_group, remaining in groups[index:]:
-                        self._pending_end_notifications.setdefault(remaining_group, []).extend(remaining)
-                    raise
-                if failed:
-                    self._pending_end_notifications.setdefault(group_id, []).extend(failed)
+            try:
+                for index, (group_id, notifications) in enumerate(groups):
+                    if not (getattr(self, "group_monitor_enabled", {}) or {}).get(str(group_id), True):
+                        pending.pop(group_id, None)
+                        continue
+                    try:
+                        failed = await self._send_merged_notification(group_id, notifications)
+                    except BaseException:
+                        self._active_notification_flush = {}
+                        for remaining_group, remaining in groups[index:]:
+                            unsent = []
+                            for n in remaining:
+                                target = n.get("_target_session")
+                                key = self._notification_event_key(n, target)
+                                if key not in getattr(self, "_sent_notification_events", {}):
+                                    unsent.append(n)
+                            enqueue_notifications(self, remaining_group, unsent)
+                        raise
+                    pending.pop(group_id, None)
+                    if failed:
+                        enqueue_notifications(self, group_id, failed)
+            finally:
+                self._active_notification_flush = {}

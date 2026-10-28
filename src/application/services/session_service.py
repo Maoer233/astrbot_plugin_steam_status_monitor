@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from ...domain.monitoring.game_filter import should_skip_game
 from ...domain.monitoring.session import PlayingSession, apply
+from .notification_queue import enqueue_notifications
 from ...presentation.formatters.status import format_play_duration
 from ...shared.utils.quiet_hours import in_quiet_hours
 
@@ -335,7 +336,7 @@ class SessionService:
         monitor_on = getattr(plugin, "group_monitor_enabled", {}).get(session.group_id, True)
         if not skip_push and monitor_on and not self._skip_game(session.gameid) and plugin.config.get("enable_game_end_notify", True):
             last_state = plugin.group_last_states.get(session.group_id, {}).get(session.sid) or {}
-            plugin._pending_end_notifications.setdefault(session.group_id, []).append({
+            enqueue_notifications(plugin, session.group_id, [{
                 "type": "end",
                 "name": player_name,
                 "game": game_name,
@@ -346,7 +347,7 @@ class SessionService:
                 "duration_min": duration_min,
                 "avatar_url": meta.get("avatar_url") or last_state.get("avatarfull") or last_state.get("avatar"),
                 "tip_text": plugin._end_game_tip(duration_min),
-            })
+            }])
         if not skip_push and monitor_on:
             delayed = getattr(plugin, "achievement_delayed_final_check", None)
             if delayed is not None:
@@ -368,7 +369,7 @@ class SessionService:
                 recent.pop(0)
         monitor_on = getattr(plugin, "group_monitor_enabled", {}).get(session.group_id, True)
         if not skip_push and monitor_on and not self._skip_game(session.gameid) and plugin.config.get("enable_game_start_notify", True):
-            plugin._pending_end_notifications.setdefault(session.group_id, []).append({
+            enqueue_notifications(plugin, session.group_id, [{
                 "type": "start",
                 "name": player_name or session.sid,
                 "game": game_name or "未知游戏",
@@ -376,7 +377,7 @@ class SessionService:
                 "gameid": session.gameid,
                 "status": status or {},
                 "start_time": session.started_at,
-            })
+            }])
         if skip_push:
             return
         await self._ensure_achievement_poll(session, player_name=player_name, game_name=game_name)
