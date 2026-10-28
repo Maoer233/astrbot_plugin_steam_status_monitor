@@ -229,16 +229,16 @@ class NotificationTrackingMixin:
         if not session_notifications:
             return []
         images = {}
-        if self.config.get("notify_send_image", True):
-            for matched in session_notifications.values():
-                for notification in matched:
+        async def send_one(session, matched_notifications):
+            msg_chain = []
+            included = []
+            retry = []
+            for notification in matched_notifications:
+                if self.config.get("notify_send_image", True):
                     key = id(notification)
                     if key not in images:
                         images[key] = await self._render_notification_image(notification)
-
-        async def send_one(session, matched_notifications):
-            msg_chain = []
-            for notification in matched_notifications:
+                before = len(msg_chain)
                 if notification["type"] == "start":
                     line = f"🟢【{notification['name']}】开始游玩 {notification['game']}\n"
                 elif notification["type"] == "owned":
@@ -269,27 +269,17 @@ class NotificationTrackingMixin:
                 img_path = images.get(id(notification))
                 if img_path:
                     msg_chain.append(Image.fromFileSystem(img_path))
-            if not msg_chain:
-                retry = []
-                image_only = (
+                if len(msg_chain) > before:
+                    included.append(notification)
+                elif (
                     self.config.get("notify_send_image", True)
-                    and not self.config.get("notify_send_text", True)
-                )
-                for notification in matched_notifications:
-                    if notification["type"] in ("online", "offline"):
-                        # 纯文本类型：文本关闭时没有可发送内容，按已处理丢弃，避免无限重试
-                        self._finish_notification(notification, session, success=True)
-                    elif image_only and self._is_intentionally_unrendered(notification):
-                        # 主动不渲染（超出单轮富卡上限等）且文本被用户关闭：
-                        # 这条本就没有可发送内容，不是发送失败，按已消费丢弃，
-                        # 否则会被误判成渲染失败并进入补发队列反复重试。
-                        self._finish_notification(notification, session, success=True)
-                    elif image_only:
-                        # 其他类型在“仅图片”模式下渲染失败，保留原有失败重试语义
-                        self._finish_notification(notification, session, success=False)
-                        retry.append(notification)
-                    else:
-                        self._finish_notification(notification, session, success=False)
+                    and notification["type"] not in ("online", "offline")
+                    and not self._is_intentionally_unrendered(notification)
+                ):
+                    retry.append(notification)
+                else:
+                    self._finish_notification(notification, session, success=True)
+            if not msg_chain:
                 return retry
             try:
                 await self.context.send_message(session, MessageChain(msg_chain))
@@ -298,24 +288,41 @@ class NotificationTrackingMixin:
                     self._finish_notification(notification, session, success=False)
                 logger.exception("推送合并通知失败 (group_id=%s, session=%s)", group_id, session)
                 return matched_notifications
-            for notification in matched_notifications:
+            for notification in included:
                 self._finish_notification(notification, session, success=True)
-            return []
+            return retry
 
-        sessions = list(session_notifications.items())
-        results = await asyncio.gather(
-            *(send_one(session, matched) for session, matched in sessions),
-            return_exceptions=True,
-        )
-        failed = []
-        for (session, matched), result in zip(sessions, results):
-            if isinstance(result, BaseException):
-                logger.error("推送通知异常 (group_id=%s, session=%s): %s", group_id, session, result)
-                result = matched
-            for notification in result:
-                retry = dict(notification, _target_session=session)
-                failed.append(retry)
-        return failed
+        async def send_batches(session, matched):
+            failed = []
+            try:
+                for offset in range(0, len(matched), 5):
+                    batch = matched[offset:offset + 5]
+                    result = await send_one(session, batch)
+                    if result:
+                        failed.extend(result)
+                        failed.extend(matched[offset + 5:])
+                        break
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("推送通知异常 (group_id=%s, session=%s)", group_id, session)
+                sent = getattr(self, "_sent_notification_events", {})
+                failed = [n for n in matched if self._notification_event_key(n, session) not in sent]
+            finally:
+                for notification in matched:
+                    self._finish_notification(notification, session, success=False)
+            return [dict(n, _target_session=session) for n in failed]
+
+        tasks = [asyncio.create_task(send_batches(session, matched))
+                 for session, matched in session_notifications.items()]
+        try:
+            results = await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        return [notification for result in results for notification in result]
 
     async def _flush_pending_end_notifications(self):
         lock = getattr(self, "_notification_flush_lock", None)
@@ -326,13 +333,15 @@ class NotificationTrackingMixin:
                 return
             pending = self._pending_end_notifications
             self._pending_end_notifications = {}
-            for group_id, notifications in pending.items():
+            groups = list(pending.items())
+            for index, (group_id, notifications) in enumerate(groups):
                 if not (getattr(self, "group_monitor_enabled", {}) or {}).get(str(group_id), True):
                     continue
                 try:
                     failed = await self._send_merged_notification(group_id, notifications)
                 except BaseException:
-                    self._pending_end_notifications.setdefault(group_id, []).extend(notifications)
+                    for remaining_group, remaining in groups[index:]:
+                        self._pending_end_notifications.setdefault(remaining_group, []).extend(remaining)
                     raise
                 if failed:
                     self._pending_end_notifications.setdefault(group_id, []).extend(failed)
