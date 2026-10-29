@@ -26,7 +26,10 @@ class LlmToolSecurityTests(unittest.IsolatedAsyncioTestCase):
 
     def test_signature_has_no_external_identity_params(self):
         params = set(inspect.signature(self._raw_handler()).parameters)
-        self.assertEqual(params, {"self", "event", "query", "offset", "limit"})
+        self.assertEqual(
+            params,
+            {"self", "event", "query", "offset", "limit", "_ignored"},
+        )
 
     async def test_tool_queries_sender_binding_only(self):
         handler = self._raw_handler()
@@ -38,6 +41,27 @@ class LlmToolSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             stub.owned_games.calls,
             [{"sender_id": "10001", "query": "dot", "offset": 3, "limit": 10}],
+        )
+        self.assertIn('"total_owned": 5', result)
+
+    async def test_stray_event_kwarg_is_ignored(self):
+        """官方机器人链路可能把 event 作为关键字参数传入；
+        位置参数里的真实事件对象不能被覆盖。
+        """
+        handler = self._raw_handler()
+        stub = type("Stub", (), {})()
+        stub.owned_games = _Svc()
+
+        result = await handler(
+            stub,
+            _Event(),
+            event='{"platform_id": "default", "message_type": "GroupMessage"}',
+            query="dot",
+        )
+
+        self.assertEqual(
+            stub.owned_games.calls,
+            [{"sender_id": "10001", "query": "dot", "offset": 0, "limit": 20}],
         )
         self.assertIn('"total_owned": 5', result)
 

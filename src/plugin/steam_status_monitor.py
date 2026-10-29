@@ -52,7 +52,7 @@ class SteamStatusMonitorV3(
             logger.error("当前插件已在运行中。请重启astrbot而非重载插件")
             return
         self._ssm_running = True
-        self._plugin_version = "4.13.0"
+        self._plugin_version = "4.13.1"
         self.context = context
         # 分群管理：所有状态数据均以 group_id 为 key
         self.group_steam_ids = {}         # {group_id: [steamid, ...]}
@@ -491,8 +491,18 @@ class SteamStatusMonitorV3(
         async for result in ops.mygames(self, event, query):
             yield result
 
-    @filter.llm_tool(name="steam_owned_games")
-    async def steam_owned_games(self, event: AstrMessageEvent, query: str = "", offset: int = 0, limit: int = 20) -> str:
+    # LLM 工具注册桩在入口 main.py 的 Main 上：AstrBot 按入口模块路径绑定插件
+    # 实例，注册在 src/ 子模块里不会绑定，调用时会把 event 当成 self。
+    # 这里保留纯实现便于单测；**_ignored 吞掉官方链路额外传入的 event 关键字参数。
+    async def steam_owned_games(
+        self,
+        event: AstrMessageEvent,
+        /,
+        query: str = "",
+        offset: int = 0,
+        limit: int = 20,
+        **_ignored,
+    ) -> str:
         '''查询当前消息发送者本人绑定的 Steam 游戏库（游戏总数 / 关键词检索 / 最近入库记录）。
         只能查询发送者自己的绑定，不能查询其他用户，也不接受指定其他 QQ 或 SteamID。
 
