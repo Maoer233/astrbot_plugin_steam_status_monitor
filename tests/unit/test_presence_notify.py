@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from src.application.services.notification_queue import enqueue_notifications, trim_notifications
 from src.domain.monitoring.presence import presence_transition
 from src.presentation.formatters.status import format_play_duration
 from src.shared.utils.notify_session import is_sendable_group_session
@@ -35,6 +36,9 @@ class _MessageChain:
 
 
 class _StubLogger:
+    def info(self, *args, **kwargs):
+        pass
+
     def exception(self, *args, **kwargs):
         pass
 
@@ -64,6 +68,9 @@ def _load_notification_methods(names):
         "is_sendable_group_session": is_sendable_group_session,
         "format_play_duration": format_play_duration,
         "in_quiet_hours": in_quiet_hours,
+        "enqueue_notifications": enqueue_notifications,
+        "trim_notifications": trim_notifications,
+        "TTL_SECONDS": 1800,
     }
     exec(compile(ast.fix_missing_locations(module), str(IMPLEMENTATION_PATH), "exec"), namespace)
     return namespace
