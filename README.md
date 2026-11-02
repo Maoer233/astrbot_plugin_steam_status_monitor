@@ -243,6 +243,9 @@ pip install "httpx[socks]" "Pillow>=9.5,<14"
 > 如果本项目对您的生活 / 工作产生了帮助，或者您关注本项目的未来发展，请给项目 Star，这是我维护这个开源项目的动力 ❤️。
 
 ## 更新记录
+- V4.13.1（2026/10/29）
+  - **修复 AI 游戏库工具报错**：`steam_owned_games` 在 QQ 官方机器人会话中把事件对象当成插件实例，触发 `AttributeError: 'QQOfficialMessageEvent' object has no attribute 'owned_games'`。LLM 工具注册桩已移到入口 `main.py`，确保 AstrBot 按入口模块路径把处理器绑定到插件实例；同时兼容官方机器人链路额外传入的 `event` 关键字参数，不影响自定义协议。
+
 - V4.12.0（2026/10/28）
   - **修复评价摘要全部失效（Issue #65）**：Steam 已将商店旧接口 `/appreviews/<appid>?json=1` 标记废弃，现在对所有 AppID 一律返回 302 跳转到商店首页（跟随重定向只能拿到 HTML），导致新入库卡片的评价区静默缺失、日志报 `UPSTREAM_ERROR`。已迁移至 `IUserReviewsService/GetAppReviews/v1`（免 API Key），评分档位改用 Steam 官方 `review_score` 加权口径，与商店页面文案一致；下架或非法 AppID 返回的空响应按「暂无评价」降级而不是报错。
   - **新配置 `owned_games_notify_style`（Issue #66）**：默认 `auto`，按本轮新增数量自动选择——新增不足 3 款时逐款发富卡（单款时信息最全），达到 3 款及以上自动合并成清单图，避免连续刷屏。也可固定为 `detailed`（始终逐款富卡）或 `compact`（始终合并）。简洁模式顶部显示头像、名称、本轮新增数量与游戏库总数，每行封面缩略图 + 游戏名，超过每页条数自动分页并标注页码，序号跨页连续；不再请求商店详情与双语言评价，封面优先命中本地缓存，显著降低 API 消耗。
